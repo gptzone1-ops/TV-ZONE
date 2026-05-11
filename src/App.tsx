@@ -46,6 +46,8 @@ type ServiceTheme = {
 
 const videoUrl = import.meta.env.VITE_CUSTOMER_VIDEO_URL || "";
 const adminPassword = import.meta.env.VITE_ADMIN_PASSWORD || "zone2026";
+const adminAuthKey = "zone-admin-auth";
+const adminAuthValue = `remembered:${adminPassword}`;
 const supportPhoneDisplay = "0578696159";
 const whatsappNumber = "966578696159";
 const dayMs = 1000 * 60 * 60 * 24;
@@ -171,7 +173,7 @@ export default function App() {
 }
 
 function AdminApp({ navigate }: { navigate: (path: string) => void }) {
-  const [authenticated, setAuthenticated] = useState(() => sessionStorage.getItem("zone-admin-auth") === "true");
+  const [authenticated, setAuthenticated] = useState(() => localStorage.getItem(adminAuthKey) === adminAuthValue);
   const [screen, setScreen] = useState<Screen>(() => (localStorage.getItem("zone-admin-screen") as Screen) || "selector");
   const [selectedService, setSelectedService] = useState<ServiceType>(() =>
     localStorage.getItem("zone-selected-service") === "shahid" ? "shahid" : "netflix",
@@ -326,6 +328,15 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     setToast({ label: "تم حذف الحساب", at: Date.now() });
   }
 
+  function logout() {
+    localStorage.removeItem(adminAuthKey);
+    sessionStorage.removeItem("zone-admin-auth");
+    setAuthenticated(false);
+    setSelectedAccountId(null);
+    setScreen("selector");
+    setToast({ label: "تم تسجيل الخروج", at: Date.now() });
+  }
+
   const serviceAccounts = accounts.filter((account) => serviceOf(account) === selectedService);
   const filteredAccounts = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -345,7 +356,8 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
         <AdminLogin
           onLogin={(password) => {
             if (password === adminPassword) {
-              sessionStorage.setItem("zone-admin-auth", "true");
+              localStorage.setItem(adminAuthKey, adminAuthValue);
+              sessionStorage.removeItem("zone-admin-auth");
               setAuthenticated(true);
               setToast({ label: "تم تسجيل الدخول بنجاح", at: Date.now() });
             } else {
@@ -360,6 +372,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
   if (screen === "selector") {
     return (
       <ServiceSelector
+        onLogout={logout}
         onNetflix={() => {
           setSelectedService("netflix");
           setScreen("netflix");
@@ -382,6 +395,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
           navigate={navigate}
           setToast={setToast}
           onDelete={deleteAccount}
+          onLogout={logout}
         />
       </Shell>
     );
@@ -412,6 +426,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
           setScreen("account");
         }}
         onDelete={deleteAccount}
+        onLogout={logout}
       />
     </Shell>
   );
@@ -476,7 +491,15 @@ function AdminLogin({ onLogin }: { onLogin: (password: string) => void }) {
   );
 }
 
-function ServiceSelector({ onNetflix, onShahid }: { onNetflix: () => void; onShahid: () => void }) {
+function ServiceSelector({
+  onNetflix,
+  onShahid,
+  onLogout,
+}: {
+  onNetflix: () => void;
+  onShahid: () => void;
+  onLogout: () => void;
+}) {
   return (
     <main className="min-h-screen bg-[#F9FAFB] text-ink" dir="rtl">
       <section className="mx-auto flex min-h-screen w-full max-w-6xl flex-col justify-center px-5 py-8">
@@ -485,8 +508,16 @@ function ServiceSelector({ onNetflix, onShahid }: { onNetflix: () => void; onSha
             <p className="text-sm font-extrabold text-netflix">Zone Store</p>
             <h1 className="mt-2 text-3xl font-black tracking-normal md:text-5xl">لوحة إدارة الاشتراكات</h1>
           </div>
-          <div className="flex h-16 w-16 items-center justify-center rounded-3xl bg-netflix text-2xl font-black text-white shadow-red">
-            Z
+          <div className="flex items-center gap-3">
+            <button
+              onClick={onLogout}
+              className="rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-black text-netflix transition duration-300 hover:bg-netflix hover:text-white"
+            >
+              تسجيل الخروج
+            </button>
+            <div className="flex h-16 w-16 items-center justify-center rounded-3xl bg-netflix text-2xl font-black text-white shadow-red">
+              Z
+            </div>
           </div>
         </div>
 
@@ -539,6 +570,7 @@ function Dashboard({
   onSelect,
   onDelete,
   onBackToServices,
+  onLogout,
 }: {
   accounts: NetflixAccount[];
   stats: Array<{ label: string; value: number; icon: LucideIcon; tone: StatTone }>;
@@ -550,10 +582,11 @@ function Dashboard({
   onSelect: (id: string) => void;
   onDelete: (id: string) => Promise<void>;
   onBackToServices: () => void;
+  onLogout: () => void;
 }) {
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-5 md:px-8 md:py-8">
-      <Header service={service} onBack={onBackToServices} />
+      <Header service={service} onBack={onBackToServices} onLogout={onLogout} />
       {!hasSupabaseConfig && <ConfigNotice />}
 
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -704,7 +737,7 @@ function AccountCard({
   );
 }
 
-function Header({ service, onBack }: { service: ServiceType; onBack: () => void }) {
+function Header({ service, onBack, onLogout }: { service: ServiceType; onBack: () => void; onLogout: () => void }) {
   const theme = serviceThemes[service];
   return (
     <header className="mb-6 flex flex-col gap-4 rounded-3xl border border-zinc-100 bg-white p-6 shadow-premium md:flex-row md:items-center md:justify-between">
@@ -721,6 +754,12 @@ function Header({ service, onBack }: { service: ServiceType; onBack: () => void 
           <p>لوحة تشغيل الاشتراكات</p>
           <p>{formatDate(new Date().toISOString())}</p>
         </div>
+        <button
+          onClick={onLogout}
+          className="h-12 rounded-2xl border border-red-100 bg-red-50 px-4 text-sm font-black text-netflix transition duration-300 hover:bg-netflix hover:text-white"
+        >
+          تسجيل الخروج
+        </button>
         <div className={cn("flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br text-xl font-black text-white", theme.gradient, theme.glow)}>
           Z
         </div>
@@ -863,6 +902,7 @@ function AccountDetail({
   navigate,
   setToast,
   onDelete,
+  onLogout,
 }: {
   account: NetflixAccount;
   links: CustomerLink[];
@@ -870,6 +910,7 @@ function AccountDetail({
   navigate: (path: string) => void;
   setToast: (toast: Toast) => void;
   onDelete: (accountId: string) => Promise<void>;
+  onLogout: () => void;
 }) {
   const expired = isExpired(account.expires_at);
   const service = serviceOf(account);
@@ -881,10 +922,18 @@ function AccountDetail({
 
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-5 md:px-8 md:py-8">
-      <button onClick={onBack} className="mb-4 flex items-center gap-2 text-sm font-black text-zinc-600 transition hover:text-netflix">
-        <ArrowRight className="h-4 w-4" />
-        رجوع للحسابات
-      </button>
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <button onClick={onBack} className="flex items-center gap-2 text-sm font-black text-zinc-600 transition hover:text-netflix">
+          <ArrowRight className="h-4 w-4" />
+          رجوع للحسابات
+        </button>
+        <button
+          onClick={onLogout}
+          className="rounded-2xl border border-red-100 bg-red-50 px-4 py-2 text-sm font-black text-netflix transition duration-300 hover:bg-netflix hover:text-white"
+        >
+          تسجيل الخروج
+        </button>
+      </div>
 
       <section className="mb-6 rounded-3xl border border-zinc-100 bg-white p-6 shadow-premium">
         <div className="flex flex-col gap-5 md:flex-row md:items-center md:justify-between">
