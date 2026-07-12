@@ -44,7 +44,8 @@ type ServiceTheme = {
   hoverBg: string;
 };
 
-const videoUrl = import.meta.env.VITE_CUSTOMER_VIDEO_URL || "";
+const defaultCustomerVideoUrl = "https://www.youtube.com/embed/O47a5G17OXQ?playsinline=1&rel=0&modestbranding=1";
+const videoUrl = import.meta.env.VITE_CUSTOMER_VIDEO_URL || defaultCustomerVideoUrl;
 const adminPassword = import.meta.env.VITE_ADMIN_PASSWORD || "zone2026";
 const adminAuthKey = "zone-admin-auth";
 const adminAuthValue = `remembered:${adminPassword}`;
@@ -1109,18 +1110,18 @@ function CustomerView({
 
           {link && account && (
             <div className="space-y-6">
-              <section className="animate-rise overflow-hidden rounded-[2rem] bg-white shadow-video-glow">
-                <div className="overflow-hidden bg-white">
+              <section className="animate-rise overflow-hidden rounded-[2rem] bg-white p-4 shadow-video-glow md:p-5">
+                <div className="flex justify-center overflow-hidden rounded-[1.6rem] bg-zinc-950/95">
                   {videoUrl ? (
                     <iframe
-                      className="aspect-video w-full bg-zinc-950"
+                      className="aspect-[9/16] w-full max-w-[360px] bg-zinc-950"
                       src={videoUrl}
                       title="شرح طريقة الدخول"
-                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
                       allowFullScreen
                     />
                   ) : (
-                    <div className="flex aspect-video w-full flex-col items-center justify-center bg-zinc-950 px-5 text-center text-white">
+                    <div className="flex aspect-[9/16] w-full max-w-[360px] flex-col items-center justify-center bg-zinc-950 px-5 text-center text-white">
                       <MonitorPlay className={cn("mb-4 h-14 w-14", theme.accent)} />
                       <p className="text-2xl font-black">شرح طريقة الدخول</p>
                       <p className="mt-3 max-w-md text-sm leading-7 text-zinc-300">
