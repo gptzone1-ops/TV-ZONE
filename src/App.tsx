@@ -9,8 +9,6 @@ import {
   Copy,
   Eye,
   KeyRound,
-  Link2,
-  LoaderCircle,
   LockKeyhole,
   Mail,
   MessageCircle,
@@ -54,15 +52,6 @@ const adminAuthValue = `remembered:${adminPassword}`;
 const supportPhoneDisplay = "0578696159";
 const whatsappNumber = "966578696159";
 const dayMs = 1000 * 60 * 60 * 24;
-const accountPublicColumns = "id,email,password,service_type,account_type,expires_at,created_at";
-const customerLinkColumns = `id,account_id,uuid,short_id,profile_name,profile_label,profile_code,service_type,otp_status,otp_requested_at,otp_used_at,created_at,accounts(${accountPublicColumns})`;
-
-type AccountFormValues = {
-  email: string;
-  password: string;
-  account_type: AccountType;
-  supplier_code_url?: string;
-};
 
 const serviceThemes: Record<ServiceType, ServiceTheme> = {
   netflix: {
@@ -243,7 +232,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     setLoading(true);
     const [{ data: accountsData, error: accountsError }, { data: linksData, error: linksError }] =
       await Promise.all([
-        supabase.from("accounts").select(accountPublicColumns).order("created_at", { ascending: false }),
+        supabase.from("accounts").select("*").order("created_at", { ascending: false }),
         supabase.from("customer_links").select("*").order("profile_name", { ascending: true }),
       ]);
 
@@ -256,40 +245,9 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     setLoading(false);
   }
 
-  async function persistSupplierCodeUrl(accountId: string, supplierCodeUrl: string) {
-    const response = await fetch("/api/admin-account-url", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Admin-Password": adminPassword,
-      },
-      body: JSON.stringify({ accountId, supplierCodeUrl }),
-    });
-
-    return response.ok;
-  }
-
-  async function saveSupplierCodeUrl(accountId: string, supplierCodeUrl: string) {
-    setLoading(true);
-    try {
-      const saved = await persistSupplierCodeUrl(accountId, supplierCodeUrl);
-      setToast({
-        label: saved ? "تم حفظ رابط جلب الأكواد بأمان" : "تعذر حفظ رابط جلب الأكواد",
-        at: Date.now(),
-      });
-      return saved;
-    } catch {
-      setToast({ label: "تعذر الاتصال بخادم حفظ رابط الأكواد", at: Date.now() });
-      return false;
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function addAccount(form: AccountFormValues) {
+  async function addAccount(form: { email: string; password: string; account_type: AccountType }) {
     const expires_at = defaultExpiryDate();
     const slots = buildProfileSlots(form.account_type, selectedService);
-    const { supplier_code_url, ...accountFields } = form;
 
     if (!supabase) {
       const account: NetflixAccount = {
@@ -297,7 +255,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
         created_at: new Date().toISOString(),
         expires_at,
         service_type: selectedService,
-        ...accountFields,
+        ...form,
       };
       const createdLinks = slots.map((slot) => ({
         id: crypto.randomUUID(),
@@ -316,8 +274,8 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     setLoading(true);
     const { data: account, error: accountError } = await supabase
       .from("accounts")
-      .insert({ ...accountFields, expires_at, service_type: selectedService })
-      .select(accountPublicColumns)
+      .insert({ ...form, expires_at, service_type: selectedService })
+      .select()
       .single();
 
     if (accountError || !account) {
@@ -333,21 +291,8 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       })),
     );
 
-    let supplierUrlSaved = true;
-    if (selectedService === "netflix" && supplier_code_url?.trim()) {
-      try {
-        supplierUrlSaved = await persistSupplierCodeUrl(account.id, supplier_code_url.trim());
-      } catch {
-        supplierUrlSaved = false;
-      }
-    }
-
     setToast({
-      label: linksError
-        ? "تم إنشاء الحساب وتعذر إنشاء الروابط"
-        : supplierUrlSaved
-          ? "تم إنشاء الحساب والروابط"
-          : "تم إنشاء الحساب والروابط وتعذر حفظ رابط الأكواد",
+      label: linksError ? "تم إنشاء الحساب وتعذر إنشاء الروابط" : "تم إنشاء الحساب والروابط",
       at: Date.now(),
     });
     await loadData();
@@ -451,7 +396,6 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
           navigate={navigate}
           setToast={setToast}
           onDelete={deleteAccount}
-          onSaveSupplierUrl={saveSupplierCodeUrl}
           onLogout={logout}
         />
       </Shell>
@@ -839,28 +783,21 @@ function AccountForm({
   loading,
   service,
 }: {
-  onAdd: (form: AccountFormValues) => Promise<void>;
+  onAdd: (form: { email: string; password: string; account_type: AccountType }) => Promise<void>;
   loading: boolean;
   service: ServiceType;
 }) {
   const [accountType, setAccountType] = useState<AccountType>("private");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [supplierCodeUrl, setSupplierCodeUrl] = useState("");
   const calculatedExpiry = defaultExpiryDate();
   const theme = serviceThemes[service];
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    await onAdd({
-      email,
-      password,
-      account_type: accountType,
-      supplier_code_url: service === "netflix" ? supplierCodeUrl.trim() : undefined,
-    });
+    await onAdd({ email, password, account_type: accountType });
     setEmail("");
     setPassword("");
-    setSupplierCodeUrl("");
     setAccountType("private");
   }
 
@@ -896,22 +833,6 @@ function AccountForm({
           dir="ltr"
         />
       </Field>
-
-      {service === "netflix" && (
-        <Field icon={Link2} label="رابط جلب أكواد الحساب">
-          <input
-            value={supplierCodeUrl}
-            onChange={(event) => setSupplierCodeUrl(event.target.value)}
-            placeholder="https://code.tvleb.com/..."
-            className="h-12 w-full rounded-2xl border border-zinc-200 bg-[#F9FAFB] px-4 text-left text-sm font-bold outline-none transition duration-300 focus:border-netflix focus:bg-white focus:shadow-red-soft"
-            dir="ltr"
-            autoComplete="off"
-          />
-          <span className="mt-2 block text-xs font-bold leading-6 text-zinc-500">
-            يحفظ داخل الخادم ولا يظهر في صفحة العميل.
-          </span>
-        </Field>
-      )}
 
       <div className="mb-5 rounded-2xl bg-[#F9FAFB] p-4">
         <div className="flex items-center gap-2 text-sm font-black text-zinc-500">
@@ -982,7 +903,6 @@ function AccountDetail({
   navigate,
   setToast,
   onDelete,
-  onSaveSupplierUrl,
   onLogout,
 }: {
   account: NetflixAccount;
@@ -991,11 +911,8 @@ function AccountDetail({
   navigate: (path: string) => void;
   setToast: (toast: Toast) => void;
   onDelete: (accountId: string) => Promise<void>;
-  onSaveSupplierUrl: (accountId: string, supplierCodeUrl: string) => Promise<boolean>;
   onLogout: () => void;
 }) {
-  const [supplierCodeUrl, setSupplierCodeUrl] = useState("");
-  const [savingSupplierUrl, setSavingSupplierUrl] = useState(false);
   const expired = isExpired(account.expires_at);
   const service = serviceOf(account);
   const theme = serviceThemes[service];
@@ -1065,46 +982,6 @@ function AccountDetail({
           حذف هذا الإيميل
         </button>
       </section>
-
-      {service === "netflix" && (
-        <section className="mb-6 rounded-3xl border border-red-100 bg-white p-5 shadow-premium">
-          <div className="mb-4 flex items-center gap-3">
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-red-50 text-netflix">
-              <Link2 className="h-5 w-5" />
-            </div>
-            <div>
-              <h2 className="text-lg font-black">رابط جلب أكواد الحساب</h2>
-              <p className="mt-1 text-xs font-bold leading-6 text-zinc-500">
-                الرابط الحالي مخفي للحماية. ألصق رابطاً جديداً هنا عند الحاجة لتحديثه.
-              </p>
-            </div>
-          </div>
-          <div className="flex flex-col gap-3 sm:flex-row">
-            <input
-              value={supplierCodeUrl}
-              onChange={(event) => setSupplierCodeUrl(event.target.value)}
-              placeholder="https://code.tvleb.com/..."
-              className="h-12 min-w-0 flex-1 rounded-2xl border border-zinc-200 bg-[#F9FAFB] px-4 text-left text-sm font-bold outline-none transition duration-300 focus:border-netflix focus:bg-white focus:shadow-red-soft"
-              dir="ltr"
-              autoComplete="off"
-            />
-            <button
-              type="button"
-              disabled={!supplierCodeUrl.trim() || savingSupplierUrl}
-              onClick={async () => {
-                setSavingSupplierUrl(true);
-                const saved = await onSaveSupplierUrl(account.id, supplierCodeUrl.trim());
-                if (saved) setSupplierCodeUrl("");
-                setSavingSupplierUrl(false);
-              }}
-              className="flex h-12 shrink-0 items-center justify-center gap-2 rounded-2xl bg-gradient-to-br from-netflix to-red-700 px-5 text-sm font-black text-white shadow-red transition duration-300 hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {savingSupplierUrl ? <LoaderCircle className="h-5 w-5 animate-spin" /> : <ShieldCheck className="h-5 w-5" />}
-              {savingSupplierUrl ? "جاري الحفظ..." : "حفظ الرابط بأمان"}
-            </button>
-          </div>
-        </section>
-      )}
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {links.map((link, index) => {
@@ -1180,11 +1057,11 @@ function CustomerView({
       const queryColumn = lookup === "short" ? "short_id" : "uuid";
       const { data, error } = await supabase
         .from("customer_links")
-        .select(customerLinkColumns)
+        .select("*, accounts(*)")
         .eq(queryColumn, identifier)
         .single();
 
-      if (!error) setLink(data as unknown as CustomerLink);
+      if (!error) setLink(data as CustomerLink);
       setLoading(false);
     }
 
@@ -1275,10 +1152,6 @@ function CustomerView({
                 </div>
               </section>
 
-              {service === "netflix" && (
-                <OtpRequestCard accountId={account.id} link={link} setToast={setToast} theme={theme} />
-              )}
-
               <section className="animate-rise rounded-[2rem] border border-white bg-white p-6 shadow-premium-lg md:p-8">
                 <div className="mb-6 text-center">
                   <div className={cn("mb-3 inline-flex h-12 w-12 items-center justify-center rounded-2xl", theme.soft)}>
@@ -1366,259 +1239,6 @@ function CustomerView({
         </div>
       </div>
     </Shell>
-  );
-}
-
-type OtpPhase = "idle" | "requesting" | "pending" | "visible" | "used";
-
-function OtpRequestCard({
-  accountId,
-  link,
-  setToast,
-  theme,
-}: {
-  accountId: string;
-  link: CustomerLink;
-  setToast: (toast: Toast) => void;
-  theme: ServiceTheme;
-}) {
-  const initialStatus = link.otp_status || "not_requested";
-  const [phase, setPhase] = useState<OtpPhase>(
-    initialStatus === "used" ? "used" : initialStatus === "pending" ? "pending" : "idle",
-  );
-  const [requestSeconds, setRequestSeconds] = useState(20);
-  const [codeSeconds, setCodeSeconds] = useState(60);
-  const [pendingSeconds, setPendingSeconds] = useState(() => {
-    if (!link.otp_requested_at) return 45;
-    return Math.max(0, 45 - Math.floor((Date.now() - new Date(link.otp_requested_at).getTime()) / 1000));
-  });
-  const [pendingStartedAt, setPendingStartedAt] = useState(
-    link.otp_requested_at ? new Date(link.otp_requested_at).getTime() : Date.now(),
-  );
-  const [code, setCode] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (phase !== "requesting") return;
-    const interval = window.setInterval(() => {
-      setRequestSeconds((current) => Math.max(0, current - 1));
-    }, 1000);
-    return () => window.clearInterval(interval);
-  }, [phase]);
-
-  useEffect(() => {
-    if (phase !== "visible") return;
-    const interval = window.setInterval(() => {
-      setCodeSeconds((current) => {
-        if (current <= 1) {
-          setCode(null);
-          setPhase("used");
-          return 0;
-        }
-        return current - 1;
-      });
-    }, 1000);
-    return () => window.clearInterval(interval);
-  }, [phase]);
-
-  useEffect(() => {
-    if (phase !== "pending") return;
-
-    const updateRemaining = () => {
-      const remaining = Math.max(0, 45 - Math.floor((Date.now() - pendingStartedAt) / 1000));
-      setPendingSeconds(remaining);
-      if (remaining === 0) setPhase("idle");
-    };
-
-    updateRemaining();
-    const interval = window.setInterval(updateRemaining, 1000);
-    return () => window.clearInterval(interval);
-  }, [pendingStartedAt, phase]);
-
-  useEffect(() => {
-    if (phase !== "pending" || !supabase) return;
-    const client = supabase;
-
-    const checkStatus = async () => {
-      const { data } = await client
-        .from("customer_links")
-        .select("otp_status, otp_requested_at")
-        .eq("id", link.id)
-        .maybeSingle();
-
-      if (data?.otp_status === "used") {
-        setCode(null);
-        setPhase("used");
-      } else if (data?.otp_status === "not_requested") {
-        setPhase("idle");
-      } else if (data?.otp_requested_at) {
-        setPendingStartedAt(new Date(data.otp_requested_at).getTime());
-      }
-    };
-
-    void checkStatus();
-    const interval = window.setInterval(() => void checkStatus(), 3000);
-    return () => window.clearInterval(interval);
-  }, [link.id, phase]);
-
-  async function requestOtp() {
-    setCode(null);
-    setRequestSeconds(20);
-    setPendingStartedAt(Date.now());
-    setPhase("requesting");
-
-    try {
-      const response = await fetch("/api/get-otp", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ accountId, linkId: link.id }),
-      });
-      const result = (await response.json().catch(() => ({}))) as {
-        code?: string;
-        expiresIn?: number;
-        error?: string;
-      };
-
-      if (!response.ok) {
-        if (result.error === "already_used") {
-          setPhase("used");
-          return;
-        }
-        if (result.error === "request_pending") {
-          setPendingSeconds(45);
-          setPhase("pending");
-          return;
-        }
-
-        const supplierHttpStatus = result.error?.match(/^supplier_http_(\d{3})$/)?.[1];
-        const httpErrorLabel =
-          supplierHttpStatus === "401" || supplierHttpStatus === "403"
-            ? `رابط المورد رفض طلب الخادم برمز ${supplierHttpStatus}. الرابط قد يحتاج سماح أو جلسة دخول.`
-            : supplierHttpStatus === "404"
-              ? "رابط المورد غير صحيح أو الصفحة غير موجودة 404"
-              : supplierHttpStatus === "429"
-                ? "المورد حظر الطلبات مؤقتاً 429. انتظر قليلاً ثم حاول"
-                : supplierHttpStatus?.startsWith("5")
-                  ? `مشكلة في خادم المورد برمز ${supplierHttpStatus}`
-                  : supplierHttpStatus
-                    ? `رابط المورد أعاد خطأ برمز ${supplierHttpStatus}`
-                    : null;
-
-        const errorLabel =
-          result.error === "supplier_url_missing"
-            ? "لم تتم إضافة رابط جلب الأكواد لهذا الحساب بعد"
-            : result.error === "supplier_url_not_allowed"
-              ? "نطاق رابط المورد غير مسموح في إعدادات الخادم"
-              : result.error === "supplier_timeout"
-                ? "رابط المورد بطيء ولم يرد في الوقت المحدد"
-                : httpErrorLabel
-                  ? httpErrorLabel
-                  : result.error === "supplier_request_failed"
-                    ? "تعذر اتصال الخادم برابط المورد"
-                    : result.error === "supplier_redirect_failed" || result.error === "supplier_too_many_redirects"
-                      ? "رابط المورد يحول الطلب بطريقة غير مكتملة"
-                      : result.error === "supplier_response_too_large"
-                        ? "صفحة المورد كبيرة جداً ولا يمكن قراءتها"
-                        : result.error === "code_not_found"
-                          ? "لم يظهر كود جديد لدى المورد، حاول مرة أخرى"
-                          : result.error === "otp_state_failed"
-                            ? "تعذر تحديث حالة الكود في قاعدة البيانات"
-                            : result.error === "server_not_configured"
-                              ? "خادم الأكواد غير مكتمل الإعداد"
-                              : "تعذر جلب كود التحقق، حاول مرة أخرى";
-        setToast({ label: errorLabel, at: Date.now() });
-        setPhase("idle");
-        return;
-      }
-
-      if (!result.code || !/^\d{4}$/.test(result.code)) {
-        setToast({ label: "استجابة كود التحقق غير صالحة", at: Date.now() });
-        setPhase("used");
-        return;
-      }
-
-      setCode(result.code);
-      setCodeSeconds(Math.min(60, Math.max(1, result.expiresIn || 60)));
-      setPhase("visible");
-    } catch {
-      setToast({ label: "تعذر الاتصال بخادم كود التحقق", at: Date.now() });
-      setPhase("idle");
-    }
-  }
-
-  return (
-    <section className="animate-rise rounded-[2rem] border border-red-100 bg-white p-6 shadow-premium-lg md:p-8">
-      <div className="mb-6 text-center">
-        <div className={cn("mb-3 inline-flex h-12 w-12 items-center justify-center rounded-2xl", theme.soft)}>
-          <ShieldCheck className="h-6 w-6" />
-        </div>
-        <p className={cn("text-sm font-black", theme.accent)}>صالح لمرة واحدة فقط</p>
-        <h2 className="mt-1 text-3xl font-black md:text-4xl">كود تسجيل الدخول</h2>
-      </div>
-
-      {phase === "idle" && (
-        <div className="rounded-3xl bg-gradient-to-b from-red-50 to-white p-5 text-center">
-          <p className="mb-5 text-sm font-bold leading-7 text-zinc-600">
-            اطلب الكود عندما تكون شاشة إدخال كود تسجيل الدخول مفتوحة أمامك.
-          </p>
-          <button
-            type="button"
-            onClick={() => void requestOtp()}
-            className="flex h-13 w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-br from-netflix to-red-700 px-4 text-sm font-black text-white shadow-red transition duration-300 hover:-translate-y-1 active:scale-[0.98]"
-          >
-            <ShieldCheck className="h-5 w-5" />
-            {initialStatus === "pending" ? "إعادة محاولة طلب كود التحقق" : "طلب كود التحقق (صالح لمرة واحدة)"}
-          </button>
-        </div>
-      )}
-
-      {phase === "requesting" && (
-        <div className="rounded-3xl border border-red-100 bg-red-50/70 p-6 text-center" aria-live="polite">
-          <div className="relative mx-auto mb-5 flex h-24 w-24 items-center justify-center rounded-full border-4 border-red-100 bg-white shadow-red-soft">
-            <LoaderCircle className="absolute h-24 w-24 animate-spin text-netflix" strokeWidth={1.25} />
-            <span className="text-2xl font-black text-netflix">{requestSeconds}</span>
-          </div>
-          <p className="text-lg font-black">جاري تحديث البيانات... يرجى الانتظار</p>
-          <p className="mt-2 text-sm font-bold text-zinc-500">لا تغلق الصفحة حتى يظهر كود التحقق.</p>
-        </div>
-      )}
-
-      {phase === "pending" && (
-        <div className="rounded-3xl border border-amber-200 bg-amber-50 p-6 text-center" aria-live="polite">
-          <LoaderCircle className="mx-auto mb-4 h-9 w-9 animate-spin text-amber-600" />
-          <p className="font-black text-amber-900">يوجد طلب جارٍ لهذا الرابط</p>
-          <p className="mt-2 text-sm font-bold leading-7 text-amber-800">
-            يتم التحقق من حالته الآن. ستتاح إعادة المحاولة بعد {pendingSeconds} ثانية إذا لم يكتمل.
-          </p>
-        </div>
-      )}
-
-      {phase === "visible" && code && (
-        <div className="rounded-3xl border border-red-100 bg-gradient-to-b from-red-50 to-white p-6 text-center" aria-live="assertive">
-          <p className="text-sm font-black text-netflix">كودك جاهز</p>
-          <p className="my-4 text-5xl font-black text-ink md:text-6xl" dir="ltr">
-            {code}
-          </p>
-          <p className="mb-5 text-sm font-bold text-zinc-500">سيختفي نهائياً خلال {codeSeconds} ثانية</p>
-          <button
-            type="button"
-            onClick={() => void copyText(code, setToast)}
-            className="mx-auto flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-br from-netflix to-red-700 text-sm font-black text-white shadow-red transition duration-300 hover:-translate-y-0.5"
-          >
-            <Copy className="h-5 w-5" />
-            نسخ الكود سريعاً
-          </button>
-        </div>
-      )}
-
-      {phase === "used" && (
-        <div className="rounded-3xl border border-zinc-200 bg-zinc-100/80 p-6 text-center">
-          <LockKeyhole className="mx-auto mb-4 h-9 w-9 text-zinc-500" />
-          <p className="font-black leading-8 text-zinc-800">
-            تم إصدار كود التحقق الخاص بك مسبقاً لحماية الحساب. إذا واجهت مشكلة، تواصل مع الدعم الفني.
-          </p>
-        </div>
-      )}
-    </section>
   );
 }
 

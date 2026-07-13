@@ -4,7 +4,6 @@ create table if not exists public.accounts (
   id uuid primary key default gen_random_uuid(),
   email text not null,
   password text not null,
-  supplier_code_url text,
   service_type text not null default 'netflix' check (service_type in ('netflix', 'shahid')),
   account_type text not null check (account_type in ('private', 'shared')),
   expires_at date not null,
@@ -20,9 +19,6 @@ create table if not exists public.customer_links (
   profile_name text not null,
   profile_label text not null,
   profile_code text not null,
-  otp_status text not null default 'not_requested' check (otp_status in ('not_requested', 'pending', 'used')),
-  otp_requested_at timestamptz,
-  otp_used_at timestamptz,
   created_at timestamptz not null default now()
 );
 
@@ -32,35 +28,8 @@ alter table public.customer_links
 alter table public.accounts
   add column if not exists service_type text not null default 'netflix';
 
-alter table public.accounts
-  add column if not exists supplier_code_url text;
-
 alter table public.customer_links
   add column if not exists service_type text not null default 'netflix';
-
-alter table public.customer_links
-  add column if not exists otp_status text not null default 'not_requested';
-
-alter table public.customer_links
-  add column if not exists otp_requested_at timestamptz;
-
-alter table public.customer_links
-  add column if not exists otp_used_at timestamptz;
-
-do $$
-begin
-  if not exists (
-    select 1
-    from pg_constraint
-    where conname = 'customer_links_otp_status_check'
-      and conrelid = 'public.customer_links'::regclass
-  ) then
-    alter table public.customer_links
-      add constraint customer_links_otp_status_check
-      check (otp_status in ('not_requested', 'pending', 'used'));
-  end if;
-end;
-$$;
 
 create unique index if not exists customer_links_short_id_key
   on public.customer_links(short_id)
@@ -70,7 +39,6 @@ create index if not exists accounts_created_at_idx on public.accounts(created_at
 create index if not exists customer_links_account_id_idx on public.customer_links(account_id);
 create index if not exists customer_links_uuid_idx on public.customer_links(uuid);
 create index if not exists customer_links_short_id_idx on public.customer_links(short_id);
-create index if not exists customer_links_otp_status_idx on public.customer_links(otp_status);
 
 alter table public.accounts enable row level security;
 alter table public.customer_links enable row level security;
@@ -111,17 +79,3 @@ create policy "Allow anon customer link deletes"
   on public.customer_links for delete
   to anon
   using (true);
-
--- Keep the supplier URL server-only. Customer and dashboard reads receive only
--- the account fields that are safe for the existing frontend.
-revoke select on public.accounts from anon, authenticated;
-grant select (id, email, password, service_type, account_type, expires_at, created_at)
-  on public.accounts to anon, authenticated;
-
-revoke insert on public.accounts from anon, authenticated;
-grant insert (email, password, service_type, account_type, expires_at)
-  on public.accounts to anon, authenticated;
-
--- OTP state transitions are performed only by the Vercel function with the
--- Supabase service-role key.
-revoke update on public.customer_links from anon, authenticated;

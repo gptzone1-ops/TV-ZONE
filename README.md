@@ -36,23 +36,3 @@ npm run dev
 ```text
 VITE_ADMIN_PASSWORD
 ```
-
-## كود تسجيل الدخول المؤقت
-
-بعد كل تحديث لمخطط قاعدة البيانات، شغل الملف `supabase/schema.sql` كاملاً داخل Supabase SQL Editor. يضيف المخطط رابط المورد إلى الحساب وحالة طلب الكود إلى رابط العميل، كما يمنع المفتاح العام من قراءة رابط المورد.
-
-أضف المتغيرات التالية في Vercel ضمن Project Settings > Environment Variables لكل من Production وPreview:
-
-```text
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
-ADMIN_PASSWORD=نفس-كلمة-مرور-اللوحة
-OTP_ALLOWED_HOSTS=code.tvleb.com
-OTP_SUPPLIER_COOKIE=اختياري-كوكي-جلسة-المورد-إذا-كان-يرفض-طلبات-الخادم
-```
-
-`SUPABASE_SERVICE_ROLE_KEY` متغير خادم فقط، ولا يجوز وضعه في متغير يبدأ بـ `VITE_` أو داخل GitHub. إذا كان المورد يستخدم نطاقاً آخر، أضفه إلى `OTP_ALLOWED_HOSTS`، ويمكن فصل أكثر من نطاق بفاصلة.
-
-إذا ظهر الخطأ `403` من رابط المورد، فهذا يعني أن المورد يمنع طلبات الخادم أو يحتاج جلسة دخول. في هذه الحالة يمكن إضافة كوكي جلسة المورد في Vercel داخل `OTP_SUPPLIER_COOKIE` كمتغير خادم فقط، ثم عمل Redeploy.
-
-الدالة `/api/get-otp` لا تخزن الكود في قاعدة البيانات. تنتقل حالة رابط العميل من `not_requested` إلى `pending` ثم `used`، ويعود الكود للمتصفح مرة واحدة مع منع التخزين المؤقت.
