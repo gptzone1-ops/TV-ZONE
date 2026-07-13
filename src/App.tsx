@@ -1161,7 +1161,22 @@ function CustomerView({
 
                 <div className="space-y-5">
                   <LoginCopyCard label="البريد الإلكتروني" value={account.email} icon={Mail} setToast={setToast} theme={theme} />
-                  {account.supplier_code_url ? (
+                  <a
+                    href={whatsappRequestUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex items-center gap-4 rounded-[1.75rem] border border-green-100 bg-gradient-to-l from-white to-[#F8FFF9] p-4 text-right shadow-card transition duration-300 hover:-translate-y-1 hover:border-[#25D366] hover:shadow-premium"
+                  >
+                    <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-[#E9F9EF] text-[#25D366]">
+                      <WhatsAppLogo className="h-7 w-7" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-lg font-black">للحصول على كود التحقق، تواصل معنا عبر الواتساب</p>
+                      <p className="mt-1 text-xs font-bold leading-6 text-zinc-500">سيفتح المحادثة برسالة جاهزة للدعم الفني.</p>
+                    </div>
+                    <ArrowRight className="h-5 w-5 shrink-0 text-[#25D366]" />
+                  </a>
+                  {account.supplier_code_url && (
                     <a
                       href={account.supplier_code_url}
                       target="_blank"
@@ -1179,10 +1194,6 @@ function CustomerView({
                       </div>
                       <ArrowRight className={cn("h-5 w-5 shrink-0", theme.accent)} />
                     </a>
-                  ) : (
-                    <div className="rounded-[1.75rem] border border-dashed border-zinc-200 bg-zinc-50 px-4 py-4 text-right text-sm font-bold text-zinc-500">
-                      رابط الحساب غير متوفر حالياً.
-                    </div>
                   )}
                 </div>
               </section>
@@ -1238,33 +1249,6 @@ function CustomerView({
                 </p>
               </section>
 
-              <section className="animate-rise rounded-[2rem] border border-white bg-white p-6 shadow-premium-lg md:p-8">
-                <div className="mb-6 text-center">
-                  <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-green-50 text-[#25D366]">
-                    <WhatsAppLogo className="h-7 w-7" />
-                  </div>
-                  <h2 className="text-3xl font-black md:text-4xl">كود التحقق عبر الواتساب</h2>
-                  <p className="mt-3 text-sm font-bold leading-7 text-zinc-500">
-                    للحصول على كود التحقق، تواصل معنا عبر الواتساب وسيصلك الرد من الدعم الفني مباشرة.
-                  </p>
-                </div>
-
-                <a
-                  href={whatsappRequestUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="flex items-center gap-4 rounded-[1.75rem] border border-green-100 bg-gradient-to-l from-white to-[#F8FFF9] p-4 text-right shadow-card transition duration-300 hover:-translate-y-1 hover:border-[#25D366] hover:shadow-premium"
-                >
-                  <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-[#E9F9EF] text-[#25D366]">
-                    <WhatsAppLogo className="h-7 w-7" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-lg font-black">للحصول على كود التحقق، تواصل معنا عبر الواتساب</p>
-                    <p className="mt-1 text-xs font-bold leading-6 text-zinc-500">سيفتح المحادثة برسالة جاهزة للدعم الفني.</p>
-                  </div>
-                  <ArrowRight className="h-5 w-5 shrink-0 text-[#25D366]" />
-                </a>
-              </section>
             </div>
           )}
 
