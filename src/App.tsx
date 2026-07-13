@@ -247,7 +247,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     setLoading(false);
   }
 
-  async function addAccount(form: { email: string; password: string; account_type: AccountType }) {
+  async function addAccount(form: { email: string; password: string; account_type: AccountType; supplier_code_url?: string }) {
     const expires_at = defaultExpiryDate();
     const slots = buildProfileSlots(form.account_type, selectedService);
 
@@ -616,7 +616,14 @@ function Dashboard({
 
           <div className="grid max-h-[650px] gap-4 overflow-auto p-5 scrollbar-thin md:grid-cols-2 xl:grid-cols-3">
             {accounts.map((account, index) => (
-              <AccountCard key={account.id} account={account} index={index} onSelect={onSelect} onDelete={onDelete} />
+              <AccountCard
+                key={account.id}
+                account={account}
+                index={index}
+                onSelect={onSelect}
+                onDelete={onDelete}
+                onOpenSupplierCode={(url) => window.open(url, "_blank", "noopener,noreferrer")}
+              />
             ))}
 
             {!accounts.length && (
@@ -673,21 +680,34 @@ function AccountCard({
   index,
   onSelect,
   onDelete,
+  onOpenSupplierCode,
 }: {
   account: NetflixAccount;
   index: number;
   onSelect: (id: string) => void;
   onDelete: (id: string) => Promise<void>;
+  onOpenSupplierCode: (url: string) => void;
 }) {
   const expired = isExpired(account.expires_at);
+  const canOpenSupplierCode = Boolean(account.supplier_code_url);
 
   return (
-    <button
-      onClick={() => onSelect(account.id)}
+    <article
       className="group animate-rise rounded-3xl border border-zinc-100 bg-white p-5 text-right shadow-card transition duration-300 hover:-translate-y-1 hover:border-red-100 hover:shadow-premium-lg active:scale-[0.98]"
       style={{ animationDelay: `${index * 45}ms` }}
     >
-      <div className="mb-5 flex items-start justify-between gap-3">
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => onSelect(account.id)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            onSelect(account.id);
+          }
+        }}
+        className="mb-5 flex cursor-pointer items-start justify-between gap-3 outline-none"
+      >
         <div className="min-w-0">
           <p className="truncate text-lg font-black text-ink" dir="ltr">
             {account.email}
@@ -717,26 +737,35 @@ function AccountCard({
           {remainingLabel(account.expires_at)}
         </p>
       </div>
-      <span
-        role="button"
-        tabIndex={0}
-        onClick={(event) => {
-          event.stopPropagation();
-          void onDelete(account.id);
-        }}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            event.stopPropagation();
-            void onDelete(account.id);
-          }
-        }}
-        className="mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-2xl border border-red-100 bg-red-50 text-sm font-black text-netflix transition duration-300 hover:bg-netflix hover:text-white"
-      >
-        <Trash2 className="h-4 w-4" />
-        حذف
-      </span>
-    </button>
+
+      <div className="mt-3 grid gap-2">
+        <button
+          type="button"
+          onClick={() => void onSelect(account.id)}
+          className="flex h-10 w-full items-center justify-center gap-2 rounded-2xl border border-zinc-200 bg-white text-sm font-black transition duration-300 hover:border-netflix hover:text-netflix"
+        >
+          <Eye className="h-4 w-4" />
+          معاينة
+        </button>
+        <button
+          type="button"
+          onClick={() => onOpenSupplierCode(account.supplier_code_url || "")}
+          disabled={!canOpenSupplierCode}
+          className="flex h-10 w-full items-center justify-center gap-2 rounded-2xl border border-cyan-100 bg-cyan-50 text-sm font-black text-cyan-700 transition duration-300 hover:-translate-y-0.5 hover:bg-cyan-600 hover:text-white disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:translate-y-0"
+        >
+          <Link2 className="h-4 w-4" />
+          فتح رابط الأكواد
+        </button>
+        <button
+          type="button"
+          onClick={() => void onDelete(account.id)}
+          className="flex h-10 w-full items-center justify-center gap-2 rounded-2xl border border-red-100 bg-red-50 text-sm font-black text-netflix transition duration-300 hover:bg-netflix hover:text-white"
+        >
+          <Trash2 className="h-4 w-4" />
+          حذف
+        </button>
+      </div>
+    </article>
   );
 }
 
@@ -785,21 +814,23 @@ function AccountForm({
   loading,
   service,
 }: {
-  onAdd: (form: { email: string; password: string; account_type: AccountType }) => Promise<void>;
+  onAdd: (form: { email: string; password: string; account_type: AccountType; supplier_code_url?: string }) => Promise<void>;
   loading: boolean;
   service: ServiceType;
 }) {
   const [accountType, setAccountType] = useState<AccountType>("private");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [supplierCodeUrl, setSupplierCodeUrl] = useState("");
   const calculatedExpiry = defaultExpiryDate();
   const theme = serviceThemes[service];
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    await onAdd({ email, password, account_type: accountType });
+    await onAdd({ email, password, account_type: accountType, supplier_code_url: supplierCodeUrl.trim() || undefined });
     setEmail("");
     setPassword("");
+    setSupplierCodeUrl("");
     setAccountType("private");
   }
 
@@ -834,6 +865,17 @@ function AccountForm({
           className="h-12 w-full rounded-2xl border border-zinc-200 bg-[#F9FAFB] px-4 text-left font-bold outline-none transition duration-300 focus:border-netflix focus:bg-white focus:shadow-red-soft"
           dir="ltr"
         />
+      </Field>
+
+      <Field icon={Link2} label="رابط جلب الأكواد">
+        <input
+          value={supplierCodeUrl}
+          onChange={(event) => setSupplierCodeUrl(event.target.value)}
+          placeholder="https://example.com"
+          className="h-12 w-full rounded-2xl border border-zinc-200 bg-[#F9FAFB] px-4 text-left font-bold outline-none transition duration-300 focus:border-cyan-500 focus:bg-white focus:shadow-[0_10px_30px_rgba(6,182,212,0.16)]"
+          dir="ltr"
+        />
+        <p className="mt-2 text-xs font-bold text-zinc-400">هذا الرابط للمسؤول فقط، ولا يظهر في صفحة العميل.</p>
       </Field>
 
       <div className="mb-5 rounded-2xl bg-[#F9FAFB] p-4">
@@ -922,6 +964,10 @@ function AccountDetail({
   const allLinksText = links
     .map((link) => `للحصول على بيانات الحساب ادخل على الرابط التالي: ${getCustomerUrl(link)} يجب الإحتفاظ بالرابط`)
     .join("\n");
+  const openSupplierCode = () => {
+    if (!account.supplier_code_url) return;
+    window.open(account.supplier_code_url, "_blank", "noopener,noreferrer");
+  };
 
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-5 md:px-8 md:py-8">
@@ -975,6 +1021,14 @@ function AccountDetail({
         >
           <Copy className="h-5 w-5" />
           نسخ جميع روابط العملاء
+        </button>
+        <button
+          onClick={openSupplierCode}
+          disabled={!account.supplier_code_url}
+          className="mt-3 flex h-12 w-full items-center justify-center gap-2 rounded-2xl border border-cyan-100 bg-cyan-50 text-sm font-black text-cyan-700 transition duration-300 hover:-translate-y-1 hover:bg-cyan-600 hover:text-white disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:translate-y-0"
+        >
+          <Link2 className="h-5 w-5" />
+          فتح رابط الأكواد
         </button>
         <button
           onClick={() => void onDelete(account.id)}
@@ -1062,11 +1116,13 @@ function CustomerView({
       const queryColumn = lookup === "short" ? "short_id" : "uuid";
       const { data, error } = await supabase
         .from("customer_links")
-        .select("*, accounts(*)")
+        .select(
+          "id,account_id,uuid,short_id,profile_name,profile_label,profile_code,service_type,created_at,accounts(id,email,service_type,account_type,expires_at,created_at)",
+        )
         .eq(queryColumn, identifier)
         .single();
 
-      if (!error) setLink(data as CustomerLink);
+      if (!error) setLink(data as unknown as CustomerLink);
       setLoading(false);
     }
 
@@ -1176,25 +1232,6 @@ function CustomerView({
                     </div>
                     <ArrowRight className="h-5 w-5 shrink-0 text-[#25D366]" />
                   </a>
-                  {account.supplier_code_url && (
-                    <a
-                      href={account.supplier_code_url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="flex items-center justify-between gap-4 rounded-[1.75rem] border border-red-100 bg-gradient-to-l from-white to-[#F9FAFB] px-4 py-4 shadow-card transition duration-300 hover:-translate-y-1 hover:border-netflix/50 hover:shadow-premium"
-                    >
-                      <div className="flex min-w-0 items-center gap-3 text-right">
-                        <div className={cn("flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl", theme.soft)}>
-                          <Link2 className="h-5 w-5" />
-                        </div>
-                        <div className="min-w-0">
-                          <p className={cn("text-lg font-black", theme.accent)}>الدخول عبر الرابط</p>
-                          <p className="mt-1 text-xs font-bold leading-6 text-zinc-500">يفتح رابط الحساب في تبويب جديد.</p>
-                        </div>
-                      </div>
-                      <ArrowRight className={cn("h-5 w-5 shrink-0", theme.accent)} />
-                    </a>
-                  )}
                 </div>
               </section>
 
