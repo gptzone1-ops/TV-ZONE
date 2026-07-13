@@ -1494,11 +1494,23 @@ function OtpRequestCard({
             ? "لم تتم إضافة رابط جلب الأكواد لهذا الحساب بعد"
             : result.error === "supplier_url_not_allowed"
               ? "نطاق رابط المورد غير مسموح في إعدادات الخادم"
-              : result.error === "code_not_found"
-                ? "لم يظهر كود جديد لدى المورد، حاول مرة أخرى"
-                : result.error === "server_not_configured"
-                  ? "خادم الأكواد غير مكتمل الإعداد"
-                  : "تعذر جلب كود التحقق، حاول مرة أخرى";
+              : result.error === "supplier_timeout"
+                ? "رابط المورد بطيء ولم يرد في الوقت المحدد"
+                : result.error === "supplier_http_error"
+                  ? "رابط المورد رفض الطلب أو أعاد صفحة خطأ"
+                  : result.error === "supplier_request_failed"
+                    ? "تعذر اتصال الخادم برابط المورد"
+                    : result.error === "supplier_redirect_failed" || result.error === "supplier_too_many_redirects"
+                      ? "رابط المورد يحول الطلب بطريقة غير مكتملة"
+                      : result.error === "supplier_response_too_large"
+                        ? "صفحة المورد كبيرة جداً ولا يمكن قراءتها"
+                        : result.error === "code_not_found"
+                          ? "لم يظهر كود جديد لدى المورد، حاول مرة أخرى"
+                          : result.error === "otp_state_failed"
+                            ? "تعذر تحديث حالة الكود في قاعدة البيانات"
+                            : result.error === "server_not_configured"
+                              ? "خادم الأكواد غير مكتمل الإعداد"
+                              : "تعذر جلب كود التحقق، حاول مرة أخرى";
         setToast({ label: errorLabel, at: Date.now() });
         setPhase("idle");
         return;

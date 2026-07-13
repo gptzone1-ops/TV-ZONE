@@ -3,7 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 export const config = { maxDuration: 30 };
 
 const REQUEST_DELAY_MS = 15_000;
-const SUPPLIER_TIMEOUT_MS = 4_500;
+const SUPPLIER_TIMEOUT_MS = 10_000;
 const STALE_PENDING_MS = 45_000;
 const MAX_HTML_BYTES = 2_000_000;
 
@@ -99,20 +99,26 @@ async function fetchSupplierHtml(initialUrl) {
 
   for (let redirectCount = 0; redirectCount <= 3; redirectCount += 1) {
     const remainingTime = deadline - Date.now();
-    if (remainingTime <= 0) throw new Error("supplier_request_failed");
+    if (remainingTime <= 0) throw new Error("supplier_timeout");
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), remainingTime);
 
     try {
-      const response = await fetch(currentUrl, {
-        method: "GET",
-        redirect: "manual",
-        signal: controller.signal,
-        headers: {
-          Accept: "text/html,application/xhtml+xml",
-          "User-Agent": "ZoneStore-OTP/1.0",
-        },
-      });
+      let response;
+      try {
+        response = await fetch(currentUrl, {
+          method: "GET",
+          redirect: "manual",
+          signal: controller.signal,
+          headers: {
+            Accept: "text/html,application/xhtml+xml",
+            "User-Agent": "ZoneStore-OTP/1.0",
+          },
+        });
+      } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") throw new Error("supplier_timeout");
+        throw new Error("supplier_request_failed");
+      }
 
       if (response.status >= 300 && response.status < 400) {
         const location = response.headers.get("location");
@@ -121,7 +127,7 @@ async function fetchSupplierHtml(initialUrl) {
         continue;
       }
 
-      if (!response.ok) throw new Error("supplier_request_failed");
+      if (!response.ok) throw new Error("supplier_http_error");
 
       const contentLength = Number(response.headers.get("content-length") || 0);
       if (contentLength > MAX_HTML_BYTES) throw new Error("supplier_response_too_large");
@@ -244,7 +250,18 @@ export default async function handler(req, res) {
   } catch (error) {
     await resetClaim();
     const reason = error instanceof Error ? error.message : "otp_fetch_failed";
-    const publicError = reason === "supplier_url_not_allowed" ? reason : reason === "code_not_found" ? reason : "otp_fetch_failed";
+    const publicErrors = new Set([
+      "supplier_url_not_allowed",
+      "supplier_timeout",
+      "supplier_request_failed",
+      "supplier_http_error",
+      "supplier_redirect_failed",
+      "supplier_response_too_large",
+      "supplier_too_many_redirects",
+      "code_not_found",
+      "otp_state_failed",
+    ]);
+    const publicError = publicErrors.has(reason) ? reason : "otp_fetch_failed";
     return send(res, 502, { error: publicError });
   }
 }
