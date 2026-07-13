@@ -52,6 +52,7 @@ const adminAuthValue = `remembered:${adminPassword}`;
 const whatsappNumber = "966578696159";
 const whatsappRequestMessage = "مرحباً، أريد الحصول على كود التحقق لحسابي";
 const whatsappRequestUrl = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(whatsappRequestMessage)}`;
+const disclaimerStorageKey = "disclaimer_accepted";
 const dayMs = 1000 * 60 * 60 * 24;
 
 const serviceThemes: Record<ServiceType, ServiceTheme> = {
@@ -1041,6 +1042,9 @@ function CustomerView({
   const [link, setLink] = useState<CustomerLink | null>(null);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState<Toast>(null);
+  const [showDisclaimer, setShowDisclaimer] = useState(() => localStorage.getItem(disclaimerStorageKey) !== "true");
+  const [showReminder, setShowReminder] = useState(false);
+  const [agreeDisclaimer, setAgreeDisclaimer] = useState(false);
 
   useEffect(() => {
     async function loadCustomer() {
@@ -1068,6 +1072,15 @@ function CustomerView({
 
     void loadCustomer();
   }, [identifier, lookup]);
+
+  useEffect(() => {
+    const shouldLock = showDisclaimer || showReminder;
+    const previous = document.body.style.overflow;
+    if (shouldLock) document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previous;
+    };
+  }, [showDisclaimer, showReminder]);
 
   const account = link?.accounts;
   const service = serviceOf(account);
@@ -1255,6 +1268,28 @@ function CustomerView({
             </div>
           )}
 
+          {showDisclaimer && (
+            <DisclaimerModal
+              onToggle={(checked) => setAgreeDisclaimer(checked)}
+              onContinue={() => {
+                localStorage.setItem(disclaimerStorageKey, "true");
+                setShowDisclaimer(false);
+                setShowReminder(true);
+                setAgreeDisclaimer(false);
+              }}
+              checked={agreeDisclaimer}
+            />
+          )}
+
+          {showReminder && (
+            <ReminderModal
+              onClose={() => {
+                setShowReminder(false);
+                setToast({ label: "تمت الموافقة، يمكنك الآن متابعة بيانات الحساب.", at: Date.now() });
+              }}
+            />
+          )}
+
           <a
             href={whatsappRequestUrl}
             target="_blank"
@@ -1311,6 +1346,73 @@ function WhatsAppLogo({ className }: { className?: string }) {
     <svg className={className} viewBox="0 0 32 32" fill="currentColor" aria-hidden="true">
       <path d="M16.02 3.2C9.02 3.2 3.32 8.87 3.32 15.84c0 2.23.59 4.4 1.7 6.31L3.2 28.8l6.83-1.79a12.7 12.7 0 0 0 5.99 1.52h.01c7 0 12.69-5.67 12.69-12.64S23.03 3.2 16.02 3.2Zm0 23.2h-.01c-1.9 0-3.77-.51-5.39-1.48l-.39-.23-4.05 1.06 1.08-3.94-.26-.4a10.47 10.47 0 0 1-1.61-5.57c0-5.82 4.77-10.56 10.63-10.56 2.84 0 5.51 1.1 7.51 3.09a10.48 10.48 0 0 1 3.12 7.47c0 5.82-4.77 10.56-10.63 10.56Zm5.83-7.9c-.32-.16-1.9-.93-2.19-1.04-.29-.1-.5-.16-.71.16-.21.31-.82 1.03-1 1.24-.18.2-.37.23-.69.08-.32-.16-1.35-.49-2.57-1.57a9.6 9.6 0 0 1-1.78-2.2c-.19-.31-.02-.48.14-.64.15-.14.32-.37.48-.55.16-.18.21-.31.32-.52.1-.2.05-.39-.03-.55-.08-.16-.71-1.7-.97-2.33-.26-.61-.52-.53-.71-.54h-.61c-.21 0-.55.08-.84.39-.29.31-1.11 1.08-1.11 2.64s1.14 3.07 1.3 3.28c.16.2 2.25 3.41 5.45 4.78.76.33 1.35.52 1.81.67.76.24 1.46.2 2.01.12.61-.09 1.9-.77 2.17-1.52.27-.75.27-1.39.19-1.52-.08-.14-.29-.22-.61-.38Z" />
     </svg>
+  );
+}
+
+function DisclaimerModal({
+  checked,
+  onToggle,
+  onContinue,
+}: {
+  checked: boolean;
+  onToggle: (checked: boolean) => void;
+  onContinue: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/65 px-4 py-6 backdrop-blur-sm">
+      <div className="w-full max-w-2xl animate-rise rounded-[2rem] border border-white bg-white p-6 shadow-premium-lg md:p-8">
+        <div className="mb-5 text-center">
+          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-red-50 text-netflix">
+            <ShieldCheck className="h-7 w-7" />
+          </div>
+          <h2 className="text-3xl font-black md:text-4xl">إخلاء مسؤولية وتبرئة ذمة</h2>
+        </div>
+        <p className="text-sm leading-8 text-zinc-700 md:text-base">
+          نخلي مسؤوليتنا ونبرئ ذمتنا أمام الله من أي محتوى يتم مشاهدته من خلال الخدمات المقدمة عبر المتجر، حيث إن
+          المحتوى المعروض من أفلام أو مسلسلات أو موسيقى يكون من اختيار واستخدام العميل وتحت مسؤوليته الشخصية.
+        </p>
+        <label className="mt-6 flex cursor-pointer items-center gap-3 rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-4 text-right">
+          <input
+            type="checkbox"
+            checked={checked}
+            onChange={(event) => onToggle(event.target.checked)}
+            className="h-5 w-5 rounded border-zinc-300 text-netflix focus:ring-netflix"
+          />
+          <span className="text-sm font-black md:text-base">أوافق وأتحمل المسؤولية كاملة</span>
+        </label>
+        <button
+          type="button"
+          disabled={!checked}
+          onClick={onContinue}
+          className="mt-5 flex h-13 w-full items-center justify-center rounded-2xl bg-gradient-to-br from-netflix to-red-700 text-sm font-black text-white shadow-red transition duration-300 hover:-translate-y-1 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:translate-y-0"
+        >
+          متابعة
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ReminderModal({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/50 px-4 py-6 backdrop-blur-sm">
+      <div className="w-full max-w-lg animate-rise rounded-[2rem] border border-white bg-white p-6 text-center shadow-premium-lg md:p-8">
+        <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-50 text-amber-600">
+          <Sparkles className="h-7 w-7" />
+        </div>
+        <h3 className="text-2xl font-black md:text-3xl">تنبيه مهم</h3>
+        <p className="mt-4 text-base font-bold leading-8 text-zinc-700">
+          يرجى متابعة فيديو الشرح كامل حتى لا تواجهك مشاكل.
+        </p>
+        <button
+          type="button"
+          onClick={onClose}
+          className="mt-6 flex h-12 w-full items-center justify-center rounded-2xl bg-zinc-950 text-sm font-black text-white transition duration-300 hover:-translate-y-1"
+        >
+          حسناً
+        </button>
+      </div>
+    </div>
   );
 }
 
