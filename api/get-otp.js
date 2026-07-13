@@ -111,8 +111,12 @@ async function fetchSupplierHtml(initialUrl) {
           redirect: "manual",
           signal: controller.signal,
           headers: {
-            Accept: "text/html,application/xhtml+xml",
-            "User-Agent": "ZoneStore-OTP/1.0",
+            Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
+            "Cache-Control": "no-cache",
+            Pragma: "no-cache",
+            "User-Agent":
+              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
           },
         });
       } catch (error) {
@@ -127,7 +131,7 @@ async function fetchSupplierHtml(initialUrl) {
         continue;
       }
 
-      if (!response.ok) throw new Error("supplier_http_error");
+      if (!response.ok) throw new Error(`supplier_http_${response.status}`);
 
       const contentLength = Number(response.headers.get("content-length") || 0);
       if (contentLength > MAX_HTML_BYTES) throw new Error("supplier_response_too_large");
@@ -254,14 +258,13 @@ export default async function handler(req, res) {
       "supplier_url_not_allowed",
       "supplier_timeout",
       "supplier_request_failed",
-      "supplier_http_error",
       "supplier_redirect_failed",
       "supplier_response_too_large",
       "supplier_too_many_redirects",
       "code_not_found",
       "otp_state_failed",
     ]);
-    const publicError = publicErrors.has(reason) ? reason : "otp_fetch_failed";
+    const publicError = publicErrors.has(reason) || /^supplier_http_\d{3}$/.test(reason) ? reason : "otp_fetch_failed";
     return send(res, 502, { error: publicError });
   }
 }

@@ -1489,6 +1489,20 @@ function OtpRequestCard({
           return;
         }
 
+        const supplierHttpStatus = result.error?.match(/^supplier_http_(\d{3})$/)?.[1];
+        const httpErrorLabel =
+          supplierHttpStatus === "401" || supplierHttpStatus === "403"
+            ? `رابط المورد رفض طلب الخادم برمز ${supplierHttpStatus}. الرابط قد يحتاج سماح أو جلسة دخول.`
+            : supplierHttpStatus === "404"
+              ? "رابط المورد غير صحيح أو الصفحة غير موجودة 404"
+              : supplierHttpStatus === "429"
+                ? "المورد حظر الطلبات مؤقتاً 429. انتظر قليلاً ثم حاول"
+                : supplierHttpStatus?.startsWith("5")
+                  ? `مشكلة في خادم المورد برمز ${supplierHttpStatus}`
+                  : supplierHttpStatus
+                    ? `رابط المورد أعاد خطأ برمز ${supplierHttpStatus}`
+                    : null;
+
         const errorLabel =
           result.error === "supplier_url_missing"
             ? "لم تتم إضافة رابط جلب الأكواد لهذا الحساب بعد"
@@ -1496,8 +1510,8 @@ function OtpRequestCard({
               ? "نطاق رابط المورد غير مسموح في إعدادات الخادم"
               : result.error === "supplier_timeout"
                 ? "رابط المورد بطيء ولم يرد في الوقت المحدد"
-                : result.error === "supplier_http_error"
-                  ? "رابط المورد رفض الطلب أو أعاد صفحة خطأ"
+                : httpErrorLabel
+                  ? httpErrorLabel
                   : result.error === "supplier_request_failed"
                     ? "تعذر اتصال الخادم برابط المورد"
                     : result.error === "supplier_redirect_failed" || result.error === "supplier_too_many_redirects"
