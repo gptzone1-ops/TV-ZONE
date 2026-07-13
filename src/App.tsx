@@ -25,7 +25,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { accountTypeLabel, buildProfileSlots } from "./lib/profiles";
+import { PROFILE_CODES, accountTypeLabel, buildProfileSlots } from "./lib/profiles";
 import { hasSupabaseConfig, supabase } from "./lib/supabase";
 import type { AccountType, CustomerLink, NetflixAccount, ServiceType } from "./types";
 
@@ -129,6 +129,11 @@ function getBaseUrl() {
 
 function getCustomerUrl(link: CustomerLink) {
   return link.short_id ? `${getBaseUrl()}/v/${link.short_id}` : `${getBaseUrl()}/view/${link.uuid}`;
+}
+
+function getProfilePin(link: CustomerLink) {
+  const profileKey = `${link.profile_label || link.profile_name || ""}`.toUpperCase().match(/[A-E]/)?.[0];
+  return profileKey ? PROFILE_CODES[profileKey] : link.profile_code;
 }
 
 async function copyText(text: string, setToast: (toast: Toast) => void) {
@@ -1247,7 +1252,7 @@ function CustomerView({
                 <div className={cn("grid gap-4", service === "netflix" && "sm:grid-cols-2")}>
                   <ProfileMiniCard label="اسم الملف" value={`ملف ${link.profile_label}`} icon={UserRound} setToast={setToast} theme={theme} />
                   {service === "netflix" && (
-                    <ProfileMiniCard label="رمز الملف" value={link.profile_code} icon={LockKeyhole} setToast={setToast} theme={theme} ltr />
+                    <ProfileMiniCard label="رمز الملف" value={getProfilePin(link)} icon={LockKeyhole} setToast={setToast} theme={theme} ltr />
                   )}
                 </div>
               </section>
