@@ -49,7 +49,7 @@ const videoUrl = import.meta.env.VITE_CUSTOMER_VIDEO_URL || defaultCustomerVideo
 const adminPassword = import.meta.env.VITE_ADMIN_PASSWORD || "Gpt123Gpt@@";
 const adminAuthKey = "zone-admin-auth";
 const adminAuthValue = `remembered:${adminPassword}`;
-const whatsappNumber = "966578696159";
+const whatsappNumber = "966571970095";
 const whatsappRequestMessage = "مرحباً، أريد الحصول على كود التحقق لحسابي";
 const whatsappRequestUrl = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(whatsappRequestMessage)}`;
 const disclaimerStorageKey = "disclaimer_accepted";
