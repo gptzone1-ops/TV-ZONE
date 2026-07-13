@@ -1351,7 +1351,7 @@ function DisclaimerModal({
           </div>
           <h2 className="text-3xl font-black md:text-4xl">إخلاء مسؤولية وتبرئة ذمة</h2>
         </div>
-        <p className="text-sm leading-8 text-zinc-700 md:text-base">
+        <p className="text-sm font-medium leading-8 text-zinc-900 md:text-base">
           نخلي مسؤوليتنا ونبرئ ذمتنا أمام الله من أي محتوى يتم مشاهدته من خلال الخدمات المقدمة عبر المتجر، حيث إن
           المحتوى المعروض من أفلام أو مسلسلات أو موسيقى يكون من اختيار واستخدام العميل وتحت مسؤوليته الشخصية.
         </p>
@@ -1362,7 +1362,7 @@ function DisclaimerModal({
             onChange={(event) => onToggle(event.target.checked)}
             className="h-5 w-5 rounded border-zinc-300 text-netflix focus:ring-netflix"
           />
-          <span className="text-sm font-black md:text-base">أوافق وأتحمل المسؤولية كاملة</span>
+          <span className="text-sm font-black md:text-base">أنا أعلم ذلك، وأنا مسؤول عمّا سأشاهده أمام الله</span>
         </label>
         <button
           type="button"
