@@ -5,6 +5,7 @@ export type NetflixAccount = {
   id: string;
   email: string;
   password: string;
+  supplier_code_url?: string | null;
   service_type?: ServiceType | null;
   account_type: AccountType;
   expires_at: string;

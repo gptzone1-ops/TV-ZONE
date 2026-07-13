@@ -8,12 +8,12 @@ import {
   Clipboard,
   Copy,
   Eye,
+  Link2,
   KeyRound,
   LockKeyhole,
   Mail,
   MessageCircle,
   MonitorPlay,
-  Phone,
   Plus,
   Search,
   ShieldCheck,
@@ -49,8 +49,9 @@ const videoUrl = import.meta.env.VITE_CUSTOMER_VIDEO_URL || defaultCustomerVideo
 const adminPassword = import.meta.env.VITE_ADMIN_PASSWORD || "Gpt123Gpt@@";
 const adminAuthKey = "zone-admin-auth";
 const adminAuthValue = `remembered:${adminPassword}`;
-const supportPhoneDisplay = "0578696159";
 const whatsappNumber = "966578696159";
+const whatsappRequestMessage = "مرحباً، أريد الحصول على كود التحقق لحسابي";
+const whatsappRequestUrl = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(whatsappRequestMessage)}`;
 const dayMs = 1000 * 60 * 60 * 24;
 
 const serviceThemes: Record<ServiceType, ServiceTheme> = {
@@ -1071,7 +1072,6 @@ function CustomerView({
   const account = link?.accounts;
   const service = serviceOf(account);
   const theme = serviceThemes[service];
-  const whatsAppUrl = `https://wa.me/${whatsappNumber}`;
 
   return (
     <Shell toast={toast}>
@@ -1148,7 +1148,29 @@ function CustomerView({
 
                 <div className="space-y-5">
                   <LoginCopyCard label="البريد الإلكتروني" value={account.email} icon={Mail} setToast={setToast} theme={theme} />
-                  <LoginCopyCard label="كلمة المرور" value={account.password} icon={KeyRound} setToast={setToast} theme={theme} />
+                  {account.supplier_code_url ? (
+                    <a
+                      href={account.supplier_code_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex items-center justify-between gap-4 rounded-[1.75rem] border border-red-100 bg-gradient-to-l from-white to-[#F9FAFB] px-4 py-4 shadow-card transition duration-300 hover:-translate-y-1 hover:border-netflix/50 hover:shadow-premium"
+                    >
+                      <div className="flex min-w-0 items-center gap-3 text-right">
+                        <div className={cn("flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl", theme.soft)}>
+                          <Link2 className="h-5 w-5" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className={cn("text-lg font-black", theme.accent)}>الدخول عبر الرابط</p>
+                          <p className="mt-1 text-xs font-bold leading-6 text-zinc-500">يفتح رابط الحساب في تبويب جديد.</p>
+                        </div>
+                      </div>
+                      <ArrowRight className={cn("h-5 w-5 shrink-0", theme.accent)} />
+                    </a>
+                  ) : (
+                    <div className="rounded-[1.75rem] border border-dashed border-zinc-200 bg-zinc-50 px-4 py-4 text-right text-sm font-bold text-zinc-500">
+                      رابط الحساب غير متوفر حالياً.
+                    </div>
+                  )}
                 </div>
               </section>
 
@@ -1184,51 +1206,57 @@ function CustomerView({
                   />
                   <StepCard
                     step="Step 2"
-                    icon={KeyRound}
-                    title="سجل الدخول"
-                    text="استخدم البريد الإلكتروني وكلمة المرور كما هي."
+                    icon={Link2}
+                    title="افتح رابط الحساب"
+                    text="استخدم زر الدخول عبر الرابط لفتح الحساب في تبويب جديد."
                     theme={theme}
                   />
                   <StepCard
                     step="Step 3"
-                    icon={UserRound}
-                    title="اختر الملف"
-                    text={
-                      service === "netflix"
-                        ? `اختر ملف ${link.profile_label} ثم أدخل الرمز ${link.profile_code}.`
-                        : `اختر ملف ${link.profile_label} فقط، ولا تحتاج إلى رمز ملف.`
-                    }
+                    icon={MessageCircle}
+                    title="تواصل عبر الواتساب"
+                    text="إذا احتجت كود التحقق أو واجهت مشكلة، راسلنا مباشرة من الزر المخصص."
                     theme={theme}
                   />
                 </div>
 
                 <p className="mt-6 text-center text-sm font-bold leading-7 text-zinc-600">
-                  ملاحظة: في حال واجهتك أي مشكلة، تواصل معنا بالضغط على أيقونة الواتساب وسنساعدك فوراً.
+                  ملاحظة: يمكن فتح الرابط مباشرة، وللدعم السريع استخدم زر الواتساب بالأسفل.
                 </p>
               </section>
 
               <section className="animate-rise rounded-[2rem] border border-white bg-white p-6 shadow-premium-lg md:p-8">
-                <h2 className="mb-6 text-center text-3xl font-black md:text-4xl">تواصل معنا</h2>
-                <div className="space-y-4">
-                  <ContactOption
-                    href={whatsAppUrl}
-                    icon={MessageCircle}
-                    label={supportPhoneDisplay}
-                    ariaLabel="WhatsApp"
-                  />
-                  <ContactOption
-                    href={`tel:${supportPhoneDisplay}`}
-                    icon={Phone}
-                    label={supportPhoneDisplay}
-                    ariaLabel="اتصال"
-                  />
+                <div className="mb-6 text-center">
+                  <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-green-50 text-[#25D366]">
+                    <WhatsAppLogo className="h-7 w-7" />
+                  </div>
+                  <h2 className="text-3xl font-black md:text-4xl">كود التحقق عبر الواتساب</h2>
+                  <p className="mt-3 text-sm font-bold leading-7 text-zinc-500">
+                    للحصول على كود التحقق، تواصل معنا عبر الواتساب وسيصلك الرد من الدعم الفني مباشرة.
+                  </p>
                 </div>
+
+                <a
+                  href={whatsappRequestUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex items-center gap-4 rounded-[1.75rem] border border-green-100 bg-gradient-to-l from-white to-[#F8FFF9] p-4 text-right shadow-card transition duration-300 hover:-translate-y-1 hover:border-[#25D366] hover:shadow-premium"
+                >
+                  <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-[#E9F9EF] text-[#25D366]">
+                    <WhatsAppLogo className="h-7 w-7" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-lg font-black">للحصول على كود التحقق، تواصل معنا عبر الواتساب</p>
+                    <p className="mt-1 text-xs font-bold leading-6 text-zinc-500">سيفتح المحادثة برسالة جاهزة للدعم الفني.</p>
+                  </div>
+                  <ArrowRight className="h-5 w-5 shrink-0 text-[#25D366]" />
+                </a>
               </section>
             </div>
           )}
 
           <a
-            href={whatsAppUrl}
+            href={whatsappRequestUrl}
             target="_blank"
             rel="noreferrer"
             className={cn("fixed bottom-5 left-5 z-40 flex h-[60px] w-[60px] animate-whatsapp-pulse items-center justify-center rounded-full bg-gradient-to-br text-white backdrop-blur transition duration-300 hover:-translate-y-1 hover:shadow-premium-lg", theme.gradient, theme.glow)}
@@ -1275,35 +1303,6 @@ function LoginCopyCard({
         </button>
       </div>
     </article>
-  );
-}
-
-function ContactOption({
-  href,
-  icon: Icon,
-  label,
-  ariaLabel,
-}: {
-  href: string;
-  icon: LucideIcon;
-  label: string;
-  ariaLabel: string;
-}) {
-  return (
-    <a
-      href={href}
-      target={href.startsWith("http") ? "_blank" : undefined}
-      rel={href.startsWith("http") ? "noreferrer" : undefined}
-      aria-label={ariaLabel}
-      className="flex items-center gap-4 rounded-2xl border border-red-100 bg-white p-3 shadow-card transition duration-300 hover:-translate-y-1 hover:border-netflix hover:shadow-premium"
-    >
-      <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-red-50 text-netflix">
-        {ariaLabel === "WhatsApp" ? <WhatsAppLogo className="h-6 w-6" /> : <Icon className="h-6 w-6" />}
-      </div>
-      <span className="min-w-0 flex-1 text-center text-lg font-black" dir="ltr">
-        {label}
-      </span>
-    </a>
   );
 }
 
