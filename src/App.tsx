@@ -46,7 +46,7 @@ type ServiceTheme = {
 
 const defaultCustomerVideoUrl = "https://www.youtube.com/embed/O47a5G17OXQ?playsinline=1&rel=0&modestbranding=1";
 const videoUrl = import.meta.env.VITE_CUSTOMER_VIDEO_URL || defaultCustomerVideoUrl;
-const adminPassword = import.meta.env.VITE_ADMIN_PASSWORD || "zone2026";
+const adminPassword = import.meta.env.VITE_ADMIN_PASSWORD || "Gpt123Gpt@@";
 const adminAuthKey = "zone-admin-auth";
 const adminAuthValue = `remembered:${adminPassword}`;
 const supportPhoneDisplay = "0578696159";
