@@ -26,6 +26,27 @@ function allowedHosts() {
     .filter(Boolean);
 }
 
+function supplierHeaders(url) {
+  const headers = {
+    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
+    "Cache-Control": "no-cache",
+    Pragma: "no-cache",
+    Referer: `${url.origin}/`,
+    Origin: url.origin,
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "same-origin",
+    "Upgrade-Insecure-Requests": "1",
+    "User-Agent":
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+  };
+
+  const supplierCookie = process.env.OTP_SUPPLIER_COOKIE?.trim();
+  if (supplierCookie) headers.Cookie = supplierCookie;
+  return headers;
+}
+
 function isPrivateHost(hostname) {
   const host = hostname.toLowerCase();
   return (
@@ -110,14 +131,7 @@ async function fetchSupplierHtml(initialUrl) {
           method: "GET",
           redirect: "manual",
           signal: controller.signal,
-          headers: {
-            Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
-            "Cache-Control": "no-cache",
-            Pragma: "no-cache",
-            "User-Agent":
-              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
-          },
+          headers: supplierHeaders(currentUrl),
         });
       } catch (error) {
         if (error instanceof Error && error.name === "AbortError") throw new Error("supplier_timeout");
