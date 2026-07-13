@@ -1,4 +1,9 @@
 {
+  "functions": {
+    "api/get-otp.js": {
+      "maxDuration": 30
+    }
+  },
   "rewrites": [
     {
       "source": "/(.*)",

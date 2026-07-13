@@ -1,5 +1,6 @@
 export type AccountType = "private" | "shared";
 export type ServiceType = "netflix" | "shahid";
+export type OtpStatus = "not_requested" | "pending" | "used";
 
 export type NetflixAccount = {
   id: string;
@@ -20,6 +21,9 @@ export type CustomerLink = {
   profile_label: string;
   profile_code: string;
   service_type?: ServiceType | null;
+  otp_status?: OtpStatus | null;
+  otp_requested_at?: string | null;
+  otp_used_at?: string | null;
   created_at: string;
   accounts?: NetflixAccount;
 };

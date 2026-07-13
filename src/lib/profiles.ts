@@ -28,6 +28,7 @@ export function buildProfileSlots(accountType: "private" | "shared", serviceType
       service_type: serviceType,
       uuid: crypto.randomUUID(),
       short_id: generateShortId(6),
+      otp_status: "not_requested" as const,
     })),
   );
 }
