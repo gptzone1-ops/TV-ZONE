@@ -59,7 +59,7 @@ begin
       add constraint customer_links_otp_status_check
       check (otp_status in ('not_requested', 'pending', 'used'));
   end if;
-end
+end;
 $$;
 
 create unique index if not exists customer_links_short_id_key
