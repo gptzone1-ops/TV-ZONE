@@ -79,3 +79,6 @@ create policy "Allow anon customer link deletes"
   on public.customer_links for delete
   to anon
   using (true);
+
+grant select, insert, delete on public.accounts to anon, authenticated;
+grant select, insert, delete on public.customer_links to anon, authenticated;
