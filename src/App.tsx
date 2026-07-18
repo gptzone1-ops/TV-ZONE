@@ -49,7 +49,7 @@ const videoUrl = import.meta.env.VITE_CUSTOMER_VIDEO_URL || defaultCustomerVideo
 const adminPassword = import.meta.env.VITE_ADMIN_PASSWORD || "Gpt123Gpt@@";
 const adminAuthKey = "zone-admin-auth";
 const adminAuthValue = `remembered:${adminPassword}`;
-const whatsappNumber = "966571970095";
+const whatsappNumber = "966581688656";
 const whatsappRequestMessage = "مرحباً، أريد الحصول على كود التحقق لحسابي";
 const whatsappRequestUrl = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(whatsappRequestMessage)}`;
 const disclaimerStorageKey = "disclaimer_accepted";
@@ -743,6 +743,16 @@ function AccountCard({
         </p>
       </div>
 
+      <div className="mt-3 rounded-2xl border border-zinc-100 bg-zinc-50 p-4">
+        <div className="mb-2 flex items-center gap-2 text-xs font-black text-zinc-500">
+          <KeyRound className="h-4 w-4 text-netflix" />
+          كلمة مرور الحساب
+        </div>
+        <p className="truncate text-left text-sm font-black text-zinc-900" dir="ltr">
+          {account.password}
+        </p>
+      </div>
+
       <div className="mt-3 grid gap-2">
         <button
           type="button"
@@ -1004,6 +1014,13 @@ function AccountDetail({
             <h1 className="mt-3 truncate text-2xl font-black md:text-3xl" dir="ltr">
               {account.email}
             </h1>
+            <div className="mt-3 inline-flex max-w-full items-center gap-2 rounded-2xl border border-zinc-100 bg-zinc-50 px-4 py-3">
+              <KeyRound className="h-4 w-4 shrink-0 text-netflix" />
+              <span className="shrink-0 text-xs font-black text-zinc-500">كلمة المرور</span>
+              <span className="truncate text-left text-sm font-black text-zinc-950" dir="ltr">
+                {account.password}
+              </span>
+            </div>
             <p className="mt-2 text-sm font-bold text-zinc-500">
               ينتهي في {formatDate(account.expires_at)} - {remainingLabel(account.expires_at)}
             </p>
