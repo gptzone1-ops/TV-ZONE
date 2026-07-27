@@ -3,12 +3,17 @@ import {
   CalendarDays,
   Check,
   ChevronLeft,
+  ChevronDown,
   CircleCheck,
   CircleX,
   Clipboard,
   Copy,
+  Edit3,
   Eye,
+  ExternalLink,
+  LayoutDashboard,
   Link2,
+  LogOut,
   KeyRound,
   LockKeyhole,
   Mail,
@@ -16,12 +21,15 @@ import {
   MonitorPlay,
   Plus,
   Search,
+  Settings,
   ShieldCheck,
+  SlidersHorizontal,
   Smartphone,
   Sparkles,
   UserRound,
   Users,
   Trash2,
+  X,
   type LucideIcon,
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
@@ -32,6 +40,7 @@ import type { AccountType, CustomerLink, NetflixAccount, ServiceType } from "./t
 type Screen = "selector" | "netflix" | "account";
 type Toast = { label: string; at: number } | null;
 type StatTone = "neutral" | "green" | "red";
+type AccountTypeFilter = "all" | AccountType;
 type ServiceTheme = {
   type: ServiceType;
   name: string;
@@ -47,6 +56,7 @@ type ServiceTheme = {
 const defaultCustomerVideoUrl = "https://www.youtube.com/embed/O47a5G17OXQ?playsinline=1&rel=0&modestbranding=1";
 const videoUrl = import.meta.env.VITE_CUSTOMER_VIDEO_URL || defaultCustomerVideoUrl;
 const adminPassword = import.meta.env.VITE_ADMIN_PASSWORD || "Gpt123Gpt@@";
+const adminEmail = import.meta.env.VITE_ADMIN_EMAIL || "admin@zonestore.sa";
 const adminAuthKey = "zone-admin-auth";
 const adminAuthValue = `remembered:${adminPassword}`;
 const whatsappNumber = "966581688656";
@@ -141,6 +151,10 @@ async function copyText(text: string, setToast: (toast: Toast) => void) {
   setToast({ label: "تم النسخ بنجاح", at: Date.now() });
 }
 
+async function copyTextSilent(text: string) {
+  await navigator.clipboard.writeText(text);
+}
+
 const demoAccount: NetflixAccount = {
   id: "demo-account",
   email: "zone.netflix@example.com",
@@ -192,6 +206,12 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState<Toast>(null);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast(null), 2800);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
 
   useEffect(() => {
     if (!authenticated) return;
@@ -275,7 +295,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       setSelectedAccountId(account.id);
       setScreen("account");
       setToast({ label: "تم إنشاء الحساب محلياً للمعاينة", at: Date.now() });
-      return;
+      return true;
     }
 
     setLoading(true);
@@ -288,7 +308,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     if (accountError || !account) {
       setLoading(false);
       setToast({ label: "تعذر إنشاء الحساب", at: Date.now() });
-      return;
+      return false;
     }
 
     const { error: linksError } = await supabase.from("customer_links").insert(
@@ -306,6 +326,108 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     setSelectedAccountId(account.id);
     setScreen("account");
     setLoading(false);
+    return !linksError;
+  }
+
+  async function updateAccount(
+    accountId: string,
+    form: { email: string; password: string; supplier_code_url?: string; created_at?: string; expires_at?: string },
+  ) {
+    if (!supabase) {
+      setAccounts((current) =>
+        current.map((account) =>
+          account.id === accountId
+            ? {
+                ...account,
+                ...form,
+                supplier_code_url: form.supplier_code_url || null,
+                created_at: form.created_at || account.created_at,
+                expires_at: form.expires_at || account.expires_at,
+              }
+            : account,
+        ),
+      );
+      setToast({ label: "تم حفظ التعديلات محلياً", at: Date.now() });
+      return true;
+    }
+
+    setLoading(true);
+    const { error } = await supabase
+      .from("accounts")
+      .update({
+        email: form.email,
+        password: form.password,
+        supplier_code_url: form.supplier_code_url || null,
+        ...(form.created_at ? { created_at: form.created_at } : {}),
+        ...(form.expires_at ? { expires_at: form.expires_at } : {}),
+      })
+      .eq("id", accountId);
+    setLoading(false);
+
+    if (error) {
+      setToast({ label: "تعذر حفظ تعديلات الحساب", at: Date.now() });
+      return false;
+    }
+
+    setAccounts((current) =>
+      current.map((account) =>
+        account.id === accountId
+          ? {
+              ...account,
+              ...form,
+              supplier_code_url: form.supplier_code_url || null,
+              created_at: form.created_at || account.created_at,
+              expires_at: form.expires_at || account.expires_at,
+            }
+          : account,
+      ),
+    );
+    setToast({ label: "تم حفظ تعديلات الحساب", at: Date.now() });
+    return true;
+  }
+
+  async function updateAccountDates(accountId: string, form: { created_at: string; expires_at: string }) {
+    if (!supabase) {
+      setAccounts((current) => current.map((account) => (account.id === accountId ? { ...account, ...form } : account)));
+      setToast({ label: "تم حفظ التواريخ", at: Date.now() });
+      return true;
+    }
+
+    setLoading(true);
+    const { error } = await supabase.from("accounts").update(form).eq("id", accountId);
+    setLoading(false);
+
+    if (error) {
+      setToast({ label: "تعذر حفظ التواريخ", at: Date.now() });
+      return false;
+    }
+
+    setAccounts((current) => current.map((account) => (account.id === accountId ? { ...account, ...form } : account)));
+    setToast({ label: "تم حفظ التواريخ", at: Date.now() });
+    return true;
+  }
+
+  async function deleteCustomerLinks(ids: string[]) {
+    if (!ids.length) return true;
+
+    if (!supabase) {
+      setLinks((current) => current.filter((link) => !ids.includes(link.id)));
+      setToast({ label: ids.length > 1 ? "تم حذف الروابط" : "تم حذف الرابط", at: Date.now() });
+      return true;
+    }
+
+    setLoading(true);
+    const { error } = await supabase.from("customer_links").delete().in("id", ids);
+    setLoading(false);
+
+    if (error) {
+      setToast({ label: "تعذر حذف الروابط", at: Date.now() });
+      return false;
+    }
+
+    setLinks((current) => current.filter((link) => !ids.includes(link.id)));
+    setToast({ label: ids.length > 1 ? "تم حذف الروابط" : "تم حذف الرابط", at: Date.now() });
+    return true;
   }
 
   async function deleteAccount(accountId: string) {
@@ -349,7 +471,11 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
   const filteredAccounts = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     if (!normalized) return serviceAccounts;
-    return serviceAccounts.filter((account) => account.email.toLowerCase().includes(normalized));
+    return serviceAccounts.filter(
+      (account) =>
+        account.email.toLowerCase().includes(normalized) ||
+        account.id.toLowerCase().includes(normalized),
+    );
   }, [serviceAccounts, query]);
 
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId) || null;
@@ -403,6 +529,8 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
           navigate={navigate}
           setToast={setToast}
           onDelete={deleteAccount}
+          onDeleteLinks={deleteCustomerLinks}
+          onUpdateDates={updateAccountDates}
           onLogout={logout}
         />
       </Shell>
@@ -429,6 +557,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
         }}
         onQuery={setQuery}
         onAdd={addAccount}
+        onUpdate={updateAccount}
         onSelect={(id) => {
           setSelectedAccountId(id);
           setScreen("account");
@@ -442,7 +571,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
 
 function Shell({ children, toast }: { children: React.ReactNode; toast: Toast }) {
   return (
-    <main className="min-h-screen bg-[#F9FAFB] text-ink" dir="rtl">
+    <main className="min-h-screen bg-white text-ink" dir="rtl">
       {children}
       {toast && (
         <div className="fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 animate-rise items-center gap-2 rounded-full bg-emerald-600 px-5 py-3 text-sm font-bold text-white shadow-premium">
@@ -468,16 +597,16 @@ function AdminLogin({ onLogin }: { onLogin: (password: string) => void }) {
         onSubmit={submit}
         className="w-full max-w-md animate-rise rounded-[2rem] border border-white bg-white p-7 text-center shadow-premium-lg"
       >
-        <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-3xl bg-gradient-to-br from-netflix to-red-700 text-xl font-black text-white shadow-red">
+        <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-[#8B35F5] text-xl font-black text-white shadow-[0_16px_36px_rgba(139,53,245,0.28)]">
           زون
         </div>
-        <p className="text-sm font-black text-netflix">Zone Store</p>
+        <p className="text-sm font-black text-[#8B35F5]">Zone Store</p>
         <h1 className="mt-2 text-3xl font-black">دخول لوحة التحكم</h1>
         <p className="mt-2 text-sm font-bold text-zinc-500">أدخل كلمة المرور لعرض وإدارة حسابات نتفلكس.</p>
 
         <label className="mt-7 block text-right">
           <span className="mb-2 flex items-center gap-2 text-sm font-black">
-            <LockKeyhole className="h-4 w-4 text-netflix" />
+            <LockKeyhole className="h-4 w-4 text-[#8B35F5]" />
             كلمة المرور
           </span>
           <input
@@ -486,11 +615,11 @@ function AdminLogin({ onLogin }: { onLogin: (password: string) => void }) {
             type="password"
             value={password}
             onChange={(event) => setPassword(event.target.value)}
-            className="h-13 w-full rounded-2xl border border-zinc-200 bg-zinc-100/80 px-4 text-center text-lg font-black outline-none transition duration-300 focus:border-netflix focus:bg-white focus:shadow-red-soft"
+            className="h-13 w-full rounded-xl border-2 border-[#DDCEF4] bg-[#FAF8FD] px-4 text-center text-lg font-black outline-none transition duration-300 focus:border-[#8B35F5] focus:bg-white focus:shadow-[0_0_0_4px_rgba(139,53,245,0.10)]"
           />
         </label>
 
-        <button className="mt-5 flex h-13 w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-br from-netflix to-red-700 text-sm font-black text-white shadow-red transition duration-300 hover:-translate-y-1">
+        <button className="mt-5 flex h-13 w-full items-center justify-center gap-2 rounded-xl bg-[#8B35F5] text-sm font-black text-white shadow-[0_16px_36px_rgba(139,53,245,0.26)] transition duration-300 hover:-translate-y-1 hover:bg-[#7626DD]">
           <KeyRound className="h-5 w-5" />
           دخول
         </button>
@@ -513,17 +642,17 @@ function ServiceSelector({
       <section className="mx-auto flex min-h-screen w-full max-w-6xl flex-col justify-center px-5 py-8">
         <div className="mb-10 flex items-center justify-between gap-4 animate-rise">
           <div>
-            <p className="text-sm font-extrabold text-netflix">Zone Store</p>
+            <p className="text-sm font-extrabold text-[#8B35F5]">Zone Store</p>
             <h1 className="mt-2 text-3xl font-black tracking-normal md:text-5xl">لوحة إدارة الاشتراكات</h1>
           </div>
           <div className="flex items-center gap-3">
             <button
               onClick={onLogout}
-              className="rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-black text-netflix transition duration-300 hover:bg-netflix hover:text-white"
+              className="rounded-xl border border-[#DDCEF4] bg-[#F7F2FF] px-4 py-3 text-sm font-black text-[#7C2CE8] transition duration-300 hover:bg-[#8B35F5] hover:text-white"
             >
               تسجيل الخروج
             </button>
-            <div className="flex h-16 w-16 items-center justify-center rounded-3xl bg-netflix text-2xl font-black text-white shadow-red">
+            <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-[#8B35F5] text-2xl font-black text-white shadow-[0_16px_36px_rgba(139,53,245,0.24)]">
               Z
             </div>
           </div>
@@ -575,6 +704,7 @@ function Dashboard({
   loading,
   onQuery,
   onAdd,
+  onUpdate,
   onSelect,
   onDelete,
   onBackToServices,
@@ -587,58 +717,209 @@ function Dashboard({
   loading: boolean;
   onQuery: (query: string) => void;
   onAdd: Parameters<typeof AccountForm>[0]["onAdd"];
+  onUpdate: Parameters<typeof AccountForm>[0]["onUpdate"];
   onSelect: (id: string) => void;
   onDelete: (id: string) => Promise<void>;
   onBackToServices: () => void;
   onLogout: () => void;
 }) {
+  const [formOpen, setFormOpen] = useState(false);
+  const [editingAccount, setEditingAccount] = useState<NetflixAccount | null>(null);
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [accountTypeFilter, setAccountTypeFilter] = useState<AccountTypeFilter>("all");
+
+  const openAddForm = () => {
+    setEditingAccount(null);
+    setFormOpen(true);
+  };
+
+  const openEditForm = (account: NetflixAccount) => {
+    setEditingAccount(account);
+    setFormOpen(true);
+  };
+
+  const visibleAccounts = useMemo(() => {
+    if (accountTypeFilter === "all") return accounts;
+    return accounts.filter((account) => account.account_type === accountTypeFilter);
+  }, [accounts, accountTypeFilter]);
+
+  useEffect(() => {
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target?.closest?.("[data-filter-popover]")) setFilterOpen(false);
+    };
+    window.addEventListener("mousedown", onPointerDown);
+    return () => window.removeEventListener("mousedown", onPointerDown);
+  }, []);
+
+  const filterLabel =
+    accountTypeFilter === "private" ? "خاص" : accountTypeFilter === "shared" ? "مشترك" : "فلترة";
+
   return (
-    <div className="mx-auto w-full max-w-7xl px-4 py-5 md:px-8 md:py-8">
+    <div className="min-h-screen bg-white text-[#17141F]">
       <Header service={service} onBack={onBackToServices} onLogout={onLogout} />
-      {!hasSupabaseConfig && <ConfigNotice />}
 
-      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        {stats.map((stat, index) => (
-          <StatCard key={stat.label} stat={stat} index={index} />
-        ))}
-      </section>
+      <div className="mx-auto w-full max-w-[1280px] px-4 pb-12 pt-7 md:px-8 md:pt-10">
+        {!hasSupabaseConfig && <ConfigNotice />}
 
-      <section className="mt-6 grid gap-6 lg:grid-cols-[390px_minmax(0,1fr)]">
-        <AccountForm onAdd={onAdd} loading={loading} service={service} />
+        <section className="mb-7 rounded-[2rem] border border-[#E8DCFF] bg-white p-4 shadow-[0_18px_50px_rgba(70,40,120,0.10)] md:p-5">
+          <div className="flex flex-col gap-3 md:flex-row-reverse md:items-center">
+            <button
+              type="button"
+              onClick={openAddForm}
+              className="flex h-13 shrink-0 items-center justify-center gap-2 rounded-xl bg-[#8B35F5] px-7 text-sm font-black text-white shadow-[0_12px_28px_rgba(139,53,245,0.28)] transition duration-300 hover:-translate-y-0.5 hover:bg-[#7626DD] active:translate-y-0 md:min-w-48"
+            >
+              <Plus className="h-5 w-5" />
+              إضافة حساب جديد
+            </button>
 
-        <div className="rounded-3xl border border-zinc-100 bg-white shadow-premium">
-          <div className="border-b border-zinc-100 p-5">
-            <div className="relative">
-              <Search className="pointer-events-none absolute right-4 top-1/2 h-5 w-5 -translate-y-1/2 text-zinc-400" />
+            <div className="relative flex-1">
+              <Search className="pointer-events-none absolute right-4 top-1/2 h-5 w-5 -translate-y-1/2 text-[#8B35F5]" />
               <input
                 value={query}
                 onChange={(event) => onQuery(event.target.value)}
-                placeholder="ابحث بالبريد الإلكتروني"
-                className="h-13 w-full rounded-2xl border border-zinc-200 bg-[#F9FAFB] px-4 pr-12 text-sm font-bold outline-none transition duration-300 focus:border-netflix focus:bg-white focus:shadow-red-soft"
+                placeholder="ابحث باسم العميل، البريد، أو رقم الحساب..."
+                className="h-13 w-full rounded-xl border-2 border-[#D8C1FF] bg-white px-4 pr-12 text-sm font-bold outline-none transition duration-300 placeholder:text-zinc-400 focus:border-[#8B35F5] focus:shadow-[0_0_0_4px_rgba(139,53,245,0.10)]"
               />
+            </div>
+
+            <div className="relative md:w-36" data-filter-popover>
+              <button
+                type="button"
+                onClick={() => setFilterOpen((current) => !current)}
+                className={cn(
+                  "flex h-13 w-full items-center justify-center gap-2 rounded-xl border px-4 text-sm font-black transition duration-300",
+                  accountTypeFilter === "all"
+                    ? "border-[#E3D5FA] bg-[#F8F4FF] text-[#7C2CE8]"
+                    : "border-[#8B35F5] bg-[#8B35F5] text-white shadow-[0_12px_26px_rgba(139,53,245,0.22)]",
+                )}
+              >
+                <SlidersHorizontal className="h-4 w-4" />
+                {filterLabel}
+                <ChevronDown className="h-4 w-4" />
+              </button>
+
+              {filterOpen && (
+                <div className="absolute left-0 top-[calc(100%+10px)] z-30 w-48 overflow-hidden rounded-2xl border border-[#E4D6FA] bg-white p-2 shadow-premium-lg">
+                  {[
+                    { key: "all", label: "جميع الحسابات" },
+                    { key: "private", label: "خاص" },
+                    { key: "shared", label: "مشترك" },
+                  ].map((option) => (
+                    <button
+                      key={option.key}
+                      type="button"
+                      onClick={() => {
+                        setAccountTypeFilter(option.key as AccountTypeFilter);
+                        setFilterOpen(false);
+                      }}
+                      className={cn(
+                        "flex h-11 w-full items-center justify-between rounded-xl px-3 text-right text-sm font-black transition",
+                        accountTypeFilter === option.key ? "bg-[#F4EDFF] text-[#7C2CE8]" : "text-zinc-600 hover:bg-zinc-50",
+                      )}
+                    >
+                      <span>{option.label}</span>
+                      {accountTypeFilter === option.key && <Check className="h-4 w-4" />}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </section>
+
+        <section className="mb-7 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          {stats.map((stat, index) => (
+            <StatCard key={stat.label} stat={stat} index={index} />
+          ))}
+        </section>
+
+        <section className="overflow-hidden rounded-[2rem] border border-[#E8DCFF] bg-white shadow-[0_18px_55px_rgba(70,40,120,0.10)]">
+          <div className="flex flex-col gap-4 border-b border-[#EEE7F8] px-5 py-5 md:flex-row md:items-center md:justify-between">
+            <div>
+              <p className="text-xs font-black uppercase text-[#8B35F5]">ZONE STORE</p>
+              <h2 className="mt-1 text-xl font-black">قائمة الحسابات</h2>
+              <p className="mt-1 text-xs font-semibold text-zinc-500">عرض {visibleAccounts.length} من {accounts.length} عميل</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="rounded-lg bg-[#F3ECFF] px-3 py-2 text-xs font-black text-[#6F22D6]">
+                {visibleAccounts.length} حساب
+              </span>
+              <button
+                type="button"
+                title="خيارات العرض"
+                className="flex h-10 w-10 items-center justify-center rounded-lg border border-[#E2D4F8] text-[#7C2CE8] transition hover:bg-[#F7F2FF]"
+              >
+                <SlidersHorizontal className="h-4 w-4" />
+              </button>
             </div>
           </div>
 
-          <div className="grid max-h-[650px] gap-4 overflow-auto p-5 scrollbar-thin md:grid-cols-2 xl:grid-cols-3">
-            {accounts.map((account, index) => (
+          <div className="hidden overflow-x-auto lg:block">
+            <table className="w-full min-w-[1180px] border-collapse text-right">
+              <thead>
+                <tr className="border-b border-[#EEE7F8] bg-[#FCFAFF] text-xs font-black text-zinc-600">
+                  <th className="px-5 py-4">الحساب</th>
+                  <th className="px-4 py-4">النوع</th>
+                  <th className="px-4 py-4">الحالة</th>
+                  <th className="px-4 py-4">البريد / كلمة المرور</th>
+                  <th className="px-4 py-4">تاريخ الانتهاء</th>
+                  <th className="px-4 py-4">المتبقي</th>
+                  <th className="px-5 py-4 text-center">الإجراءات</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleAccounts.map((account, index) => (
+                  <AccountRow
+                    key={account.id}
+                    account={account}
+                    index={index}
+                    onSelect={onSelect}
+                    onEdit={openEditForm}
+                    onDelete={onDelete}
+                    onOpenSupplierCode={(url) => window.open(url, "_blank", "noopener,noreferrer")}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="grid gap-3 p-4 lg:hidden">
+            {visibleAccounts.map((account, index) => (
               <AccountCard
                 key={account.id}
                 account={account}
                 index={index}
                 onSelect={onSelect}
+                onEdit={openEditForm}
                 onDelete={onDelete}
                 onOpenSupplierCode={(url) => window.open(url, "_blank", "noopener,noreferrer")}
               />
             ))}
-
-            {!accounts.length && (
-              <div className="col-span-full flex min-h-56 items-center justify-center rounded-3xl border border-dashed border-zinc-200 text-sm font-bold text-zinc-400">
-                لا توجد حسابات مطابقة.
-              </div>
-            )}
           </div>
-        </div>
-      </section>
+
+          {!visibleAccounts.length && (
+            <div className="flex min-h-64 flex-col items-center justify-center gap-3 px-5 text-center">
+              <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[#F3ECFF] text-[#8B35F5]">
+                <Search className="h-6 w-6" />
+              </div>
+              <p className="text-sm font-black text-zinc-700">لا توجد حسابات مطابقة</p>
+              <p className="text-xs font-semibold text-zinc-400">جرّب تغيير عبارة البحث أو الفلتر أو أضف حساباً جديداً.</p>
+            </div>
+          )}
+        </section>
+      </div>
+
+      {formOpen && (
+        <AccountForm
+          onAdd={onAdd}
+          onUpdate={onUpdate}
+          loading={loading}
+          service={service}
+          initialAccount={editingAccount}
+          onClose={() => setFormOpen(false)}
+        />
+      )}
     </div>
   );
 }
@@ -651,29 +932,29 @@ function StatCard({
   index: number;
 }) {
   const toneClass = {
-    neutral: "bg-zinc-50 text-zinc-800",
+    neutral: "bg-[#F4EDFF] text-[#8B35F5]",
     green: "bg-emerald-50 text-emerald-600",
-    red: "bg-red-50 text-netflix",
+    red: "bg-rose-50 text-rose-500",
   }[stat.tone];
 
   const valueClass = {
-    neutral: "text-ink",
+    neutral: "text-[#8B35F5]",
     green: "text-emerald-600",
-    red: "text-netflix",
+    red: "text-rose-500",
   }[stat.tone];
 
   return (
     <article
-      className="animate-rise rounded-3xl border border-zinc-100 bg-white p-5 shadow-premium transition duration-300 hover:-translate-y-1 hover:shadow-premium-lg"
+      className="animate-rise rounded-2xl border border-[#ECE5F6] bg-white p-5 shadow-[0_12px_34px_rgba(70,40,120,0.08)] transition duration-300 hover:-translate-y-1 hover:border-[#DCC9FA] hover:shadow-[0_18px_42px_rgba(70,40,120,0.12)]"
       style={{ animationDelay: `${index * 60}ms` }}
     >
-      <div className="flex items-center justify-between">
+      <div className="flex items-start justify-between">
         <div>
-          <p className="text-sm font-extrabold text-zinc-500">{stat.label}</p>
-          <p className={cn("mt-2 text-4xl font-black", valueClass)}>{stat.value}</p>
+          <p className={cn("text-4xl font-black leading-none", valueClass)}>{stat.value}</p>
+          <p className="mt-5 text-sm font-extrabold text-zinc-600">{stat.label}</p>
         </div>
-        <div className={cn("flex h-12 w-12 items-center justify-center rounded-2xl", toneClass)}>
-          <stat.icon className="h-6 w-6" />
+        <div className={cn("flex h-11 w-11 items-center justify-center rounded-xl border border-white shadow-sm", toneClass)}>
+          <stat.icon className="h-5 w-5" />
         </div>
       </div>
     </article>
@@ -684,12 +965,14 @@ function AccountCard({
   account,
   index,
   onSelect,
+  onEdit,
   onDelete,
   onOpenSupplierCode,
 }: {
   account: NetflixAccount;
   index: number;
   onSelect: (id: string) => void;
+  onEdit: (account: NetflixAccount) => void;
   onDelete: (id: string) => Promise<void>;
   onOpenSupplierCode: (url: string) => void;
 }) {
@@ -698,31 +981,27 @@ function AccountCard({
 
   return (
     <article
-      className="group animate-rise rounded-3xl border border-zinc-100 bg-white p-5 text-right shadow-card transition duration-300 hover:-translate-y-1 hover:border-red-100 hover:shadow-premium-lg active:scale-[0.98]"
+      className="group animate-rise rounded-2xl border border-[#E9E0F5] bg-white p-4 text-right shadow-[0_10px_28px_rgba(70,40,120,0.07)] transition duration-300 hover:-translate-y-0.5 hover:border-[#D5BDF6]"
       style={{ animationDelay: `${index * 45}ms` }}
     >
-      <div
-        role="button"
-        tabIndex={0}
-        onClick={() => onSelect(account.id)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            onSelect(account.id);
-          }
-        }}
-        className="mb-5 flex cursor-pointer items-start justify-between gap-3 outline-none"
-      >
+      <div className="mb-4 flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="truncate text-lg font-black text-ink" dir="ltr">
+          <p className="truncate text-lg font-black text-[#17141F]" dir="ltr">
             {account.email}
           </p>
-          <p className="mt-1 text-xs font-extrabold text-zinc-400">{accountTypeLabel(account.account_type)}</p>
+          <button
+            type="button"
+            onClick={() => void copyTextSilent(account.email)}
+            className="mt-2 inline-flex items-center gap-1 rounded-full border border-[#E0D4F8] bg-[#F8F4FF] px-3 py-1 text-xs font-black text-[#7C2CE8] transition hover:bg-[#F1E9FF]"
+          >
+            <Clipboard className="h-3.5 w-3.5" />
+            نسخ البريد
+          </button>
         </div>
         <span
           className={cn(
-            "flex shrink-0 items-center gap-1 rounded-full px-3 py-1 text-xs font-black",
-            expired ? "bg-red-50 text-netflix" : "bg-emerald-50 text-emerald-600",
+            "flex shrink-0 items-center gap-1 rounded-full border px-3 py-1 text-xs font-black",
+            expired ? "border-amber-200 bg-amber-50 text-amber-700" : "border-emerald-200 bg-emerald-50 text-emerald-600",
           )}
         >
           {expired ? <CircleX className="h-3.5 w-3.5" /> : <CircleCheck className="h-3.5 w-3.5" />}
@@ -730,85 +1009,256 @@ function AccountCard({
         </span>
       </div>
 
-      <div className="rounded-2xl bg-[#F9FAFB] p-4">
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2 text-sm font-extrabold text-zinc-500">
-            <CalendarDays className="h-4 w-4 text-netflix" />
-            {formatDate(account.expires_at)}
+      <div className="grid grid-cols-2 gap-2 rounded-xl bg-[#FAF8FD] p-3 text-xs font-bold text-zinc-600">
+        <div>
+          <p className="text-zinc-400">تاريخ الانتهاء</p>
+          <p className="mt-1">{formatDate(account.expires_at)}</p>
+        </div>
+        <div>
+          <p className="text-zinc-400">كلمة المرور</p>
+          <div className="mt-1 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void copyTextSilent(account.password)}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[#E0D4F8] bg-white text-[#7C2CE8] transition hover:bg-[#F4EDFF]"
+            >
+              <Copy className="h-4 w-4" />
+            </button>
+            <p className="min-w-0 flex-1 truncate text-left text-zinc-900" dir="ltr">
+              {account.password}
+            </p>
           </div>
-          <ChevronLeft className="h-5 w-5 text-zinc-300 transition duration-300 group-hover:-translate-x-1 group-hover:text-netflix" />
         </div>
-        <p className={cn("mt-3 text-sm font-black", expired ? "text-netflix" : "text-emerald-600")}>
-          {remainingLabel(account.expires_at)}
-        </p>
       </div>
 
-      <div className="mt-3 rounded-2xl border border-zinc-100 bg-zinc-50 p-4">
-        <div className="mb-2 flex items-center gap-2 text-xs font-black text-zinc-500">
-          <KeyRound className="h-4 w-4 text-netflix" />
-          كلمة مرور الحساب
-        </div>
-        <p className="truncate text-left text-sm font-black text-zinc-900" dir="ltr">
-          {account.password}
-        </p>
-      </div>
+      <p className={cn("mt-3 text-xs font-black", expired ? "text-amber-700" : "text-emerald-600")}>
+        {remainingLabel(account.expires_at)}
+      </p>
 
-      <div className="mt-3 grid gap-2">
+      <div className="mt-4 flex items-center gap-2">
         <button
           type="button"
           onClick={() => void onSelect(account.id)}
-          className="flex h-10 w-full items-center justify-center gap-2 rounded-2xl border border-zinc-200 bg-white text-sm font-black transition duration-300 hover:border-netflix hover:text-netflix"
+          title="فتح تفاصيل الحساب"
+          className="flex h-10 flex-1 items-center justify-center gap-2 rounded-xl bg-[#8B35F5] text-xs font-black text-white transition hover:bg-[#7626DD]"
         >
           <Eye className="h-4 w-4" />
-          معاينة
+          التفاصيل
+        </button>
+        <button
+          type="button"
+          onClick={() => onEdit(account)}
+          title="تعديل الحساب"
+          className="flex h-10 w-10 items-center justify-center rounded-xl border border-[#DDCEF4] text-[#7C2CE8] transition hover:bg-[#F4EDFF]"
+        >
+          <Edit3 className="h-4 w-4" />
         </button>
         <button
           type="button"
           onClick={() => onOpenSupplierCode(account.supplier_code_url || "")}
           disabled={!canOpenSupplierCode}
-          className="flex h-10 w-full items-center justify-center gap-2 rounded-2xl border border-cyan-100 bg-cyan-50 text-sm font-black text-cyan-700 transition duration-300 hover:-translate-y-0.5 hover:bg-cyan-600 hover:text-white disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:translate-y-0"
+          title="فتح رابط الأكواد"
+          className="flex h-10 w-10 items-center justify-center rounded-xl border border-[#DDCEF4] text-[#7C2CE8] transition hover:bg-[#F4EDFF] disabled:cursor-not-allowed disabled:opacity-30"
         >
-          <Link2 className="h-4 w-4" />
-          فتح رابط الأكواد
+          <ExternalLink className="h-4 w-4" />
         </button>
         <button
           type="button"
           onClick={() => void onDelete(account.id)}
-          className="flex h-10 w-full items-center justify-center gap-2 rounded-2xl border border-red-100 bg-red-50 text-sm font-black text-netflix transition duration-300 hover:bg-netflix hover:text-white"
+          title="حذف الحساب"
+          className="flex h-10 w-10 items-center justify-center rounded-xl border border-rose-100 text-rose-500 transition hover:bg-rose-50"
         >
           <Trash2 className="h-4 w-4" />
-          حذف
         </button>
       </div>
     </article>
   );
 }
 
+function AccountRow({
+  account,
+  index,
+  onSelect,
+  onEdit,
+  onDelete,
+  onOpenSupplierCode,
+}: {
+  account: NetflixAccount;
+  index: number;
+  onSelect: (id: string) => void;
+  onEdit: (account: NetflixAccount) => void;
+  onDelete: (id: string) => Promise<void>;
+  onOpenSupplierCode: (url: string) => void;
+}) {
+  const expired = isExpired(account.expires_at);
+  const canOpenSupplierCode = Boolean(account.supplier_code_url);
+  const service = serviceOf(account);
+
+  return (
+    <tr
+      className="animate-rise border-b border-[#F0EAF7] text-sm transition hover:bg-[#FCFAFF]"
+      style={{ animationDelay: `${index * 35}ms` }}
+    >
+      <td className="px-5 py-5">
+        <button type="button" onClick={() => onSelect(account.id)} className="group flex min-w-0 items-center gap-3 text-right">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#F2E9FF] text-[#7D2DE8]">
+            <UserRound className="h-4 w-4" />
+          </span>
+          <span className="min-w-0">
+            <span className="block max-w-56 truncate text-base font-black text-[#17141F]" dir="ltr">{account.email}</span>
+            <span className="mt-1 block text-[11px] font-bold text-zinc-400">#{account.id.slice(0, 8)}</span>
+          </span>
+        </button>
+      </td>
+      <td className="px-4 py-5">
+        <div className="flex flex-col items-start gap-1.5">
+          <span className="rounded-full bg-[#F1E9FF] px-3 py-1 text-xs font-black text-[#6F22D6]">
+            {accountTypeLabel(account.account_type)}
+          </span>
+          <span className={cn("text-[11px] font-black", service === "shahid" ? "text-cyan-600" : "text-[#8B35F5]")}>
+            {service === "shahid" ? "شاهد" : "Netflix"}
+          </span>
+        </div>
+      </td>
+      <td className="px-4 py-5">
+        <span
+          className={cn(
+            "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-black",
+            expired ? "border-amber-200 bg-amber-50 text-amber-700" : "border-emerald-200 bg-emerald-50 text-emerald-600",
+          )}
+        >
+          <span className={cn("h-1.5 w-1.5 rounded-full", expired ? "bg-amber-500" : "bg-emerald-500")} />
+          {expired ? "منتهي" : "فعال"}
+        </span>
+      </td>
+      <td className="px-4 py-5">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void copyTextSilent(account.email)}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[#E0D4F8] bg-[#F8F4FF] text-[#7C2CE8] transition hover:bg-[#F1E9FF]"
+            title="نسخ البريد"
+          >
+            <Copy className="h-4 w-4" />
+          </button>
+          <span className="block max-w-48 truncate rounded-lg bg-[#FAF8FD] px-3 py-2 text-left text-xs font-black text-zinc-700" dir="ltr">
+            {account.email}
+          </span>
+        </div>
+        <div className="mt-2 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void copyTextSilent(account.password)}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[#E0D4F8] bg-[#F8F4FF] text-[#7C2CE8] transition hover:bg-[#F1E9FF]"
+            title="نسخ كلمة المرور"
+          >
+            <Copy className="h-4 w-4" />
+          </button>
+          <span className="block max-w-48 truncate rounded-lg bg-[#FAF8FD] px-3 py-2 text-left text-xs font-black text-zinc-700" dir="ltr">
+            {account.password}
+          </span>
+        </div>
+      </td>
+      <td className="px-4 py-5 font-bold text-zinc-700">{formatDate(account.expires_at)}</td>
+      <td className="px-4 py-5">
+        <span className={cn("text-xs font-black", expired ? "text-amber-700" : "text-emerald-600")}>
+          {remainingLabel(account.expires_at)}
+        </span>
+      </td>
+      <td className="px-5 py-5">
+        <div className="flex items-center justify-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => onSelect(account.id)}
+            title="فتح التفاصيل"
+            className="flex h-9 w-9 items-center justify-center rounded-lg text-[#7C2CE8] transition hover:bg-[#F2E9FF]"
+          >
+            <Eye className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => onEdit(account)}
+            title="تعديل الحساب"
+            className="flex h-9 w-9 items-center justify-center rounded-lg text-zinc-600 transition hover:bg-[#F2E9FF] hover:text-[#7C2CE8]"
+          >
+            <Edit3 className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => onOpenSupplierCode(account.supplier_code_url || "")}
+            disabled={!canOpenSupplierCode}
+            title="فتح رابط الأكواد"
+            className="flex h-9 w-9 items-center justify-center rounded-lg text-zinc-600 transition hover:bg-[#F2E9FF] hover:text-[#7C2CE8] disabled:cursor-not-allowed disabled:opacity-25"
+          >
+            <ExternalLink className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => void onDelete(account.id)}
+            title="حذف الحساب"
+            className="flex h-9 w-9 items-center justify-center rounded-lg text-rose-500 transition hover:bg-rose-50"
+          >
+            <Trash2 className="h-4 w-4" />
+          </button>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
 function Header({ service, onBack, onLogout }: { service: ServiceType; onBack: () => void; onLogout: () => void }) {
   const theme = serviceThemes[service];
   return (
-    <header className="mb-6 flex flex-col gap-4 rounded-3xl border border-zinc-100 bg-white p-6 shadow-premium md:flex-row md:items-center md:justify-between">
-      <div>
-        <button onClick={onBack} className="mb-4 flex items-center gap-2 text-sm font-black text-zinc-500 transition hover:text-ink">
-          <ArrowRight className="h-4 w-4" />
-          رجوع
-        </button>
-        <p className={cn("text-sm font-black", theme.accent)}>Zone Store</p>
-        <h1 className="mt-1 text-2xl font-black md:text-4xl">{theme.title}</h1>
-      </div>
-      <div className="flex items-center gap-3">
-        <div className="hidden text-left text-sm font-bold text-zinc-500 sm:block">
-          <p>لوحة تشغيل الاشتراكات</p>
-          <p>{formatDate(new Date().toISOString())}</p>
+    <header className="border-b border-[#EEE7F8] bg-white">
+      <div className="mx-auto flex min-h-20 w-full max-w-[1280px] flex-col gap-4 px-4 py-4 md:flex-row md:items-center md:justify-between md:px-8 md:py-0">
+        <div className="flex items-center justify-between gap-5">
+          <button
+            type="button"
+            onClick={onBack}
+            className="flex items-center gap-3 text-right"
+            title="الرجوع لاختيار الخدمة"
+          >
+            <span className="flex h-11 w-11 items-center justify-center rounded-xl border border-[#DFD0F6] bg-[#F7F2FF] text-[#8B35F5] shadow-[0_8px_20px_rgba(139,53,245,0.10)]">
+              <LayoutDashboard className="h-5 w-5" />
+            </span>
+            <span>
+              <span className="block text-lg font-black leading-tight">ZONE STORE</span>
+              <span className="block text-[11px] font-bold text-zinc-500">{theme.title}</span>
+            </span>
+          </button>
+
+          <nav className="hidden items-center gap-2 border-r border-[#EEE7F8] pr-5 md:flex">
+            <button className="flex h-10 items-center gap-2 rounded-lg bg-[#8B35F5] px-4 text-xs font-black text-white">
+              <Users className="h-4 w-4" />
+              إدارة الحسابات
+            </button>
+            <button
+              type="button"
+              onClick={onBack}
+              className="flex h-10 items-center gap-2 rounded-lg px-4 text-xs font-black text-zinc-500 transition hover:bg-[#F7F2FF] hover:text-[#7C2CE8]"
+            >
+              <Settings className="h-4 w-4" />
+              الخدمات
+            </button>
+          </nav>
         </div>
-        <button
-          onClick={onLogout}
-          className="h-12 rounded-2xl border border-red-100 bg-red-50 px-4 text-sm font-black text-netflix transition duration-300 hover:bg-netflix hover:text-white"
-        >
-          تسجيل الخروج
-        </button>
-        <div className={cn("flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br text-xl font-black text-white", theme.gradient, theme.glow)}>
-          Z
+
+        <div className="flex items-center justify-between gap-3 border-t border-[#F0EAF7] pt-3 md:border-0 md:pt-0">
+          <div className="text-left">
+            <p className="text-xs font-black text-zinc-700" dir="ltr">{adminEmail}</p>
+            <p className="mt-0.5 text-[10px] font-bold text-zinc-400">حساب المسؤول</p>
+          </div>
+          <span className="h-8 w-px bg-[#EEE7F8]" />
+          <button
+            onClick={onLogout}
+            className="flex h-10 items-center gap-2 rounded-lg px-3 text-xs font-black text-zinc-500 transition hover:bg-[#F5EEFF] hover:text-[#7C2CE8]"
+          >
+            <LogOut className="h-4 w-4" />
+            خروج
+          </button>
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#F1E7FF] text-sm font-black text-[#7C2CE8]">
+            Z
+          </div>
         </div>
       </div>
     </header>
@@ -817,7 +1267,7 @@ function Header({ service, onBack, onLogout }: { service: ServiceType; onBack: (
 
 function ConfigNotice() {
   return (
-    <div className="mb-6 rounded-3xl border border-red-100 bg-red-50 p-4 text-sm font-bold leading-7 text-red-900 shadow-card">
+    <div className="mb-6 rounded-3xl border border-[#E4D6FA] bg-[#F7F2FF] p-4 text-sm font-bold leading-7 text-[#5F2AC8] shadow-card">
       التطبيق يعمل الآن بوضع معاينة محلي. أضف `VITE_SUPABASE_URL` و `VITE_SUPABASE_ANON_KEY` في ملف `.env`
       ثم شغل جداول Supabase الموجودة في `supabase/schema.sql` لتفعيل التخزين الحقيقي.
     </div>
@@ -826,128 +1276,188 @@ function ConfigNotice() {
 
 function AccountForm({
   onAdd,
+  onUpdate,
   loading,
   service,
+  initialAccount,
+  onClose,
 }: {
-  onAdd: (form: { email: string; password: string; account_type: AccountType; supplier_code_url?: string }) => Promise<void>;
+  onAdd: (form: { email: string; password: string; account_type: AccountType; supplier_code_url?: string }) => Promise<boolean>;
+  onUpdate: (
+    accountId: string,
+    form: { email: string; password: string; supplier_code_url?: string },
+  ) => Promise<boolean>;
   loading: boolean;
   service: ServiceType;
+  initialAccount: NetflixAccount | null;
+  onClose: () => void;
 }) {
-  const [accountType, setAccountType] = useState<AccountType>("private");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [supplierCodeUrl, setSupplierCodeUrl] = useState("");
+  const editing = Boolean(initialAccount);
+  const [accountType, setAccountType] = useState<AccountType>(initialAccount?.account_type || "private");
+  const [email, setEmail] = useState(initialAccount?.email || "");
+  const [password, setPassword] = useState(initialAccount?.password || "");
+  const [supplierCodeUrl, setSupplierCodeUrl] = useState(initialAccount?.supplier_code_url || "");
   const calculatedExpiry = defaultExpiryDate();
   const theme = serviceThemes[service];
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    await onAdd({ email, password, account_type: accountType, supplier_code_url: supplierCodeUrl.trim() || undefined });
-    setEmail("");
-    setPassword("");
-    setSupplierCodeUrl("");
-    setAccountType("private");
+    const supplier_code_url = supplierCodeUrl.trim() || undefined;
+    const succeeded = initialAccount
+      ? await onUpdate(initialAccount.id, { email, password, supplier_code_url })
+      : await onAdd({ email, password, account_type: accountType, supplier_code_url });
+
+    if (succeeded) onClose();
   }
 
   return (
-    <form onSubmit={submit} className="animate-rise rounded-3xl border border-zinc-100 bg-white p-6 shadow-premium">
-      <div className="mb-6 flex items-center justify-between">
-        <div>
-          <p className="text-sm font-extrabold text-zinc-500">حساب جديد</p>
-          <h2 className="text-xl font-black">إضافة حساب {theme.name}</h2>
-        </div>
-        <div className={cn("flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br text-white", theme.gradient, theme.glow)}>
-          <Plus className="h-5 w-5" />
-        </div>
-      </div>
-
-      <Field icon={Mail} label="البريد الإلكتروني">
-        <input
-          required
-          type="email"
-          value={email}
-          onChange={(event) => setEmail(event.target.value)}
-          className="h-12 w-full rounded-2xl border border-zinc-200 bg-[#F9FAFB] px-4 text-left font-bold outline-none transition duration-300 focus:border-netflix focus:bg-white focus:shadow-red-soft"
-          dir="ltr"
-        />
-      </Field>
-
-      <Field icon={KeyRound} label="كلمة المرور">
-        <input
-          required
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-          className="h-12 w-full rounded-2xl border border-zinc-200 bg-[#F9FAFB] px-4 text-left font-bold outline-none transition duration-300 focus:border-netflix focus:bg-white focus:shadow-red-soft"
-          dir="ltr"
-        />
-      </Field>
-
-      <Field icon={Link2} label="رابط جلب الأكواد">
-        <input
-          value={supplierCodeUrl}
-          onChange={(event) => setSupplierCodeUrl(event.target.value)}
-          placeholder="https://example.com"
-          className="h-12 w-full rounded-2xl border border-zinc-200 bg-[#F9FAFB] px-4 text-left font-bold outline-none transition duration-300 focus:border-cyan-500 focus:bg-white focus:shadow-[0_10px_30px_rgba(6,182,212,0.16)]"
-          dir="ltr"
-        />
-        <p className="mt-2 text-xs font-bold text-zinc-400">هذا الرابط للمسؤول فقط، ولا يظهر في صفحة العميل.</p>
-      </Field>
-
-      <div className="mb-5 rounded-2xl bg-[#F9FAFB] p-4">
-        <div className="flex items-center gap-2 text-sm font-black text-zinc-500">
-          <CalendarDays className="h-4 w-4 text-netflix" />
-          تاريخ الانتهاء التلقائي
-        </div>
-        <p className="mt-2 text-lg font-black">{formatDate(calculatedExpiry)}</p>
-        <p className="mt-1 text-xs font-bold text-zinc-400">يتم احتسابه بعد 30 يوماً من تاريخ الإضافة.</p>
-      </div>
-
-      <div className="mb-5">
-        <p className="mb-2 text-sm font-black">نوع الحساب</p>
-        <div className="grid grid-cols-2 gap-2">
-          {(["private", "shared"] as AccountType[]).map((type) => (
-            <button
-              key={type}
-              type="button"
-              onClick={() => setAccountType(type)}
-              className={cn(
-                "h-12 rounded-2xl border text-sm font-black transition duration-300 active:scale-[0.98]",
-                accountType === type
-                  ? cn("border-transparent bg-gradient-to-br text-white", theme.gradient, theme.glow)
-                  : cn("border-zinc-200 bg-[#F9FAFB] text-zinc-600", service === "shahid" ? "hover:border-cyan-200" : "hover:border-red-100"),
-              )}
-            >
-              {accountTypeLabel(type)}
-            </button>
-          ))}
-        </div>
-        <p className="mt-2 text-xs font-bold text-zinc-500">
-          {service === "shahid"
-            ? accountType === "private"
-              ? "سيتم إنشاء 4 روابط تلقائياً بدون رمز ملف."
-              : "سيتم إنشاء 8 روابط تلقائياً بدون رمز ملف."
-            : accountType === "private"
-              ? "سيتم إنشاء 5 روابط تلقائياً."
-              : "سيتم إنشاء 10 روابط تلقائياً."}
-        </p>
-      </div>
-
-      <button
-        disabled={loading}
-        className={cn("flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-br text-sm font-black text-white transition duration-300 hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60", theme.gradient, theme.glow)}
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[#17141F]/70 px-4 py-6 backdrop-blur-[3px]"
+      role="dialog"
+      aria-modal="true"
+      aria-label={editing ? "تعديل الحساب" : "إضافة حساب جديد"}
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !loading) onClose();
+      }}
+    >
+      <form
+        onSubmit={submit}
+        className="animate-rise max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-3xl border border-[#DCC9FA] bg-white p-5 shadow-[0_30px_90px_rgba(20,10,35,0.28)] scrollbar-thin md:p-7"
       >
-        <Plus className="h-5 w-5" />
-        {loading ? "جاري الحفظ..." : "إضافة الحساب"}
-      </button>
-    </form>
+        <div className="mb-6 flex items-start justify-between gap-4">
+          <div>
+            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-[#8B35F5]">ZONE STORE</p>
+            <h2 className="mt-2 text-2xl font-black md:text-3xl">
+              {editing ? "تعديل بيانات الحساب" : "إضافة حساب جديد"}
+            </h2>
+            <p className="mt-1 text-xs font-bold text-zinc-500">
+              {editing ? "حدّث البيانات الأساسية دون تغيير روابط العملاء الحالية." : `إنشاء حساب ${theme.name} وروابط العملاء تلقائياً.`}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={loading}
+            title="إغلاق"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[#E7DDF5] text-zinc-500 transition hover:bg-[#F5EEFF] hover:text-[#7C2CE8]"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="mb-5">
+          <p className="mb-2 text-sm font-black text-zinc-700">نوع الحساب</p>
+          <div className="grid rounded-2xl border-2 border-[#E0D0FB] bg-[#F8F4FF] p-1.5 sm:grid-cols-2">
+            {(["private", "shared"] as AccountType[]).map((type) => (
+              <button
+                key={type}
+                type="button"
+                disabled={editing}
+                onClick={() => setAccountType(type)}
+                className={cn(
+                  "h-12 rounded-xl text-sm font-black transition duration-300 disabled:cursor-not-allowed",
+                  accountType === type
+                    ? "bg-[#8B35F5] text-white shadow-[0_10px_24px_rgba(139,53,245,0.22)]"
+                    : "text-zinc-600 hover:bg-white",
+                )}
+              >
+                {accountTypeLabel(type)}
+              </button>
+            ))}
+          </div>
+          {editing && <p className="mt-2 text-[11px] font-bold text-zinc-400">نوع الحساب ثابت لحماية روابط العملاء المنشأة.</p>}
+        </div>
+
+        <div className="grid gap-x-4 sm:grid-cols-2">
+          <Field icon={Mail} label="البريد الإلكتروني">
+            <input
+              required
+              type="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              placeholder="name@example.com"
+              className="admin-modal-input"
+              dir="ltr"
+            />
+          </Field>
+
+          <Field icon={KeyRound} label="كلمة المرور">
+            <input
+              required
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              placeholder="أدخل كلمة مرور الحساب"
+              className="admin-modal-input"
+              dir="ltr"
+            />
+          </Field>
+        </div>
+
+        <Field icon={Link2} label="رابط جلب الأكواد">
+          <input
+            value={supplierCodeUrl}
+            onChange={(event) => setSupplierCodeUrl(event.target.value)}
+            placeholder="https://example.com"
+            className="admin-modal-input"
+            dir="ltr"
+          />
+          <p className="mt-2 text-[11px] font-bold text-zinc-400">خاص بالمسؤول فقط ولا يظهر في صفحة العميل.</p>
+        </Field>
+
+        <div className="mb-6 flex items-center justify-between gap-4 rounded-2xl border border-[#E8DDF8] bg-[#FAF8FD] p-4">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-black text-zinc-700">
+              <CalendarDays className="h-4 w-4 text-[#8B35F5]" />
+              {editing ? "تاريخ انتهاء الحساب" : "تاريخ الانتهاء التلقائي"}
+            </div>
+            <p className="mt-1 text-[11px] font-bold text-zinc-400">
+              {editing ? "يبقى تاريخ الانتهاء الحالي دون تغيير." : "يتم احتسابه بعد 30 يوماً من تاريخ الإضافة."}
+            </p>
+          </div>
+          <p className="shrink-0 text-sm font-black text-[#6F22D6]">
+            {formatDate(initialAccount?.expires_at || calculatedExpiry)}
+          </p>
+        </div>
+
+        {!editing && (
+          <p className="mb-5 rounded-xl bg-[#F4EDFF] px-4 py-3 text-xs font-bold text-[#6F22D6]">
+            {service === "shahid"
+              ? accountType === "private"
+                ? "سيتم إنشاء 4 روابط تلقائياً بدون رمز ملف."
+                : "سيتم إنشاء 8 روابط تلقائياً بدون رمز ملف."
+              : accountType === "private"
+                ? "سيتم إنشاء 5 روابط تلقائياً."
+                : "سيتم إنشاء 10 روابط تلقائياً."}
+          </p>
+        )}
+
+        <div className="flex flex-col-reverse gap-3 sm:flex-row">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={loading}
+            className="h-12 rounded-xl border border-[#E5DBF2] px-6 text-sm font-black text-zinc-600 transition hover:bg-zinc-50 disabled:opacity-50"
+          >
+            إلغاء
+          </button>
+          <button
+            disabled={loading}
+            className="flex h-12 flex-1 items-center justify-center gap-2 rounded-xl bg-[#8B35F5] text-sm font-black text-white shadow-[0_14px_30px_rgba(139,53,245,0.26)] transition duration-300 hover:-translate-y-0.5 hover:bg-[#7626DD] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {editing ? <Check className="h-5 w-5" /> : <Plus className="h-5 w-5" />}
+            {loading ? "جاري الحفظ..." : editing ? "حفظ التعديلات" : "إضافة حساب جديد"}
+          </button>
+        </div>
+      </form>
+    </div>
   );
 }
 
 function Field({ label, icon: Icon, children }: { label: string; icon: LucideIcon; children: React.ReactNode }) {
   return (
     <label className="mb-4 block">
-      <span className="mb-2 flex items-center gap-2 text-sm font-black">
-        <Icon className="h-4 w-4 text-netflix" />
+      <span className="mb-2 flex items-center gap-2 text-sm font-black text-zinc-700">
+        <Icon className="h-4 w-4 text-[#8B35F5]" />
         {label}
       </span>
       {children}
@@ -962,6 +1472,8 @@ function AccountDetail({
   navigate,
   setToast,
   onDelete,
+  onDeleteLinks,
+  onUpdateDates,
   onLogout,
 }: {
   account: NetflixAccount;
@@ -970,137 +1482,342 @@ function AccountDetail({
   navigate: (path: string) => void;
   setToast: (toast: Toast) => void;
   onDelete: (accountId: string) => Promise<void>;
+  onDeleteLinks: (ids: string[]) => Promise<boolean>;
+  onUpdateDates: (accountId: string, form: { created_at: string; expires_at: string }) => Promise<boolean>;
   onLogout: () => void;
 }) {
   const expired = isExpired(account.expires_at);
   const service = serviceOf(account);
-  const theme = serviceThemes[service];
   const generatedLimit = service === "shahid" ? (account.account_type === "private" ? 4 : 8) : account.account_type === "private" ? 5 : 10;
-  const allLinksText = links
+  const [selectedLinkIds, setSelectedLinkIds] = useState<string[]>([]);
+  const [activeTab, setActiveTab] = useState<"customers" | "create" | "twofa">("customers");
+  const [startDate, setStartDate] = useState(() => new Date(account.created_at).toISOString().slice(0, 10));
+  const [endDate, setEndDate] = useState(() => new Date(account.expires_at).toISOString().slice(0, 10));
+  const [savingDates, setSavingDates] = useState(false);
+
+  useEffect(() => {
+    setSelectedLinkIds([]);
+    setActiveTab("customers");
+    setStartDate(new Date(account.created_at).toISOString().slice(0, 10));
+    setEndDate(new Date(account.expires_at).toISOString().slice(0, 10));
+  }, [account.created_at, account.expires_at, account.id]);
+
+  const linksToCopy = selectedLinkIds.length ? links.filter((link) => selectedLinkIds.includes(link.id)) : links;
+  const linksToCopyText = linksToCopy
     .map((link) => `للحصول على بيانات الحساب ادخل على الرابط التالي: ${getCustomerUrl(link)} يجب الإحتفاظ بالرابط`)
     .join("\n");
   const openSupplierCode = () => {
     if (!account.supplier_code_url) return;
     window.open(account.supplier_code_url, "_blank", "noopener,noreferrer");
   };
+  const allSelected = links.length > 0 && selectedLinkIds.length === links.length;
+  const selectedCount = selectedLinkIds.length;
 
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-5 md:px-8 md:py-8">
       <div className="mb-4 flex items-center justify-between gap-3">
-        <button onClick={onBack} className="flex items-center gap-2 text-sm font-black text-zinc-600 transition hover:text-netflix">
-          <ArrowRight className="h-4 w-4" />
-          رجوع للحسابات
-        </button>
         <button
-          onClick={onLogout}
-          className="rounded-2xl border border-red-100 bg-red-50 px-4 py-2 text-sm font-black text-netflix transition duration-300 hover:bg-netflix hover:text-white"
+          onClick={onBack}
+          className="flex items-center gap-2 rounded-full border border-[#E4D6FA] bg-white px-4 py-2 text-sm font-black text-[#7C2CE8] transition hover:bg-[#F5EEFF]"
         >
-          تسجيل الخروج
+          <ArrowRight className="h-4 w-4" />
+          العودة للرئيسية
         </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={openSupplierCode}
+            disabled={!account.supplier_code_url}
+            className="rounded-full border border-[#E4D6FA] bg-[#F5EEFF] px-4 py-2 text-sm font-black text-[#7C2CE8] transition hover:bg-[#8B35F5] hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            فتح رابط الأكواد
+          </button>
+          <button
+            onClick={onLogout}
+            className="rounded-full border border-[#E4D6FA] bg-white px-4 py-2 text-sm font-black text-[#7C2CE8] transition hover:bg-[#F5EEFF]"
+          >
+            تسجيل الخروج
+          </button>
+        </div>
       </div>
 
-      <section className="mb-6 rounded-3xl border border-zinc-100 bg-white p-6 shadow-premium">
-        <div className="flex flex-col gap-5 md:flex-row md:items-center md:justify-between">
+      <section className="mb-6 rounded-[2rem] border border-[#E8DCFF] bg-white p-5 shadow-premium">
+        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <div className="min-w-0">
-            <span
-              className={cn(
-                "inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-black",
-                expired ? "bg-red-50 text-netflix" : "bg-emerald-50 text-emerald-600",
-              )}
-            >
-              {expired ? <CircleX className="h-3.5 w-3.5" /> : <CircleCheck className="h-3.5 w-3.5" />}
-              {expired ? "منتهي" : "فعال"}
-            </span>
-            <h1 className="mt-3 truncate text-2xl font-black md:text-3xl" dir="ltr">
-              {account.email}
-            </h1>
-            <div className="mt-3 inline-flex max-w-full items-center gap-2 rounded-2xl border border-zinc-100 bg-zinc-50 px-4 py-3">
-              <KeyRound className="h-4 w-4 shrink-0 text-netflix" />
-              <span className="shrink-0 text-xs font-black text-zinc-500">كلمة المرور</span>
-              <span className="truncate text-left text-sm font-black text-zinc-950" dir="ltr">
-                {account.password}
-              </span>
-            </div>
-            <p className="mt-2 text-sm font-bold text-zinc-500">
-              ينتهي في {formatDate(account.expires_at)} - {remainingLabel(account.expires_at)}
-            </p>
+            <p className="text-xs font-black uppercase tracking-[0.2em] text-[#8B35F5]">تفاصيل الحساب</p>
+            <h1 className="mt-2 text-3xl font-black md:text-4xl">إدارة الحساب والعملاء</h1>
+            <p className="mt-2 text-sm font-semibold text-zinc-500">حساب {account.email} وتفاصيل الروابط من لوحة واحدة.</p>
           </div>
           <div className="grid grid-cols-2 gap-3 text-center sm:min-w-72">
-            <div className="rounded-2xl bg-[#F9FAFB] p-4">
-              <p className="text-3xl font-black">{links.length}</p>
-              <p className="text-xs font-bold text-zinc-500">رابط عميل</p>
+            <div className="rounded-2xl bg-[#F7F2FF] p-4">
+              <p className="text-3xl font-black text-[#7C2CE8]">{links.length}</p>
+              <p className="text-xs font-bold text-zinc-500">العملاء</p>
             </div>
-            <div className="rounded-2xl bg-red-50 p-4">
-              <p className={cn("text-3xl font-black", theme.accent)}>{generatedLimit}</p>
-              <p className="text-xs font-bold text-red-900">الحد المولد</p>
+            <div className="rounded-2xl bg-[#F7F2FF] p-4">
+              <p className="text-3xl font-black text-[#7C2CE8]">{generatedLimit}</p>
+              <p className="text-xs font-bold text-zinc-500">الخطة</p>
             </div>
           </div>
         </div>
-        <button
-          onClick={() => copyText(allLinksText, setToast)}
-          disabled={!links.length}
-          className={cn("mt-5 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-br text-sm font-black text-white transition duration-300 hover:-translate-y-1 disabled:cursor-not-allowed disabled:opacity-60", theme.gradient, theme.glow)}
-        >
-          <Copy className="h-5 w-5" />
-          نسخ جميع روابط العملاء
-        </button>
-        <button
-          onClick={openSupplierCode}
-          disabled={!account.supplier_code_url}
-          className="mt-3 flex h-12 w-full items-center justify-center gap-2 rounded-2xl border border-cyan-100 bg-cyan-50 text-sm font-black text-cyan-700 transition duration-300 hover:-translate-y-1 hover:bg-cyan-600 hover:text-white disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:translate-y-0"
-        >
-          <Link2 className="h-5 w-5" />
-          فتح رابط الأكواد
-        </button>
-        <button
-          onClick={() => void onDelete(account.id)}
-          className="mt-3 flex h-12 w-full items-center justify-center gap-2 rounded-2xl border border-red-100 bg-red-50 text-sm font-black text-netflix transition duration-300 hover:-translate-y-1 hover:bg-netflix hover:text-white"
-        >
-          <Trash2 className="h-5 w-5" />
-          حذف هذا الإيميل
-        </button>
+
+        <div className="mt-5 grid gap-4 md:grid-cols-2">
+          <div className="rounded-2xl border border-[#E0D4F8] bg-[#FCFAFF] p-4">
+            <div className="mb-4 flex items-center justify-between">
+              <span className="text-sm font-black text-zinc-700">البريد الإلكتروني</span>
+              <button
+                onClick={() => void copyText(account.email, setToast)}
+                className="flex h-10 items-center gap-2 rounded-xl border border-[#E0D4F8] bg-white px-4 text-sm font-black text-[#7C2CE8] transition hover:bg-[#F5EEFF]"
+              >
+                <Clipboard className="h-4 w-4" />
+                نسخ
+              </button>
+            </div>
+            <p className="truncate text-lg font-black text-zinc-950" dir="ltr">
+              {account.email}
+            </p>
+          </div>
+
+          <div className="rounded-2xl border border-[#E0D4F8] bg-[#FCFAFF] p-4">
+            <div className="mb-4 flex items-center justify-between">
+              <span className="text-sm font-black text-zinc-700">كلمة المرور</span>
+              <button
+                onClick={() => void copyText(account.password, setToast)}
+                className="flex h-10 items-center gap-2 rounded-xl border border-[#E0D4F8] bg-white px-4 text-sm font-black text-[#7C2CE8] transition hover:bg-[#F5EEFF]"
+              >
+                <Clipboard className="h-4 w-4" />
+                نسخ
+              </button>
+            </div>
+            <p className="truncate text-lg font-black text-zinc-950" dir="ltr">
+              {account.password}
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+          {[
+            { label: "اسم الحساب", value: account.email, valueClass: "text-sm" },
+            { label: "نوع الحساب", value: accountTypeLabel(account.account_type) },
+            { label: "الخطة", value: `${generatedLimit} روابط` },
+            { label: "الحالة", value: expired ? "منتهي" : "فعال", valueClass: expired ? "text-amber-700" : "text-emerald-600" },
+            { label: "تاريخ الانتهاء", value: formatDate(account.expires_at) },
+          ].map((item) => (
+            <div key={item.label} className="rounded-2xl border border-[#E7DCF9] bg-white p-4 shadow-[0_8px_24px_rgba(70,40,120,0.05)]">
+              <p className="text-xs font-bold text-zinc-500">{item.label}</p>
+              <p className={cn("mt-2 truncate text-base font-black text-zinc-900", item.valueClass)} dir="ltr">
+                {item.value}
+              </p>
+            </div>
+          ))}
+        </div>
       </section>
 
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {links.map((link, index) => {
-          const customerUrl = getCustomerUrl(link);
-          return (
-            <article
-              key={link.id}
-              className="animate-rise rounded-3xl border border-zinc-100 bg-white p-5 shadow-card transition duration-300 hover:-translate-y-1 hover:shadow-premium"
-              style={{ animationDelay: `${index * 45}ms` }}
+      <section className="mb-6 rounded-[2rem] border border-[#E8DCFF] bg-white p-5 shadow-premium">
+        <div className="grid gap-4 lg:grid-cols-[1fr_1fr_auto] lg:items-end">
+          <label className="block">
+            <span className="mb-2 block text-sm font-black text-zinc-700">تاريخ بداية الاشتراك</span>
+            <input
+              type="date"
+              value={startDate}
+              onChange={(event) => setStartDate(event.target.value)}
+              className="admin-modal-input"
+            />
+          </label>
+          <label className="block">
+            <span className="mb-2 block text-sm font-black text-zinc-700">تاريخ نهاية الاشتراك</span>
+            <input
+              type="date"
+              value={endDate}
+              onChange={(event) => setEndDate(event.target.value)}
+              className="admin-modal-input"
+            />
+          </label>
+          <button
+            type="button"
+            onClick={async () => {
+              setSavingDates(true);
+              const succeeded = await onUpdateDates(account.id, {
+                created_at: new Date(`${startDate}T00:00:00`).toISOString(),
+                expires_at: new Date(`${endDate}T00:00:00`).toISOString(),
+              });
+              setSavingDates(false);
+              if (succeeded) setToast({ label: "تم حفظ التواريخ", at: Date.now() });
+            }}
+            disabled={savingDates}
+            className="h-13 rounded-2xl bg-[#8B35F5] px-7 text-sm font-black text-white shadow-[0_14px_32px_rgba(139,53,245,0.24)] transition hover:-translate-y-0.5 hover:bg-[#7626DD] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            حفظ التواريخ
+          </button>
+        </div>
+      </section>
+
+      <section className="mb-6 rounded-[2rem] border border-[#E8DCFF] bg-white shadow-premium">
+        <div className="flex flex-col gap-4 border-b border-[#EEE7F8] px-5 py-5 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex flex-wrap items-center gap-2">
+            {[
+              { key: "customers", label: "العملاء" },
+              { key: "create", label: "+ إنشاء العملاء" },
+              { key: "twofa", label: "المصادقة الثنائية 2FA" },
+            ].map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => setActiveTab(tab.key as typeof activeTab)}
+                className={cn(
+                  "rounded-full px-4 py-2 text-sm font-black transition",
+                  activeTab === tab.key ? "bg-[#8B35F5] text-white shadow-[0_10px_24px_rgba(139,53,245,0.18)]" : "bg-[#F5EEFF] text-[#7C2CE8] hover:bg-[#EDE1FF]",
+                )}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+          <div className="text-sm font-bold text-[#7C2CE8]">
+            {selectedCount ? `تم تحديد ${selectedCount} عميل.` : "لم يتم تحديد أي عميل، سيتم تطبيق الإجراءات على جميع العملاء."}
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-3 border-b border-[#EEE7F8] bg-[#F8F4FF] px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex items-center gap-3 text-sm font-bold text-zinc-700">
+            <label className="flex items-center gap-2 rounded-full border border-[#E4D6FA] bg-white px-4 py-2">
+              <input
+                type="checkbox"
+                checked={allSelected}
+                onChange={(event) => setSelectedLinkIds(event.target.checked ? links.map((link) => link.id) : [])}
+                className="h-4 w-4 rounded border-[#CDBAF2] text-[#8B35F5] focus:ring-[#8B35F5]"
+              />
+              تحديد الكل
+            </label>
+            <span className="text-zinc-500">عرض {links.length} من {links.length} عميل</span>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setToast({ label: "ميزة تعديل الرصيد قيد الإعداد", at: Date.now() })}
+              className="rounded-full border border-[#E4D6FA] bg-white px-4 py-2 text-sm font-black text-[#7C2CE8] transition hover:bg-[#F5EEFF]"
             >
-              <div className="mb-4 flex items-center justify-between">
-                <div>
-                  <p className="text-xs font-extrabold text-zinc-500">ملف العميل</p>
-                  <h3 className="text-3xl font-black">{link.profile_name}</h3>
+              تعديل الرصيد
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                if (!linksToCopyText) return;
+                await copyText(linksToCopyText, setToast);
+              }}
+              className="rounded-full bg-[#8B35F5] px-4 py-2 text-sm font-black text-white shadow-[0_10px_24px_rgba(139,53,245,0.18)] transition hover:bg-[#7626DD]"
+            >
+              نسخ الروابط
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                if (!selectedLinkIds.length) {
+                  setToast({ label: "حدد روابط أولاً", at: Date.now() });
+                  return;
+                }
+                await onDeleteLinks(selectedLinkIds);
+                setSelectedLinkIds([]);
+              }}
+              disabled={!selectedLinkIds.length}
+              className="rounded-full border border-[#E4D6FA] bg-white px-4 py-2 text-sm font-black text-zinc-600 transition hover:bg-[#F5EEFF] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              حذف
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                if (!links.length) return;
+                await onDeleteLinks(links.map((link) => link.id));
+                setSelectedLinkIds([]);
+              }}
+              disabled={!links.length}
+              className="rounded-full border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-black text-rose-600 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              حذف الكل
+            </button>
+          </div>
+        </div>
+
+        {activeTab === "customers" ? (
+          <>
+            <div className="grid gap-4 p-4 md:grid-cols-2 xl:grid-cols-3">
+              {links.map((link, index) => {
+                const customerUrl = getCustomerUrl(link);
+                const checked = selectedLinkIds.includes(link.id);
+                return (
+                  <article
+                    key={link.id}
+                    className="animate-rise rounded-[1.75rem] border border-[#E4D6FA] bg-white p-4 shadow-[0_10px_28px_rgba(70,40,120,0.06)] transition duration-300 hover:-translate-y-1 hover:border-[#CDBAF2]"
+                    style={{ animationDelay: `${index * 45}ms` }}
+                  >
+                    <div className="mb-4 flex items-start justify-between gap-3">
+                      <label className="flex items-start gap-3">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(event) =>
+                            setSelectedLinkIds((current) =>
+                              event.target.checked
+                                ? [...current, link.id]
+                                : current.filter((item) => item !== link.id),
+                            )
+                          }
+                          className="mt-1 h-4 w-4 rounded border-[#CDBAF2] text-[#8B35F5] focus:ring-[#8B35F5]"
+                        />
+                        <div>
+                          <p className="text-xs font-bold text-zinc-500">اسم الملف</p>
+                          <h3 className="text-2xl font-black text-zinc-950">{link.profile_name}</h3>
+                          <p className="mt-1 text-xs font-bold text-[#7C2CE8]">{link.profile_label}</p>
+                        </div>
+                      </label>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          await onDeleteLinks([link.id]);
+                          setSelectedLinkIds((current) => current.filter((item) => item !== link.id));
+                        }}
+                        className="flex h-9 w-9 items-center justify-center rounded-xl border border-rose-200 bg-rose-50 text-rose-500 transition hover:bg-rose-100"
+                        title="حذف العميل"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+
+                    <p className="truncate rounded-2xl bg-[#F8F4FF] px-3 py-3 text-left text-xs font-bold text-zinc-500" dir="ltr">
+                      {customerUrl}
+                    </p>
+
+                    <button
+                      onClick={() => copyText(customerUrl, setToast)}
+                      className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-2xl bg-[#8B35F5] text-sm font-black text-white shadow-[0_12px_28px_rgba(139,53,245,0.20)] transition hover:bg-[#7626DD]"
+                    >
+                      <Copy className="h-4 w-4" />
+                      نسخ الرابط
+                    </button>
+                  </article>
+                );
+              })}
+            </div>
+
+            {!links.length && (
+              <div className="flex min-h-48 flex-col items-center justify-center gap-3 px-5 pb-8 text-center">
+                <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[#F3ECFF] text-[#8B35F5]">
+                  <Users className="h-6 w-6" />
                 </div>
-                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-red-50 text-netflix">
-                  <UserRound className="h-5 w-5" />
-                </div>
+                <p className="text-sm font-black text-zinc-700">لا توجد روابط عملاء بعد</p>
               </div>
-              <p className="mb-4 truncate rounded-2xl bg-[#F9FAFB] px-3 py-3 text-left text-xs font-bold text-zinc-500" dir="ltr">
-                {customerUrl}
+            )}
+          </>
+        ) : (
+          <div className="flex min-h-56 items-center justify-center px-5 py-10 text-center">
+            <div className="max-w-md rounded-3xl border border-[#E4D6FA] bg-[#FCFAFF] p-6">
+              <p className="text-sm font-black text-[#7C2CE8]">القسم قيد العرض التجريبي</p>
+              <p className="mt-2 text-sm font-bold leading-7 text-zinc-500">
+                هذا التبويب مخصص لعرض أدوات الإنشاء والمصادقة الثنائية بنفس شكل الواجهة الجديدة.
               </p>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  onClick={() => copyText(customerUrl, setToast)}
-                  className={cn("flex h-11 items-center justify-center gap-2 rounded-2xl bg-gradient-to-br text-sm font-black text-white transition duration-300", theme.gradient, theme.glow)}
-                >
-                  <Copy className="h-4 w-4" />
-                  نسخ الرابط
-                </button>
-                <button
-                  onClick={() => navigate(link.short_id ? `/v/${link.short_id}` : `/view/${link.uuid}`)}
-                  className="flex h-11 items-center justify-center gap-2 rounded-2xl border border-zinc-200 text-sm font-black transition duration-300 hover:border-netflix hover:text-netflix"
-                >
-                  <Eye className="h-4 w-4" />
-                  معاينة
-                </button>
-              </div>
-            </article>
-          );
-        })}
+            </div>
+          </div>
+        )}
       </section>
     </div>
   );

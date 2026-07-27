@@ -40,6 +40,12 @@ button {
   cursor: pointer;
 }
 
+@layer components {
+  .admin-modal-input {
+    @apply h-12 w-full rounded-xl border-2 border-[#DCC9FA] bg-white px-4 text-left text-sm font-bold text-zinc-900 outline-none transition duration-300 placeholder:text-zinc-400 focus:border-[#8B35F5] focus:shadow-[0_0_0_4px_rgba(139,53,245,0.10)];
+  }
+}
+
 .scrollbar-thin::-webkit-scrollbar {
   width: 7px;
   height: 7px;
