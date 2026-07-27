@@ -879,7 +879,7 @@ function Dashboard({
             </table>
           </div>
 
-          <div className="grid gap-3 p-4 lg:hidden">
+          <div className="grid gap-3 px-2 py-3 sm:px-4 lg:hidden">
             {visibleAccounts.map((account, index) => (
               <AccountCard
                 key={account.id}
@@ -976,66 +976,75 @@ function AccountCard({
 
   return (
     <article
-      className="group animate-rise rounded-2xl border border-[#E9E0F5] bg-white p-4 text-right shadow-[0_10px_28px_rgba(70,40,120,0.07)] transition duration-300 hover:-translate-y-0.5 hover:border-[#D5BDF6]"
+      className="group min-w-0 animate-rise rounded-2xl border border-[#E9E0F5] bg-white p-3 text-right shadow-[0_10px_28px_rgba(70,40,120,0.07)] transition duration-300 hover:-translate-y-0.5 hover:border-[#D5BDF6] sm:p-4"
       style={{ animationDelay: `${index * 45}ms` }}
     >
-      <div className="mb-4 flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="truncate text-lg font-black text-[#17141F]" dir="ltr">
-            {account.email}
-          </p>
+      <div className="mb-3 min-w-0">
+        <div className="flex min-w-0 items-start justify-between gap-2">
+          <div className="min-w-0 flex-1">
+            <p className="break-all text-[15px] font-black leading-6 text-[#17141F] sm:text-lg" dir="ltr">
+              {account.email}
+            </p>
+          </div>
           <button
             type="button"
             onClick={() => void copyTextSilent(account.email)}
-            className="mt-2 inline-flex items-center gap-1 rounded-full border border-[#E0D4F8] bg-[#F8F4FF] px-3 py-1 text-xs font-black text-[#7C2CE8] transition hover:bg-[#F1E9FF]"
+            className="flex h-9 shrink-0 items-center gap-1 rounded-xl border border-[#E0D4F8] bg-[#F8F4FF] px-2 text-[11px] font-black text-[#7C2CE8] transition hover:bg-[#F1E9FF]"
           >
             <Clipboard className="h-3.5 w-3.5" />
-            نسخ البريد
+            نسخ
           </button>
         </div>
-        <span
-          className={cn(
-            "flex shrink-0 items-center gap-1 rounded-full border px-3 py-1 text-xs font-black",
-            expired ? "border-amber-200 bg-amber-50 text-amber-700" : "border-emerald-200 bg-emerald-50 text-emerald-600",
-          )}
-        >
-          {expired ? <CircleX className="h-3.5 w-3.5" /> : <CircleCheck className="h-3.5 w-3.5" />}
-          {expired ? "منتهي" : "فعال"}
-        </span>
+
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <span
+            className={cn(
+              "flex shrink-0 items-center gap-1 rounded-full border px-3 py-1 text-xs font-black",
+              expired ? "border-amber-200 bg-amber-50 text-amber-700" : "border-emerald-200 bg-emerald-50 text-emerald-600",
+            )}
+          >
+            {expired ? <CircleX className="h-3.5 w-3.5" /> : <CircleCheck className="h-3.5 w-3.5" />}
+            {expired ? "منتهي" : "فعال"}
+          </span>
+          <span className="rounded-full border border-[#DCC9FA] bg-[#F4EDFF] px-3 py-1 text-xs font-black text-[#6F22D6]">
+            {accountTypeLabel(account.account_type)}
+          </span>
+        </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-2 rounded-xl bg-[#FAF8FD] p-3 text-xs font-bold text-zinc-600">
-        <div>
-          <p className="text-zinc-400">تاريخ الانتهاء</p>
-          <p className="mt-1">{formatDate(account.expires_at)}</p>
-        </div>
-        <div>
-          <p className="text-zinc-400">كلمة المرور</p>
-          <div className="mt-1 flex items-center gap-2">
+      <div className="grid min-w-0 gap-2 sm:grid-cols-2">
+        <div className="min-w-0 rounded-2xl border border-[#E8DDF8] bg-[#FAF8FD] p-3">
+          <p className="text-xs font-black text-zinc-400">كلمة المرور</p>
+          <div className="mt-2 flex min-w-0 items-center gap-2">
+            <p className="min-w-0 flex-1 break-all text-left text-[15px] font-black leading-6 text-zinc-900" dir="ltr">
+              {account.password}
+            </p>
             <button
               type="button"
               onClick={() => void copyTextSilent(account.password)}
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[#E0D4F8] bg-white text-[#7C2CE8] transition hover:bg-[#F4EDFF]"
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[#E0D4F8] bg-white text-[#7C2CE8] transition hover:bg-[#F4EDFF]"
+              title="نسخ كلمة المرور"
             >
               <Copy className="h-4 w-4" />
             </button>
-            <p className="min-w-0 flex-1 truncate text-left text-zinc-900" dir="ltr">
-              {account.password}
-            </p>
           </div>
+        </div>
+
+        <div className="min-w-0 rounded-2xl border border-[#E8DDF8] bg-white p-3">
+          <p className="text-xs font-black text-zinc-400">تاريخ الانتهاء</p>
+          <p className="mt-2 truncate text-[15px] font-black text-zinc-900">{formatDate(account.expires_at)}</p>
+          <p className={cn("mt-1 text-xs font-black", expired ? "text-amber-700" : "text-emerald-600")}>
+            {remainingLabel(account.expires_at)}
+          </p>
         </div>
       </div>
 
-      <p className={cn("mt-3 text-xs font-black", expired ? "text-amber-700" : "text-emerald-600")}>
-        {remainingLabel(account.expires_at)}
-      </p>
-
-      <div className="mt-4 flex items-center gap-2">
+      <div className="mt-3 flex items-center gap-2">
         <button
           type="button"
           onClick={() => void onSelect(account.id)}
           title="فتح تفاصيل الحساب"
-          className="flex h-10 flex-1 items-center justify-center gap-2 rounded-xl bg-[#8B35F5] text-xs font-black text-white transition hover:bg-[#7626DD]"
+          className="flex h-11 min-w-0 flex-1 items-center justify-center gap-2 rounded-xl bg-[#8B35F5] text-xs font-black text-white transition hover:bg-[#7626DD]"
         >
           <Eye className="h-4 w-4" />
           التفاصيل
@@ -1044,7 +1053,7 @@ function AccountCard({
           type="button"
           onClick={() => onEdit(account)}
           title="تعديل الحساب"
-          className="flex h-10 w-10 items-center justify-center rounded-xl border border-[#DDCEF4] text-[#7C2CE8] transition hover:bg-[#F4EDFF]"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[#DDCEF4] text-[#7C2CE8] transition hover:bg-[#F4EDFF]"
         >
           <Edit3 className="h-4 w-4" />
         </button>
@@ -1053,7 +1062,7 @@ function AccountCard({
           onClick={() => onOpenSupplierCode(account.supplier_code_url || "")}
           disabled={!canOpenSupplierCode}
           title="فتح رابط الأكواد"
-          className="flex h-10 w-10 items-center justify-center rounded-xl border border-[#DDCEF4] text-[#7C2CE8] transition hover:bg-[#F4EDFF] disabled:cursor-not-allowed disabled:opacity-30"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[#DDCEF4] text-[#7C2CE8] transition hover:bg-[#F4EDFF] disabled:cursor-not-allowed disabled:opacity-30"
         >
           <ExternalLink className="h-4 w-4" />
         </button>
@@ -1061,7 +1070,7 @@ function AccountCard({
           type="button"
           onClick={() => void onDelete(account.id)}
           title="حذف الحساب"
-          className="flex h-10 w-10 items-center justify-center rounded-xl border border-rose-100 text-rose-500 transition hover:bg-rose-50"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-rose-100 text-rose-500 transition hover:bg-rose-50"
         >
           <Trash2 className="h-4 w-4" />
         </button>
