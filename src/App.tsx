@@ -526,11 +526,11 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
           account={selectedAccount}
           links={activeLinks}
           onBack={() => setScreen("netflix")}
-          navigate={navigate}
           setToast={setToast}
           onDelete={deleteAccount}
           onDeleteLinks={deleteCustomerLinks}
           onUpdateDates={updateAccountDates}
+          onUpdate={updateAccount}
           onLogout={logout}
         />
       </Shell>
@@ -763,15 +763,17 @@ function Dashboard({
         {!hasSupabaseConfig && <ConfigNotice />}
 
         <section className="mb-7 rounded-[2rem] border border-[#E8DCFF] bg-white p-4 shadow-[0_18px_50px_rgba(70,40,120,0.10)] md:p-5">
-          <div className="flex flex-col gap-3 md:flex-row-reverse md:items-center">
-            <button
-              type="button"
-              onClick={openAddForm}
-              className="flex h-13 shrink-0 items-center justify-center gap-2 rounded-xl bg-[#8B35F5] px-7 text-sm font-black text-white shadow-[0_12px_28px_rgba(139,53,245,0.28)] transition duration-300 hover:-translate-y-0.5 hover:bg-[#7626DD] active:translate-y-0 md:min-w-48"
-            >
-              <Plus className="h-5 w-5" />
-              إضافة حساب جديد
-            </button>
+          <div className="flex flex-col gap-3 md:flex-row md:items-center">
+            <div className="relative shrink-0 md:w-48">
+              <button
+                type="button"
+                onClick={openAddForm}
+                className="flex h-13 w-full items-center justify-center gap-2 rounded-xl bg-[#8B35F5] px-7 text-sm font-black text-white shadow-[0_12px_28px_rgba(139,53,245,0.28)] transition duration-300 hover:-translate-y-0.5 hover:bg-[#7626DD] active:translate-y-0"
+              >
+                <Plus className="h-5 w-5" />
+                إضافة حساب جديد
+              </button>
+            </div>
 
             <div className="relative flex-1">
               <Search className="pointer-events-none absolute right-4 top-1/2 h-5 w-5 -translate-y-1/2 text-[#8B35F5]" />
@@ -783,7 +785,7 @@ function Dashboard({
               />
             </div>
 
-            <div className="relative md:w-36" data-filter-popover>
+            <div className="relative shrink-0 md:w-36" data-filter-popover>
               <button
                 type="button"
                 onClick={() => setFilterOpen((current) => !current)}
@@ -800,7 +802,7 @@ function Dashboard({
               </button>
 
               {filterOpen && (
-                <div className="absolute left-0 top-[calc(100%+10px)] z-30 w-48 overflow-hidden rounded-2xl border border-[#E4D6FA] bg-white p-2 shadow-premium-lg">
+                <div className="absolute right-0 top-[calc(100%+10px)] z-30 w-48 overflow-hidden rounded-2xl border border-[#E4D6FA] bg-white p-2 shadow-premium-lg">
                   {[
                     { key: "all", label: "جميع الحسابات" },
                     { key: "private", label: "خاص" },
@@ -1096,7 +1098,7 @@ function AccountRow({
 
   return (
     <tr
-      className="animate-rise border-b border-[#F0EAF7] text-sm transition hover:bg-[#FCFAFF]"
+      className="animate-rise border-b border-[#F0EAF7] text-base transition hover:bg-[#FCFAFF]"
       style={{ animationDelay: `${index * 35}ms` }}
     >
       <td className="px-5 py-5">
@@ -1105,7 +1107,9 @@ function AccountRow({
             <UserRound className="h-4 w-4" />
           </span>
           <span className="min-w-0">
-            <span className="block max-w-56 truncate text-base font-black text-[#17141F]" dir="ltr">{account.email}</span>
+            <span className="block max-w-56 truncate text-base font-black text-[#17141F]">
+              {accountTypeLabel(account.account_type)}
+            </span>
             <span className="mt-1 block text-[11px] font-bold text-zinc-400">#{account.id.slice(0, 8)}</span>
           </span>
         </button>
@@ -1141,7 +1145,7 @@ function AccountRow({
           >
             <Copy className="h-4 w-4" />
           </button>
-          <span className="block max-w-48 truncate rounded-lg bg-[#FAF8FD] px-3 py-2 text-left text-xs font-black text-zinc-700" dir="ltr">
+          <span className="block max-w-64 truncate rounded-lg bg-[#FAF8FD] px-3 py-2 text-left text-sm font-black text-zinc-700" dir="ltr">
             {account.email}
           </span>
         </div>
@@ -1154,14 +1158,14 @@ function AccountRow({
           >
             <Copy className="h-4 w-4" />
           </button>
-          <span className="block max-w-48 truncate rounded-lg bg-[#FAF8FD] px-3 py-2 text-left text-xs font-black text-zinc-700" dir="ltr">
+          <span className="block max-w-64 truncate rounded-lg bg-[#FAF8FD] px-3 py-2 text-left text-sm font-black text-zinc-700" dir="ltr">
             {account.password}
           </span>
         </div>
       </td>
-      <td className="px-4 py-5 font-bold text-zinc-700">{formatDate(account.expires_at)}</td>
+      <td className="px-4 py-5 text-[15px] font-bold text-zinc-700">{formatDate(account.expires_at)}</td>
       <td className="px-4 py-5">
-        <span className={cn("text-xs font-black", expired ? "text-amber-700" : "text-emerald-600")}>
+        <span className={cn("text-sm font-black", expired ? "text-amber-700" : "text-emerald-600")}>
           {remainingLabel(account.expires_at)}
         </span>
       </td>
@@ -1469,37 +1473,40 @@ function AccountDetail({
   account,
   links,
   onBack,
-  navigate,
   setToast,
   onDelete,
   onDeleteLinks,
   onUpdateDates,
+  onUpdate,
   onLogout,
 }: {
   account: NetflixAccount;
   links: CustomerLink[];
   onBack: () => void;
-  navigate: (path: string) => void;
   setToast: (toast: Toast) => void;
   onDelete: (accountId: string) => Promise<void>;
   onDeleteLinks: (ids: string[]) => Promise<boolean>;
   onUpdateDates: (accountId: string, form: { created_at: string; expires_at: string }) => Promise<boolean>;
+  onUpdate: Parameters<typeof AccountForm>[0]["onUpdate"];
   onLogout: () => void;
 }) {
   const expired = isExpired(account.expires_at);
   const service = serviceOf(account);
   const generatedLimit = service === "shahid" ? (account.account_type === "private" ? 4 : 8) : account.account_type === "private" ? 5 : 10;
   const [selectedLinkIds, setSelectedLinkIds] = useState<string[]>([]);
-  const [activeTab, setActiveTab] = useState<"customers" | "create" | "twofa">("customers");
+  const [activeTab, setActiveTab] = useState<"customers" | "twofa">("customers");
   const [startDate, setStartDate] = useState(() => new Date(account.created_at).toISOString().slice(0, 10));
   const [endDate, setEndDate] = useState(() => new Date(account.expires_at).toISOString().slice(0, 10));
   const [savingDates, setSavingDates] = useState(false);
+  const [supplierCodeUrl, setSupplierCodeUrl] = useState(account.supplier_code_url || "");
+  const [savingSupplierCode, setSavingSupplierCode] = useState(false);
 
   useEffect(() => {
     setSelectedLinkIds([]);
     setActiveTab("customers");
     setStartDate(new Date(account.created_at).toISOString().slice(0, 10));
     setEndDate(new Date(account.expires_at).toISOString().slice(0, 10));
+    setSupplierCodeUrl(account.supplier_code_url || "");
   }, [account.created_at, account.expires_at, account.id]);
 
   const linksToCopy = selectedLinkIds.length ? links.filter((link) => selectedLinkIds.includes(link.id)) : links;
@@ -1507,8 +1514,9 @@ function AccountDetail({
     .map((link) => `للحصول على بيانات الحساب ادخل على الرابط التالي: ${getCustomerUrl(link)} يجب الإحتفاظ بالرابط`)
     .join("\n");
   const openSupplierCode = () => {
-    if (!account.supplier_code_url) return;
-    window.open(account.supplier_code_url, "_blank", "noopener,noreferrer");
+    const url = supplierCodeUrl.trim();
+    if (!url) return;
+    window.open(url, "_blank", "noopener,noreferrer");
   };
   const allSelected = links.length > 0 && selectedLinkIds.length === links.length;
   const selectedCount = selectedLinkIds.length;
@@ -1655,7 +1663,6 @@ function AccountDetail({
           <div className="flex flex-wrap items-center gap-2">
             {[
               { key: "customers", label: "العملاء" },
-              { key: "create", label: "+ إنشاء العملاء" },
               { key: "twofa", label: "المصادقة الثنائية 2FA" },
             ].map((tab) => (
               <button
@@ -1809,12 +1816,46 @@ function AccountDetail({
             )}
           </>
         ) : (
-          <div className="flex min-h-56 items-center justify-center px-5 py-10 text-center">
-            <div className="max-w-md rounded-3xl border border-[#E4D6FA] bg-[#FCFAFF] p-6">
-              <p className="text-sm font-black text-[#7C2CE8]">القسم قيد العرض التجريبي</p>
-              <p className="mt-2 text-sm font-bold leading-7 text-zinc-500">
-                هذا التبويب مخصص لعرض أدوات الإنشاء والمصادقة الثنائية بنفس شكل الواجهة الجديدة.
-              </p>
+          <div className="p-5">
+            <div className="grid gap-5 rounded-[1.75rem] border border-[#E4D6FA] bg-[#FCFAFF] p-5 lg:grid-cols-[1fr_auto] lg:items-end">
+              <label className="block">
+                <span className="mb-2 block text-sm font-black text-zinc-700">رابط الأكواد</span>
+                <input
+                  value={supplierCodeUrl}
+                  onChange={(event) => setSupplierCodeUrl(event.target.value)}
+                  placeholder="https://example.com"
+                  className="admin-modal-input"
+                  dir="ltr"
+                />
+              </label>
+
+              <div className="flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  onClick={openSupplierCode}
+                  disabled={!supplierCodeUrl.trim()}
+                  className="h-13 rounded-2xl border border-[#E0D4F8] bg-white px-5 text-sm font-black text-[#7C2CE8] transition hover:bg-[#F5EEFF] disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  فتح الرابط
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setSavingSupplierCode(true);
+                    const succeeded = await onUpdate(account.id, {
+                      email: account.email,
+                      password: account.password,
+                      supplier_code_url: supplierCodeUrl.trim() || undefined,
+                    });
+                    setSavingSupplierCode(false);
+                    if (succeeded) setToast({ label: "تم حفظ رابط الأكواد", at: Date.now() });
+                  }}
+                  disabled={savingSupplierCode}
+                  className="h-13 rounded-2xl bg-[#8B35F5] px-5 text-sm font-black text-white shadow-[0_14px_32px_rgba(139,53,245,0.24)] transition hover:-translate-y-0.5 hover:bg-[#7626DD] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  حفظ الرابط
+                </button>
+              </div>
             </div>
           </div>
         )}
