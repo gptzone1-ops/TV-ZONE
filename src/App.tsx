@@ -830,12 +830,6 @@ function Dashboard({
           </div>
         </section>
 
-        <section className="mb-7 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          {stats.map((stat, index) => (
-            <StatCard key={stat.label} stat={stat} index={index} />
-          ))}
-        </section>
-
         <section className="overflow-hidden rounded-[2rem] border border-[#E8DCFF] bg-white shadow-[0_18px_55px_rgba(70,40,120,0.10)]">
           <div className="flex flex-col gap-4 border-b border-[#EEE7F8] px-5 py-5 md:flex-row md:items-center md:justify-between">
             <div>
@@ -858,15 +852,14 @@ function Dashboard({
           </div>
 
           <div className="hidden overflow-x-auto lg:block">
-            <table className="w-full min-w-[1180px] border-collapse text-right">
+            <table className="w-full min-w-[1040px] border-collapse text-right">
               <thead>
                 <tr className="border-b border-[#EEE7F8] bg-[#FCFAFF] text-xs font-black text-zinc-600">
-                  <th className="px-5 py-4">الحساب</th>
-                  <th className="px-4 py-4">النوع</th>
-                  <th className="px-4 py-4">الحالة</th>
-                  <th className="px-4 py-4">البريد / كلمة المرور</th>
-                  <th className="px-4 py-4">تاريخ الانتهاء</th>
-                  <th className="px-4 py-4">المتبقي</th>
+                  <th className="w-[42%] px-5 py-4">الحساب</th>
+                  <th className="w-[14%] px-4 py-4">النوع</th>
+                  <th className="w-[12%] px-4 py-4">الحالة</th>
+                  <th className="w-[14%] px-4 py-4">تاريخ الانتهاء</th>
+                  <th className="w-[10%] px-4 py-4">المتبقي</th>
                   <th className="px-5 py-4 text-center">الإجراءات</th>
                 </tr>
               </thead>
@@ -1102,17 +1095,44 @@ function AccountRow({
       style={{ animationDelay: `${index * 35}ms` }}
     >
       <td className="px-5 py-5">
-        <button type="button" onClick={() => onSelect(account.id)} className="group flex min-w-0 items-center gap-3 text-right">
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#F2E9FF] text-[#7D2DE8]">
+        <div className="flex min-w-0 items-start gap-3 text-right">
+          <button
+            type="button"
+            onClick={() => onSelect(account.id)}
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#F2E9FF] text-[#7D2DE8] transition hover:bg-[#E8DAFF]"
+            title="فتح التفاصيل"
+          >
             <UserRound className="h-4 w-4" />
-          </span>
-          <span className="min-w-0">
-            <span className="block max-w-56 truncate text-base font-black text-[#17141F]">
-              {accountTypeLabel(account.account_type)}
-            </span>
-            <span className="mt-1 block text-[11px] font-bold text-zinc-400">#{account.id.slice(0, 8)}</span>
-          </span>
-        </button>
+          </button>
+          <div className="min-w-0 flex-1 space-y-2">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void copyTextSilent(account.email)}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[#E0D4F8] bg-[#F8F4FF] text-[#7C2CE8] transition hover:bg-[#F1E9FF]"
+                title="نسخ البريد"
+              >
+                <Copy className="h-4 w-4" />
+              </button>
+              <span className="block min-w-0 flex-1 truncate rounded-lg bg-[#FAF8FD] px-3 py-2 text-left text-[15px] font-black text-zinc-800" dir="ltr">
+                {account.email}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void copyTextSilent(account.password)}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[#E0D4F8] bg-[#F8F4FF] text-[#7C2CE8] transition hover:bg-[#F1E9FF]"
+                title="نسخ كلمة المرور"
+              >
+                <Copy className="h-4 w-4" />
+              </button>
+              <span className="block min-w-0 flex-1 truncate rounded-lg bg-[#FAF8FD] px-3 py-2 text-left text-[15px] font-black text-zinc-800" dir="ltr">
+                {account.password}
+              </span>
+            </div>
+          </div>
+        </div>
       </td>
       <td className="px-4 py-5">
         <div className="flex flex-col items-start gap-1.5">
@@ -1134,34 +1154,6 @@ function AccountRow({
           <span className={cn("h-1.5 w-1.5 rounded-full", expired ? "bg-amber-500" : "bg-emerald-500")} />
           {expired ? "منتهي" : "فعال"}
         </span>
-      </td>
-      <td className="px-4 py-5">
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => void copyTextSilent(account.email)}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[#E0D4F8] bg-[#F8F4FF] text-[#7C2CE8] transition hover:bg-[#F1E9FF]"
-            title="نسخ البريد"
-          >
-            <Copy className="h-4 w-4" />
-          </button>
-          <span className="block max-w-64 truncate rounded-lg bg-[#FAF8FD] px-3 py-2 text-left text-sm font-black text-zinc-700" dir="ltr">
-            {account.email}
-          </span>
-        </div>
-        <div className="mt-2 flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => void copyTextSilent(account.password)}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[#E0D4F8] bg-[#F8F4FF] text-[#7C2CE8] transition hover:bg-[#F1E9FF]"
-            title="نسخ كلمة المرور"
-          >
-            <Copy className="h-4 w-4" />
-          </button>
-          <span className="block max-w-64 truncate rounded-lg bg-[#FAF8FD] px-3 py-2 text-left text-sm font-black text-zinc-700" dir="ltr">
-            {account.password}
-          </span>
-        </div>
       </td>
       <td className="px-4 py-5 text-[15px] font-bold text-zinc-700">{formatDate(account.expires_at)}</td>
       <td className="px-4 py-5">
