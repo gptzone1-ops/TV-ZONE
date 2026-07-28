@@ -21,19 +21,14 @@ export function buildProfileSlots(accountType: "private" | "shared", serviceType
   const profileNames = serviceType === "shahid" ? SHAHID_PROFILE_NAMES : PROFILE_NAMES;
 
   return profileNames.flatMap((profileName) =>
-    Array.from({ length: repeats }, (_, index) => {
-      const shortId = generateShortId(6);
-      return {
-        profile_name: accountType === "private" ? profileName : `${profileName}${index + 1}`,
-        profile_label: profileName,
-        profile_code: serviceType === "shahid" ? "" : PROFILE_CODES[profileName],
-        service_type: serviceType,
-        uuid: crypto.randomUUID(),
-        short_id: shortId,
-        token: shortId,
-        access_key: shortId,
-      };
-    }),
+    Array.from({ length: repeats }, (_, index) => ({
+      profile_name: accountType === "private" ? profileName : `${profileName}${index + 1}`,
+      profile_label: profileName,
+      profile_code: serviceType === "shahid" ? "" : PROFILE_CODES[profileName],
+      service_type: serviceType,
+      uuid: crypto.randomUUID(),
+      short_id: generateShortId(6),
+    })),
   );
 }
 

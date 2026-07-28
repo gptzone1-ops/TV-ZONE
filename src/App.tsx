@@ -145,8 +145,7 @@ function getBaseUrl() {
 }
 
 function getCustomerUrl(link: CustomerLink) {
-  const shortKey = link.short_id || link.token || link.access_key;
-  return shortKey ? `${getBaseUrl()}/v/${shortKey}` : `${getBaseUrl()}/view/${link.uuid}`;
+  return link.short_id ? `${getBaseUrl()}/v/${link.short_id}` : `${getBaseUrl()}/view/${link.uuid}`;
 }
 
 function getProfilePin(link: CustomerLink) {
@@ -2072,24 +2071,16 @@ function CustomerView({
         return;
       }
 
-      let request = supabase
+      const queryColumn = lookup === "short" ? "short_id" : "uuid";
+      const { data, error } = await supabase
         .from("customer_links")
         .select(
-          "id,account_id,uuid,short_id,token,access_key,profile_name,profile_label,profile_code,service_type,created_at,accounts(id,email,use_automated_code,code_request_limit,code_requested_count,verification_code,verification_code_received_at,service_type,account_type,expires_at,created_at)",
-        );
+          "id,account_id,uuid,short_id,profile_name,profile_label,profile_code,service_type,created_at,accounts(id,email,use_automated_code,code_request_limit,code_requested_count,verification_code,verification_code_received_at,service_type,account_type,expires_at,created_at)",
+        )
+        .eq(queryColumn, identifier)
+        .single();
 
-      request =
-        lookup === "short"
-          ? request.or(`short_id.eq.${identifier},token.eq.${identifier},access_key.eq.${identifier}`)
-          : request.eq("uuid", identifier);
-
-      const { data, error } = await request.maybeSingle();
-
-      if (error) {
-        console.error("Supabase customer link load error:", error);
-      } else if (data) {
-        setLink(data as unknown as CustomerLink);
-      }
+      if (!error) setLink(data as unknown as CustomerLink);
       setLoading(false);
     }
 

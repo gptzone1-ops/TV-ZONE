@@ -21,8 +21,6 @@ create table if not exists public.customer_links (
   account_id uuid not null references public.accounts(id) on delete cascade,
   uuid uuid not null unique default gen_random_uuid(),
   short_id text unique,
-  token text unique,
-  access_key text unique,
   service_type text not null default 'netflix' check (service_type in ('netflix', 'shahid')),
   profile_name text not null,
   profile_label text not null,
@@ -32,20 +30,6 @@ create table if not exists public.customer_links (
 
 alter table public.customer_links
   add column if not exists short_id text;
-
-alter table public.customer_links
-  add column if not exists token text;
-
-alter table public.customer_links
-  add column if not exists access_key text;
-
-update public.customer_links
-  set token = short_id
-  where token is null and short_id is not null;
-
-update public.customer_links
-  set access_key = coalesce(access_key, token, short_id)
-  where access_key is null and (token is not null or short_id is not null);
 
 alter table public.accounts
   add column if not exists service_type text not null default 'netflix';
@@ -105,20 +89,10 @@ create unique index if not exists customer_links_short_id_key
   on public.customer_links(short_id)
   where short_id is not null;
 
-create unique index if not exists customer_links_token_key
-  on public.customer_links(token)
-  where token is not null;
-
-create unique index if not exists customer_links_access_key_key
-  on public.customer_links(access_key)
-  where access_key is not null;
-
 create index if not exists accounts_created_at_idx on public.accounts(created_at desc);
 create index if not exists customer_links_account_id_idx on public.customer_links(account_id);
 create index if not exists customer_links_uuid_idx on public.customer_links(uuid);
 create index if not exists customer_links_short_id_idx on public.customer_links(short_id);
-create index if not exists customer_links_token_idx on public.customer_links(token);
-create index if not exists customer_links_access_key_idx on public.customer_links(access_key);
 
 alter table public.accounts enable row level security;
 alter table public.customer_links enable row level security;
