@@ -1924,7 +1924,13 @@ function CustomerView({
   const [agreeDisclaimer, setAgreeDisclaimer] = useState(false);
   const [codeRequestState, setCodeRequestState] = useState<"idle" | "loading" | "ready" | "failed">("idle");
   const [codeRequestSeconds, setCodeRequestSeconds] = useState(0);
-  const [deviceView, setDeviceView] = useState<DeviceView>("mobile");
+  const deviceStorageKey = `zone-device-choice:${lookup}:${identifier}`;
+  const [deviceView, setDeviceView] = useState<DeviceView | null>(() => {
+    const saved = localStorage.getItem(deviceStorageKey);
+    return saved === "mobile" || saved === "screen" ? saved : null;
+  });
+  const [pendingDeviceView, setPendingDeviceView] = useState<DeviceView | null>(null);
+  const [agreeDeviceChoice, setAgreeDeviceChoice] = useState(false);
   const pollTimerRef = useRef<number | null>(null);
   const timeoutRef = useRef<number | null>(null);
   const countdownRef = useRef<number | null>(null);
@@ -1960,13 +1966,20 @@ function CustomerView({
   }, [identifier, lookup]);
 
   useEffect(() => {
-    const shouldLock = showDisclaimer || showReminder;
+    const saved = localStorage.getItem(deviceStorageKey);
+    setDeviceView(saved === "mobile" || saved === "screen" ? saved : null);
+    setPendingDeviceView(null);
+    setAgreeDeviceChoice(false);
+  }, [deviceStorageKey]);
+
+  useEffect(() => {
+    const shouldLock = showDisclaimer || showReminder || Boolean(pendingDeviceView);
     const previous = document.body.style.overflow;
     if (shouldLock) document.body.style.overflow = "hidden";
     return () => {
       document.body.style.overflow = previous;
     };
-  }, [showDisclaimer, showReminder]);
+  }, [showDisclaimer, showReminder, pendingDeviceView]);
 
   useEffect(() => {
     return () => {
@@ -1982,6 +1995,27 @@ function CustomerView({
   const supportWhatsAppUrl = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(
     `مرحباً اريد الحصول على الكود المخصص للحساب: ${account?.email || ""}`,
   )}`;
+  const deviceLabel = (device: DeviceView) => (device === "mobile" ? "جوال / آيباد / بي سي / لابتوب" : "شاشة / سوني");
+  const deviceChoiceLocked = Boolean(deviceView);
+
+  function requestDeviceChoice(device: DeviceView) {
+    if (deviceChoiceLocked) return;
+    setPendingDeviceView(device);
+    setAgreeDeviceChoice(false);
+  }
+
+  function confirmDeviceChoice() {
+    if (!pendingDeviceView) return;
+    localStorage.setItem(deviceStorageKey, pendingDeviceView);
+    setDeviceView(pendingDeviceView);
+    setPendingDeviceView(null);
+    setAgreeDeviceChoice(false);
+  }
+
+  function cancelDeviceChoice() {
+    setPendingDeviceView(null);
+    setAgreeDeviceChoice(false);
+  }
 
   async function pollVerificationCode(accountId: string, startedAt: number) {
     if (!supabase) {
@@ -2154,9 +2188,10 @@ function CustomerView({
                     <div className="grid gap-2 sm:grid-cols-2">
                       <button
                         type="button"
-                        onClick={() => setDeviceView("mobile")}
+                        onClick={() => requestDeviceChoice("mobile")}
+                        disabled={deviceChoiceLocked}
                         className={cn(
-                          "flex min-h-12 items-center justify-center gap-2 rounded-2xl px-3 text-sm font-black transition",
+                          "flex min-h-12 items-center justify-center gap-2 rounded-2xl px-3 text-sm font-black transition disabled:cursor-not-allowed",
                           deviceView === "mobile"
                             ? "bg-[#8B35F5] text-white shadow-[0_12px_26px_rgba(139,53,245,0.22)]"
                             : "bg-white text-[#7C2CE8] hover:bg-[#F0E7FF]",
@@ -2167,9 +2202,10 @@ function CustomerView({
                       </button>
                       <button
                         type="button"
-                        onClick={() => setDeviceView("screen")}
+                        onClick={() => requestDeviceChoice("screen")}
+                        disabled={deviceChoiceLocked}
                         className={cn(
-                          "flex min-h-12 items-center justify-center gap-2 rounded-2xl px-3 text-sm font-black transition",
+                          "flex min-h-12 items-center justify-center gap-2 rounded-2xl px-3 text-sm font-black transition disabled:cursor-not-allowed",
                           deviceView === "screen"
                             ? "bg-[#8B35F5] text-white shadow-[0_12px_26px_rgba(139,53,245,0.22)]"
                             : "bg-white text-[#7C2CE8] hover:bg-[#F0E7FF]",
@@ -2179,9 +2215,18 @@ function CustomerView({
                         شاشة / سوني
                       </button>
                     </div>
+                    {deviceChoiceLocked ? (
+                      <p className="mt-3 rounded-2xl bg-white/80 px-4 py-3 text-xs font-black text-[#7C2CE8]">
+                        تم تأكيد نوع الجهاز ولا يمكن تغييره.
+                      </p>
+                    ) : (
+                      <p className="mt-3 rounded-2xl bg-white/80 px-4 py-3 text-xs font-black text-zinc-600">
+                        يرجى تحديد نوع الجهاز الذي تستخدمه لتسجيل الدخول أولاً
+                      </p>
+                    )}
                   </div>
 
-                  {deviceView === "screen" ? (
+                  {!deviceView ? null : deviceView === "screen" ? (
                     <div className="rounded-[1.75rem] border border-[#E0D4F8] bg-gradient-to-l from-white to-[#F7F2FF] p-4 shadow-card">
                       <div className="flex items-center gap-4">
                         <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-[#F0E7FF] text-[#8B35F5]">
@@ -2386,15 +2431,27 @@ function CustomerView({
             />
           )}
 
-          <a
-            href={supportWhatsAppUrl}
-            target="_blank"
-            rel="noreferrer"
-            className={cn("fixed bottom-5 left-5 z-40 flex h-[60px] w-[60px] animate-whatsapp-pulse items-center justify-center rounded-full bg-gradient-to-br text-white backdrop-blur transition duration-300 hover:-translate-y-1 hover:shadow-premium-lg", theme.gradient, theme.glow)}
-            aria-label="WhatsApp"
-          >
-            <WhatsAppLogo className="h-7 w-7" />
-          </a>
+          {pendingDeviceView && (
+            <DeviceChoiceModal
+              deviceLabel={deviceLabel(pendingDeviceView)}
+              checked={agreeDeviceChoice}
+              onToggle={setAgreeDeviceChoice}
+              onCancel={cancelDeviceChoice}
+              onContinue={confirmDeviceChoice}
+            />
+          )}
+
+          {deviceView === "screen" && (
+            <a
+              href={supportWhatsAppUrl}
+              target="_blank"
+              rel="noreferrer"
+              className={cn("fixed bottom-5 left-5 z-40 flex h-[60px] w-[60px] animate-whatsapp-pulse items-center justify-center rounded-full bg-gradient-to-br text-white backdrop-blur transition duration-300 hover:-translate-y-1 hover:shadow-premium-lg", theme.gradient, theme.glow)}
+              aria-label="WhatsApp"
+            >
+              <WhatsAppLogo className="h-7 w-7" />
+            </a>
+          )}
         </div>
       </div>
     </Shell>
@@ -2442,6 +2499,66 @@ function WhatsAppLogo({ className }: { className?: string }) {
     <svg className={className} viewBox="0 0 32 32" fill="currentColor" aria-hidden="true">
       <path d="M16.02 3.2C9.02 3.2 3.32 8.87 3.32 15.84c0 2.23.59 4.4 1.7 6.31L3.2 28.8l6.83-1.79a12.7 12.7 0 0 0 5.99 1.52h.01c7 0 12.69-5.67 12.69-12.64S23.03 3.2 16.02 3.2Zm0 23.2h-.01c-1.9 0-3.77-.51-5.39-1.48l-.39-.23-4.05 1.06 1.08-3.94-.26-.4a10.47 10.47 0 0 1-1.61-5.57c0-5.82 4.77-10.56 10.63-10.56 2.84 0 5.51 1.1 7.51 3.09a10.48 10.48 0 0 1 3.12 7.47c0 5.82-4.77 10.56-10.63 10.56Zm5.83-7.9c-.32-.16-1.9-.93-2.19-1.04-.29-.1-.5-.16-.71.16-.21.31-.82 1.03-1 1.24-.18.2-.37.23-.69.08-.32-.16-1.35-.49-2.57-1.57a9.6 9.6 0 0 1-1.78-2.2c-.19-.31-.02-.48.14-.64.15-.14.32-.37.48-.55.16-.18.21-.31.32-.52.1-.2.05-.39-.03-.55-.08-.16-.71-1.7-.97-2.33-.26-.61-.52-.53-.71-.54h-.61c-.21 0-.55.08-.84.39-.29.31-1.11 1.08-1.11 2.64s1.14 3.07 1.3 3.28c.16.2 2.25 3.41 5.45 4.78.76.33 1.35.52 1.81.67.76.24 1.46.2 2.01.12.61-.09 1.9-.77 2.17-1.52.27-.75.27-1.39.19-1.52-.08-.14-.29-.22-.61-.38Z" />
     </svg>
+  );
+}
+
+function DeviceChoiceModal({
+  deviceLabel,
+  checked,
+  onToggle,
+  onCancel,
+  onContinue,
+}: {
+  deviceLabel: string;
+  checked: boolean;
+  onToggle: (checked: boolean) => void;
+  onCancel: () => void;
+  onContinue: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-[85] flex items-center justify-center bg-black/65 px-4 py-6 backdrop-blur-sm">
+      <div className="w-full max-w-xl animate-rise rounded-[2rem] border border-white bg-white p-6 shadow-premium-lg md:p-8">
+        <div className="mb-5 text-center">
+          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#F0E7FF] text-[#8B35F5]">
+            <ShieldCheck className="h-7 w-7" />
+          </div>
+          <h2 className="text-3xl font-black md:text-4xl">تأكيد نوع الجهاز</h2>
+          <p className="mt-4 text-sm font-bold leading-7 text-zinc-700">
+            هل أنت متأكد من اختيار جهاز ({deviceLabel})؟ تنبيه: لا يمكنك تغيير نوع الجهاز بعد التأكيد.
+          </p>
+        </div>
+
+        <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-[#E4D6FA] bg-[#F8F4FF] px-4 py-4 text-right">
+          <input
+            type="checkbox"
+            checked={checked}
+            onChange={(event) => onToggle(event.target.checked)}
+            className="mt-1 h-5 w-5 rounded border-[#CDBAF2] text-[#8B35F5] focus:ring-[#8B35F5]"
+          />
+          <span className="text-sm font-black leading-7 text-zinc-800 md:text-base">
+            أقر بأنني اخترت الجهاز الصحيح ولن أتمكن من تغيير خياري لاحقاً.
+          </span>
+        </label>
+
+        <div className="mt-6 grid gap-3 sm:grid-cols-2">
+          <button
+            type="button"
+            onClick={onContinue}
+            disabled={!checked}
+            className="h-13 rounded-2xl bg-[#8B35F5] px-5 text-sm font-black text-white shadow-[0_14px_32px_rgba(139,53,245,0.24)] transition hover:bg-[#7626DD] disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            متابعة
+          </button>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="h-13 rounded-2xl border border-[#E0D4F8] bg-white px-5 text-sm font-black text-[#7C2CE8] transition hover:bg-[#F5EEFF]"
+          >
+            تغيير الاختيار / إلغاء
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
