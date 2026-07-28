@@ -32,7 +32,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { PROFILE_CODES, accountTypeLabel, buildProfileSlots } from "./lib/profiles";
 import { hasSupabaseConfig, supabase } from "./lib/supabase";
 import type { AccountType, CustomerLink, NetflixAccount, ServiceType } from "./types";
@@ -1921,6 +1921,11 @@ function CustomerView({
   const [showDisclaimer, setShowDisclaimer] = useState(() => localStorage.getItem(disclaimerStorageKey) !== "true");
   const [showReminder, setShowReminder] = useState(false);
   const [agreeDisclaimer, setAgreeDisclaimer] = useState(false);
+  const [codeRequestState, setCodeRequestState] = useState<"idle" | "loading" | "ready" | "failed">("idle");
+  const [codeRequestSeconds, setCodeRequestSeconds] = useState(0);
+  const pollTimerRef = useRef<number | null>(null);
+  const timeoutRef = useRef<number | null>(null);
+  const countdownRef = useRef<number | null>(null);
 
   useEffect(() => {
     async function loadCustomer() {
@@ -1939,7 +1944,7 @@ function CustomerView({
       const { data, error } = await supabase
         .from("customer_links")
         .select(
-          "id,account_id,uuid,short_id,profile_name,profile_label,profile_code,service_type,created_at,accounts(id,email,service_type,account_type,expires_at,created_at)",
+          "id,account_id,uuid,short_id,profile_name,profile_label,profile_code,service_type,created_at,accounts(id,email,verification_code,verification_code_received_at,service_type,account_type,expires_at,created_at)",
         )
         .eq(queryColumn, identifier)
         .single();
@@ -1960,12 +1965,98 @@ function CustomerView({
     };
   }, [showDisclaimer, showReminder]);
 
+  useEffect(() => {
+    return () => {
+      if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
+      if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
+      if (countdownRef.current) window.clearInterval(countdownRef.current);
+    };
+  }, []);
+
   const account = link?.accounts;
   const service = serviceOf(account);
   const theme = serviceThemes[service];
-  const customerWhatsAppUrl = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(
+  const supportWhatsAppUrl = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(
     `مرحباً اريد الحصول على الكود المخصص للحساب: ${account?.email || ""}`,
   )}`;
+
+  async function pollVerificationCode(accountId: string, startedAt: number) {
+    if (!supabase) {
+      if (link?.accounts?.verification_code) {
+        setCodeRequestState("ready");
+      }
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("accounts")
+      .select("verification_code,verification_code_received_at")
+      .eq("id", accountId)
+      .maybeSingle();
+
+    if (!error && data?.verification_code) {
+      setLink((current) =>
+        current && current.accounts
+          ? {
+              ...current,
+              accounts: {
+                ...current.accounts,
+                verification_code: data.verification_code,
+                verification_code_received_at: data.verification_code_received_at,
+              },
+            }
+          : current,
+      );
+      setCodeRequestState("ready");
+      if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
+      if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
+      if (countdownRef.current) window.clearInterval(countdownRef.current);
+      return;
+    }
+
+    if (Date.now() - startedAt >= 10_000) {
+      setCodeRequestState("failed");
+      if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
+      if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
+      if (countdownRef.current) window.clearInterval(countdownRef.current);
+    }
+  }
+
+  function startCodeRequest() {
+    const accountId = account?.id;
+    if (!accountId) return;
+
+    setCodeRequestState("loading");
+    setCodeRequestSeconds(10);
+
+    if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
+    if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
+    if (countdownRef.current) window.clearInterval(countdownRef.current);
+
+    const startedAt = Date.now();
+
+    countdownRef.current = window.setInterval(() => {
+      setCodeRequestSeconds((current) => {
+        if (current <= 1) {
+          if (countdownRef.current) window.clearInterval(countdownRef.current);
+          return 0;
+        }
+        return current - 1;
+      });
+    }, 1000);
+
+    void pollVerificationCode(accountId, startedAt);
+    pollTimerRef.current = window.setInterval(() => {
+      void pollVerificationCode(accountId, startedAt);
+    }, 2000);
+
+    timeoutRef.current = window.setTimeout(() => {
+      if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
+      if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
+      if (countdownRef.current) window.clearInterval(countdownRef.current);
+      setCodeRequestState((current) => (current === "ready" ? current : "failed"));
+    }, 10_000);
+  }
 
   return (
     <Shell toast={toast}>
@@ -2042,21 +2133,101 @@ function CustomerView({
 
                 <div className="space-y-5">
                   <LoginCopyCard label="البريد الإلكتروني" value={account.email} icon={Mail} setToast={setToast} theme={theme} />
-                  <a
-                    href={customerWhatsAppUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="flex items-center gap-4 rounded-[1.75rem] border border-green-100 bg-gradient-to-l from-white to-[#F8FFF9] p-4 text-right shadow-card transition duration-300 hover:-translate-y-1 hover:border-[#25D366] hover:shadow-premium"
-                  >
-                    <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-[#E9F9EF] text-[#25D366]">
-                      <WhatsAppLogo className="h-7 w-7" />
+                  {account.verification_code ? (
+                    <div className="rounded-[1.75rem] border border-[#E0D4F8] bg-[#FCFAFF] p-4 shadow-card">
+                      <div className="mb-3 flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-black text-zinc-700">كود التحقق</p>
+                          <p className="text-xs font-bold text-zinc-500">تم العثور عليه من Supabase</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => copyText(account.verification_code || "", setToast)}
+                          className="flex h-10 items-center gap-2 rounded-xl border border-[#E0D4F8] bg-white px-4 text-sm font-black text-[#7C2CE8] transition hover:bg-[#F5EEFF]"
+                        >
+                          <Clipboard className="h-4 w-4" />
+                          نسخ الكود
+                        </button>
+                      </div>
+                      <div className="rounded-2xl border border-[#E0D4F8] bg-white px-4 py-4 text-center">
+                        <p className="font-mono text-4xl font-black tracking-[0.3em] text-[#8B35F5]" dir="ltr">
+                          {account.verification_code}
+                        </p>
+                        {account.verification_code_received_at && (
+                          <p className="mt-2 text-xs font-bold text-zinc-500">
+                            {formatDateTime(account.verification_code_received_at)}
+                          </p>
+                        )}
+                      </div>
                     </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-lg font-black">للحصول على كود التحقق، تواصل معنا عبر الواتساب</p>
-                      <p className="mt-1 text-xs font-bold leading-6 text-zinc-500">سيفتح المحادثة برسالة جاهزة للدعم الفني.</p>
+                  ) : codeRequestState === "loading" ? (
+                    <div className="rounded-[1.75rem] border border-[#E0D4F8] bg-[#FCFAFF] p-4 shadow-card">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-black text-zinc-700">جاري البحث عن الكود...</p>
+                          <p className="mt-1 text-xs font-bold text-zinc-500">سيتم فحص الحساب كل ثانيتين لمدة 10 ثوانٍ</p>
+                        </div>
+                        <div className="rounded-full bg-[#F5EEFF] px-4 py-2 text-sm font-black text-[#7C2CE8]">
+                          {codeRequestSeconds}s
+                        </div>
+                      </div>
+                      <div className="mt-4 h-2 overflow-hidden rounded-full bg-[#EDE3FF]">
+                        <div
+                          className="h-full rounded-full bg-[#8B35F5] transition-all"
+                          style={{ width: `${Math.max(10 - codeRequestSeconds, 0) * 10}%` }}
+                        />
+                      </div>
                     </div>
-                    <ArrowRight className="h-5 w-5 shrink-0 text-[#25D366]" />
-                  </a>
+                  ) : (
+                    <div className="rounded-[1.75rem] border border-[#E0D4F8] bg-gradient-to-l from-white to-[#F7F2FF] p-4 shadow-card">
+                      <div className="flex items-center gap-4">
+                        <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-[#F0E7FF] text-[#8B35F5]">
+                          <LockKeyhole className="h-7 w-7" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-lg font-black">طلب كود التحقق</p>
+                          <p className="mt-1 text-xs font-bold leading-6 text-zinc-500">
+                            اضغط للبحث تلقائياً داخل قاعدة البيانات لمدة 10 ثوانٍ.
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={startCodeRequest}
+                        className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#8B35F5] text-sm font-black text-white shadow-[0_14px_32px_rgba(139,53,245,0.24)] transition hover:bg-[#7626DD]"
+                      >
+                        <KeyRound className="h-4 w-4" />
+                        طلب كود التحقق
+                      </button>
+                    </div>
+                  )}
+
+                  {codeRequestState === "failed" && (
+                    <div className="rounded-[1.75rem] border border-[#E0D4F8] bg-white p-4 shadow-card">
+                      <p className="text-sm font-black text-zinc-700">لم يصل الكود بعد.</p>
+                      <p className="mt-1 text-xs font-bold text-zinc-500">
+                        جرب مرة أخرى أو تواصل مع الدعم عبر الواتساب كخيار احتياطي.
+                      </p>
+                      <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+                        <button
+                          type="button"
+                          onClick={startCodeRequest}
+                          className="h-12 flex-1 rounded-2xl bg-[#8B35F5] px-5 text-sm font-black text-white shadow-[0_14px_32px_rgba(139,53,245,0.24)] transition hover:bg-[#7626DD]"
+                        >
+                          إعادة المحاولة
+                        </button>
+                        <a
+                          href={supportWhatsAppUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="flex h-12 flex-1 items-center justify-center gap-2 rounded-2xl border border-[#E0D4F8] bg-[#F8F4FF] px-5 text-sm font-black text-[#7C2CE8] transition hover:bg-[#F0E7FF]"
+                        >
+                          <WhatsAppLogo className="h-5 w-5" />
+                          تواصل مع الدعم عبر الواتساب
+                        </a>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </section>
 
@@ -2137,7 +2308,7 @@ function CustomerView({
           )}
 
           <a
-            href={customerWhatsAppUrl}
+            href={supportWhatsAppUrl}
             target="_blank"
             rel="noreferrer"
             className={cn("fixed bottom-5 left-5 z-40 flex h-[60px] w-[60px] animate-whatsapp-pulse items-center justify-center rounded-full bg-gradient-to-br text-white backdrop-blur transition duration-300 hover:-translate-y-1 hover:shadow-premium-lg", theme.gradient, theme.glow)}
