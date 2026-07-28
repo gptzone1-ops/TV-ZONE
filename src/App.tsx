@@ -313,13 +313,23 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     }
 
     setLoading(true);
+    const accountPayload = {
+      email: form.email.trim(),
+      password: form.password,
+      account_type: form.account_type,
+      supplier_code_url: form.supplier_code_url?.trim() || null,
+      service_type: selectedService,
+      expires_at,
+    };
+
     const { data: account, error: accountError } = await supabase
       .from("accounts")
-      .insert({ ...form, expires_at, service_type: selectedService, use_automated_code: true, code_request_limit: 1, code_requested_count: 0 })
+      .insert(accountPayload)
       .select()
       .single();
 
     if (accountError || !account) {
+      console.error("Supabase account insert error:", accountError);
       setLoading(false);
       setToast({ label: "تعذر إنشاء الحساب", at: Date.now() });
       return false;
@@ -332,6 +342,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       })),
     );
 
+    if (linksError) console.error("Supabase customer link insert error:", linksError);
     setToast({
       label: linksError ? "تم إنشاء الحساب وتعذر إنشاء الروابط" : "تم إنشاء الحساب والروابط",
       at: Date.now(),

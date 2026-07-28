@@ -65,31 +65,33 @@ export default async function handler(req, res) {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  const { data: account, error: findError } = await supabase
-    .from("accounts")
-    .select("id,email")
+  const { data: customerLink, error: findError } = await supabase
+    .from("customer_links")
+    .select("id,account_id,email")
     .ilike("email", email)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
 
   if (findError) {
+    console.error("Supabase customer_links lookup error:", findError);
     return send(res, 500, { success: false, error: "account_lookup_failed" });
   }
 
-  if (!account) {
+  if (!customerLink) {
     return send(res, 404, { success: false, error: "account_not_found" });
   }
 
   const { error: updateError } = await supabase
-    .from("accounts")
+    .from("customer_links")
     .update({
       verification_code: code,
       verification_code_received_at: createdAt.toISOString(),
     })
-    .eq("id", account.id);
+    .eq("id", customerLink.id);
 
   if (updateError) {
+    console.error("Supabase customer_links update error:", updateError);
     return send(res, 500, { success: false, error: "code_save_failed" });
   }
 
