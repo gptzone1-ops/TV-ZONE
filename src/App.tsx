@@ -1926,6 +1926,7 @@ function CustomerView({
   const pollTimerRef = useRef<number | null>(null);
   const timeoutRef = useRef<number | null>(null);
   const countdownRef = useRef<number | null>(null);
+  const requestBaselineRef = useRef<{ code: string | null; receivedAt: string | null }>({ code: null, receivedAt: null });
 
   useEffect(() => {
     async function loadCustomer() {
@@ -1994,15 +1995,22 @@ function CustomerView({
       .eq("id", accountId)
       .maybeSingle();
 
-    if (!error && data?.verification_code) {
+    const currentCode = data?.verification_code || null;
+    const currentReceivedAt = data?.verification_code_received_at || null;
+    const baseline = requestBaselineRef.current;
+    const hasFreshCode =
+      Boolean(currentCode) &&
+      (baseline.code !== currentCode || baseline.receivedAt !== currentReceivedAt);
+
+    if (!error && hasFreshCode) {
       setLink((current) =>
         current && current.accounts
           ? {
               ...current,
               accounts: {
                 ...current.accounts,
-                verification_code: data.verification_code,
-                verification_code_received_at: data.verification_code_received_at,
+                verification_code: currentCode,
+                verification_code_received_at: currentReceivedAt,
               },
             }
           : current,
@@ -2028,6 +2036,10 @@ function CustomerView({
 
     setCodeRequestState("loading");
     setCodeRequestSeconds(10);
+    requestBaselineRef.current = {
+      code: account?.verification_code || null,
+      receivedAt: account?.verification_code_received_at || null,
+    };
 
     if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
     if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
@@ -2133,7 +2145,25 @@ function CustomerView({
 
                 <div className="space-y-5">
                   <LoginCopyCard label="البريد الإلكتروني" value={account.email} icon={Mail} setToast={setToast} theme={theme} />
-                  {account.verification_code ? (
+                  {codeRequestState === "loading" ? (
+                    <div className="rounded-[1.75rem] border border-[#E0D4F8] bg-[#FCFAFF] p-4 shadow-card">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-black text-zinc-700">جاري البحث عن كود حديث...</p>
+                          <p className="mt-1 text-xs font-bold text-zinc-500">سيتم فحص الحساب كل ثانيتين لمدة 10 ثوانٍ</p>
+                        </div>
+                        <div className="rounded-full bg-[#F5EEFF] px-4 py-2 text-sm font-black text-[#7C2CE8]">
+                          {codeRequestSeconds}s
+                        </div>
+                      </div>
+                      <div className="mt-4 h-2 overflow-hidden rounded-full bg-[#EDE3FF]">
+                        <div
+                          className="h-full rounded-full bg-[#8B35F5] transition-all"
+                          style={{ width: `${Math.max(10 - codeRequestSeconds, 0) * 10}%` }}
+                        />
+                      </div>
+                    </div>
+                  ) : account.verification_code ? (
                     <div className="rounded-[1.75rem] border border-[#E0D4F8] bg-[#FCFAFF] p-4 shadow-card">
                       <div className="mb-3 flex items-center justify-between gap-3">
                         <div>
@@ -2159,24 +2189,14 @@ function CustomerView({
                           </p>
                         )}
                       </div>
-                    </div>
-                  ) : codeRequestState === "loading" ? (
-                    <div className="rounded-[1.75rem] border border-[#E0D4F8] bg-[#FCFAFF] p-4 shadow-card">
-                      <div className="flex items-center justify-between gap-3">
-                        <div>
-                          <p className="text-sm font-black text-zinc-700">جاري البحث عن الكود...</p>
-                          <p className="mt-1 text-xs font-bold text-zinc-500">سيتم فحص الحساب كل ثانيتين لمدة 10 ثوانٍ</p>
-                        </div>
-                        <div className="rounded-full bg-[#F5EEFF] px-4 py-2 text-sm font-black text-[#7C2CE8]">
-                          {codeRequestSeconds}s
-                        </div>
-                      </div>
-                      <div className="mt-4 h-2 overflow-hidden rounded-full bg-[#EDE3FF]">
-                        <div
-                          className="h-full rounded-full bg-[#8B35F5] transition-all"
-                          style={{ width: `${Math.max(10 - codeRequestSeconds, 0) * 10}%` }}
-                        />
-                      </div>
+                      <button
+                        type="button"
+                        onClick={startCodeRequest}
+                        className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#8B35F5] text-sm font-black text-white shadow-[0_14px_32px_rgba(139,53,245,0.24)] transition hover:bg-[#7626DD]"
+                      >
+                        <Sparkles className="h-4 w-4" />
+                        طلب كود جديد
+                      </button>
                     </div>
                   ) : (
                     <div className="rounded-[1.75rem] border border-[#E0D4F8] bg-gradient-to-l from-white to-[#F7F2FF] p-4 shadow-card">
