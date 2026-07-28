@@ -20,6 +20,7 @@ import {
   MessageCircle,
   MonitorPlay,
   Plus,
+  RefreshCw,
   Search,
   Settings,
   ShieldCheck,
@@ -1510,6 +1511,11 @@ function AccountDetail({
   const [savingDates, setSavingDates] = useState(false);
   const [supplierCodeUrl, setSupplierCodeUrl] = useState(account.supplier_code_url || "");
   const [savingSupplierCode, setSavingSupplierCode] = useState(false);
+  const [adminVerificationCode, setAdminVerificationCode] = useState(account.verification_code || "");
+  const [adminVerificationCodeReceivedAt, setAdminVerificationCodeReceivedAt] = useState(
+    account.verification_code_received_at || "",
+  );
+  const [loadingAdminVerificationCode, setLoadingAdminVerificationCode] = useState(false);
 
   useEffect(() => {
     setSelectedLinkIds([]);
@@ -1517,6 +1523,8 @@ function AccountDetail({
     setStartDate(new Date(account.created_at).toISOString().slice(0, 10));
     setEndDate(new Date(account.expires_at).toISOString().slice(0, 10));
     setSupplierCodeUrl(account.supplier_code_url || "");
+    setAdminVerificationCode(account.verification_code || "");
+    setAdminVerificationCodeReceivedAt(account.verification_code_received_at || "");
   }, [account.created_at, account.expires_at, account.id]);
 
   const linksToCopy = selectedLinkIds.length ? links.filter((link) => selectedLinkIds.includes(link.id)) : links;
@@ -1530,6 +1538,63 @@ function AccountDetail({
   };
   const allSelected = links.length > 0 && selectedLinkIds.length === links.length;
   const selectedCount = selectedLinkIds.length;
+
+  async function fetchAdminVerificationCode() {
+    if (!supabase) {
+      setToast({
+        label: adminVerificationCode ? "تم عرض آخر كود محفوظ محلياً" : "لا يوجد كود محفوظ لهذا الحساب",
+        at: Date.now(),
+      });
+      return;
+    }
+
+    setLoadingAdminVerificationCode(true);
+    const selection = "verification_code,verification_code_received_at";
+    const attempts = [
+      supabase
+        .from("customer_links")
+        .select(selection)
+        .eq("account_id", account.id)
+        .not("verification_code", "is", null)
+        .order("verification_code_received_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      supabase
+        .from("customer_links")
+        .select(selection)
+        .eq("id", account.id)
+        .not("verification_code", "is", null)
+        .order("verification_code_received_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      supabase
+        .from("customer_links")
+        .select(selection)
+        .ilike("email", account.email)
+        .not("verification_code", "is", null)
+        .order("verification_code_received_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ];
+
+    for (const attempt of attempts) {
+      const { data, error } = await attempt;
+      if (error) {
+        console.error("Supabase admin verification code read error:", error);
+        continue;
+      }
+      if (data?.verification_code) {
+        setAdminVerificationCode(data.verification_code);
+        setAdminVerificationCodeReceivedAt(data.verification_code_received_at || "");
+        setLoadingAdminVerificationCode(false);
+        setToast({ label: "تم جلب كود التحقق للمشرف", at: Date.now() });
+        return;
+      }
+    }
+
+    setLoadingAdminVerificationCode(false);
+    setToast({ label: "لا يوجد كود تحقق محفوظ لهذا الحساب", at: Date.now() });
+  }
 
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-5 md:px-8 md:py-8">
@@ -1836,15 +1901,24 @@ function AccountDetail({
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-3">
-                  {account.verification_code_received_at && (
+                  {adminVerificationCodeReceivedAt && (
                     <span className="rounded-full bg-[#F8F4FF] px-4 py-2 text-xs font-black text-[#7C2CE8]">
-                      {formatDateTime(account.verification_code_received_at)}
+                      {formatDateTime(adminVerificationCodeReceivedAt)}
                     </span>
                   )}
                   <button
                     type="button"
-                    onClick={() => account.verification_code && copyText(account.verification_code, setToast)}
-                    disabled={!account.verification_code}
+                    onClick={() => void fetchAdminVerificationCode()}
+                    disabled={loadingAdminVerificationCode}
+                    className="flex h-11 items-center gap-2 rounded-2xl bg-[#8B35F5] px-5 text-sm font-black text-white shadow-[0_12px_28px_rgba(139,53,245,0.22)] transition hover:-translate-y-0.5 hover:bg-[#7626DD] disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <RefreshCw className={cn("h-4 w-4", loadingAdminVerificationCode && "animate-spin")} />
+                    {loadingAdminVerificationCode ? "جاري جلب الكود..." : "جلب كود التحقق (خاص بالمشرف)"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => adminVerificationCode && copyText(adminVerificationCode, setToast)}
+                    disabled={!adminVerificationCode}
                     className="h-11 rounded-2xl border border-[#E0D4F8] bg-[#F5EEFF] px-5 text-sm font-black text-[#7C2CE8] transition hover:bg-[#8B35F5] hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     نسخ الكود
@@ -1852,9 +1926,9 @@ function AccountDetail({
                 </div>
               </div>
               <div className="mt-4 rounded-2xl border border-[#E0D4F8] bg-[#FCFAFF] px-5 py-5 text-center">
-                {account.verification_code ? (
+                {adminVerificationCode ? (
                   <p className="font-mono text-5xl font-black tracking-[0.35em] text-[#8B35F5]" dir="ltr">
-                    {account.verification_code}
+                    {adminVerificationCode}
                   </p>
                 ) : (
                   <p className="text-sm font-black text-zinc-500">لم يصل كود تحقق لهذا الحساب حتى الآن</p>
