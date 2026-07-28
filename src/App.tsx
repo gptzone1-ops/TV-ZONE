@@ -131,6 +131,14 @@ function formatDate(date: string) {
   return new Intl.DateTimeFormat("ar-SA", { dateStyle: "medium" }).format(new Date(date));
 }
 
+function formatDateTime(date?: string | null) {
+  if (!date) return "";
+  return new Intl.DateTimeFormat("ar-SA", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(date));
+}
+
 function getBaseUrl() {
   return window.location.origin;
 }
@@ -1816,6 +1824,41 @@ function AccountDetail({
           </>
         ) : (
           <div className="p-5">
+            <div className="mb-5 rounded-[1.75rem] border border-[#E4D6FA] bg-white p-5 shadow-[0_10px_28px_rgba(70,40,120,0.06)]">
+              <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <p className="text-sm font-black text-zinc-700">كود التحقق المستلم</p>
+                  <p className="mt-1 text-xs font-bold text-zinc-500">
+                    يظهر هنا آخر كود وصل من Cloudflare Worker لهذا الحساب.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-3">
+                  {account.verification_code_received_at && (
+                    <span className="rounded-full bg-[#F8F4FF] px-4 py-2 text-xs font-black text-[#7C2CE8]">
+                      {formatDateTime(account.verification_code_received_at)}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => account.verification_code && copyText(account.verification_code, setToast)}
+                    disabled={!account.verification_code}
+                    className="h-11 rounded-2xl border border-[#E0D4F8] bg-[#F5EEFF] px-5 text-sm font-black text-[#7C2CE8] transition hover:bg-[#8B35F5] hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    نسخ الكود
+                  </button>
+                </div>
+              </div>
+              <div className="mt-4 rounded-2xl border border-[#E0D4F8] bg-[#FCFAFF] px-5 py-5 text-center">
+                {account.verification_code ? (
+                  <p className="font-mono text-5xl font-black tracking-[0.35em] text-[#8B35F5]" dir="ltr">
+                    {account.verification_code}
+                  </p>
+                ) : (
+                  <p className="text-sm font-black text-zinc-500">لم يصل كود تحقق لهذا الحساب حتى الآن</p>
+                )}
+              </div>
+            </div>
+
             <div className="grid gap-5 rounded-[1.75rem] border border-[#E4D6FA] bg-[#FCFAFF] p-5 lg:grid-cols-[1fr_auto] lg:items-end">
               <label className="block">
                 <span className="mb-2 block text-sm font-black text-zinc-700">رابط الأكواد</span>
