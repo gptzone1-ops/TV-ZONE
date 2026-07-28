@@ -440,6 +440,41 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     return true;
   }
 
+  async function updateCustomerCodeBalance(
+    linkId: string,
+    codeRequestLimit: number,
+    resetRequestedCount: boolean,
+  ) {
+    const normalizedLimit = Math.max(0, Math.floor(codeRequestLimit));
+    const updates = {
+      code_request_limit: normalizedLimit,
+      ...(resetRequestedCount ? { code_requested_count: 0 } : {}),
+    };
+
+    if (supabase) {
+      const { error } = await supabase.from("customer_links").update(updates).eq("id", linkId);
+      if (error) {
+        console.error("Supabase customer code balance update error:", error);
+        setToast({ label: "تعذر تحديث رصيد أكواد العميل", at: Date.now() });
+        return false;
+      }
+    }
+
+    setLinks((current) =>
+      current.map((link) =>
+        link.id === linkId
+          ? {
+              ...link,
+              code_request_limit: normalizedLimit,
+              ...(resetRequestedCount ? { code_requested_count: 0 } : {}),
+            }
+          : link,
+      ),
+    );
+    setToast({ label: "تم تحديث رصيد أكواد العميل", at: Date.now() });
+    return true;
+  }
+
   async function deleteAccount(accountId: string) {
     if (!window.confirm("هل تريد حذف هذا الحساب وجميع روابط العملاء التابعة له؟")) return;
 
@@ -481,12 +516,23 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
   const filteredAccounts = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     if (!normalized) return serviceAccounts;
+    const normalizedCustomerNumber = normalized.replace(/^#/, "");
+    const matchingAccountIds = new Set(
+      links
+        .filter(
+          (link) =>
+            link.link_number != null &&
+            String(link.link_number).includes(normalizedCustomerNumber),
+        )
+        .map((link) => link.account_id),
+    );
     return serviceAccounts.filter(
       (account) =>
         account.email.toLowerCase().includes(normalized) ||
-        account.id.toLowerCase().includes(normalized),
+        account.id.toLowerCase().includes(normalized) ||
+        matchingAccountIds.has(account.id),
     );
-  }, [serviceAccounts, query]);
+  }, [serviceAccounts, links, query]);
 
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId) || null;
   const activeLinks = links.filter((link) => link.account_id === selectedAccountId);
@@ -539,6 +585,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
           setToast={setToast}
           onDelete={deleteAccount}
           onDeleteLinks={deleteCustomerLinks}
+          onUpdateCustomerCodeBalance={updateCustomerCodeBalance}
           onUpdateDates={updateAccountDates}
           onUpdate={updateAccount}
           onLogout={logout}
@@ -790,7 +837,7 @@ function Dashboard({
               <input
                 value={query}
                 onChange={(event) => onQuery(event.target.value)}
-                placeholder="ابحث باسم العميل، البريد، أو رقم الحساب..."
+                placeholder="ابحث بالبريد الإلكتروني أو رقم العميل مثل 100..."
                 className="h-13 w-full rounded-xl border-2 border-[#D8C1FF] bg-white px-4 pr-12 text-sm font-bold outline-none transition duration-300 placeholder:text-zinc-400 focus:border-[#8B35F5] focus:shadow-[0_0_0_4px_rgba(139,53,245,0.10)]"
               />
             </div>
@@ -1487,6 +1534,7 @@ function AccountDetail({
   setToast,
   onDelete,
   onDeleteLinks,
+  onUpdateCustomerCodeBalance,
   onUpdateDates,
   onUpdate,
   onLogout,
@@ -1497,6 +1545,11 @@ function AccountDetail({
   setToast: (toast: Toast) => void;
   onDelete: (accountId: string) => Promise<void>;
   onDeleteLinks: (ids: string[]) => Promise<boolean>;
+  onUpdateCustomerCodeBalance: (
+    linkId: string,
+    codeRequestLimit: number,
+    resetRequestedCount: boolean,
+  ) => Promise<boolean>;
   onUpdateDates: (accountId: string, form: { created_at: string; expires_at: string }) => Promise<boolean>;
   onUpdate: Parameters<typeof AccountForm>[0]["onUpdate"];
   onLogout: () => void;
@@ -1516,6 +1569,10 @@ function AccountDetail({
     account.verification_code_received_at || "",
   );
   const [loadingAdminVerificationCode, setLoadingAdminVerificationCode] = useState(false);
+  const [editingCodeBalanceLink, setEditingCodeBalanceLink] = useState<CustomerLink | null>(null);
+  const [codeBalanceLimit, setCodeBalanceLimit] = useState("1");
+  const [resetCodeBalanceCount, setResetCodeBalanceCount] = useState(false);
+  const [savingCodeBalance, setSavingCodeBalance] = useState(false);
 
   useEffect(() => {
     setSelectedLinkIds([]);
@@ -1525,6 +1582,7 @@ function AccountDetail({
     setSupplierCodeUrl(account.supplier_code_url || "");
     setAdminVerificationCode(account.verification_code || "");
     setAdminVerificationCodeReceivedAt(account.verification_code_received_at || "");
+    setEditingCodeBalanceLink(null);
   }, [account.created_at, account.expires_at, account.id]);
 
   const linksToCopy = selectedLinkIds.length ? links.filter((link) => selectedLinkIds.includes(link.id)) : links;
@@ -1850,6 +1908,9 @@ function AccountDetail({
                           <p className="text-xs font-bold text-zinc-500">اسم الملف</p>
                           <h3 className="text-2xl font-black text-zinc-950">{link.profile_name}</h3>
                           <p className="mt-1 text-xs font-bold text-[#7C2CE8]">{link.profile_label}</p>
+                          <p className="mt-2 inline-flex rounded-full bg-[#F3ECFF] px-3 py-1 text-xs font-black text-[#7C2CE8]">
+                            عميل رقم #{link.link_number ?? "—"}
+                          </p>
                         </div>
                       </label>
                       <button
@@ -1875,6 +1936,21 @@ function AccountDetail({
                     >
                       <Copy className="h-4 w-4" />
                       نسخ الرابط
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingCodeBalanceLink(link);
+                        setCodeBalanceLimit(String(link.code_request_limit ?? 1));
+                        setResetCodeBalanceCount(false);
+                      }}
+                      className="mt-2 flex h-11 w-full items-center justify-center gap-2 rounded-2xl border border-[#DCCBFA] bg-[#F8F4FF] text-sm font-black text-[#7C2CE8] transition hover:border-[#8B35F5] hover:bg-[#F3ECFF]"
+                    >
+                      <SlidersHorizontal className="h-4 w-4" />
+                      تعديل رصيد الأكواد
+                      <span className="text-xs text-zinc-500">
+                        ({link.code_requested_count ?? 0}/{link.code_request_limit ?? 1})
+                      </span>
                     </button>
                   </article>
                 );
@@ -1979,6 +2055,96 @@ function AccountDetail({
           </div>
         )}
       </section>
+
+      {editingCodeBalanceLink && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/55 p-4 backdrop-blur-sm">
+          <div
+            className="w-full max-w-md rounded-[2rem] border border-[#E4D6FA] bg-white p-6 shadow-premium-lg"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="code-balance-title"
+          >
+            <div className="mb-5 flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-black text-[#8B35F5]">
+                  عميل رقم #{editingCodeBalanceLink.link_number ?? "—"}
+                </p>
+                <h2 id="code-balance-title" className="mt-1 text-2xl font-black text-zinc-950">
+                  تعديل رصيد الأكواد
+                </h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingCodeBalanceLink(null)}
+                className="flex h-10 w-10 items-center justify-center rounded-xl border border-[#E4D6FA] text-zinc-500 transition hover:bg-[#F8F4FF]"
+                aria-label="إغلاق"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <label className="block">
+              <span className="mb-2 block text-sm font-black text-zinc-700">عدد المحاولات المسموح بها</span>
+              <input
+                type="number"
+                min="0"
+                step="1"
+                value={codeBalanceLimit}
+                onChange={(event) => setCodeBalanceLimit(event.target.value)}
+                className="admin-modal-input"
+              />
+            </label>
+
+            <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-2xl border border-[#E4D6FA] bg-[#FCFAFF] p-4">
+              <input
+                type="checkbox"
+                checked={resetCodeBalanceCount}
+                onChange={(event) => setResetCodeBalanceCount(event.target.checked)}
+                className="mt-1 h-4 w-4 rounded border-[#CDBAF2] text-[#8B35F5] focus:ring-[#8B35F5]"
+              />
+              <span>
+                <strong className="block text-sm font-black text-zinc-800">تصفير المحاولات المستهلكة</strong>
+                <span className="mt-1 block text-xs font-bold text-zinc-500">
+                  الرصيد الحالي: {editingCodeBalanceLink.code_requested_count ?? 0} مستخدم من{" "}
+                  {editingCodeBalanceLink.code_request_limit ?? 1}
+                </span>
+              </span>
+            </label>
+
+            <div className="mt-6 flex gap-3">
+              <button
+                type="button"
+                onClick={() => setEditingCodeBalanceLink(null)}
+                className="h-12 rounded-xl border border-[#E4D6FA] px-5 text-sm font-black text-zinc-600 transition hover:bg-zinc-50"
+              >
+                إلغاء
+              </button>
+              <button
+                type="button"
+                disabled={savingCodeBalance || codeBalanceLimit.trim() === ""}
+                onClick={async () => {
+                  const limit = Number(codeBalanceLimit);
+                  if (!Number.isFinite(limit) || limit < 0) {
+                    setToast({ label: "أدخل عدداً صحيحاً للرصيد", at: Date.now() });
+                    return;
+                  }
+                  setSavingCodeBalance(true);
+                  const succeeded = await onUpdateCustomerCodeBalance(
+                    editingCodeBalanceLink.id,
+                    limit,
+                    resetCodeBalanceCount,
+                  );
+                  setSavingCodeBalance(false);
+                  if (succeeded) setEditingCodeBalanceLink(null);
+                }}
+                className="h-12 flex-1 rounded-xl bg-[#8B35F5] px-5 text-sm font-black text-white shadow-[0_12px_28px_rgba(139,53,245,0.22)] transition hover:bg-[#7626DD] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {savingCodeBalance ? "جاري الحفظ..." : "حفظ الرصيد"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2034,7 +2200,7 @@ function CustomerView({
       const { data, error } = await supabase
         .from("customer_links")
         .select(
-          "id,account_id,uuid,short_id,profile_name,profile_label,profile_code,service_type,created_at,accounts(id,email,use_automated_code,verification_code,verification_code_received_at,service_type,account_type,expires_at,created_at)",
+          "id,account_id,uuid,short_id,link_number,code_request_limit,code_requested_count,profile_name,profile_label,profile_code,service_type,created_at,accounts(id,email,use_automated_code,verification_code,verification_code_received_at,service_type,account_type,expires_at,created_at)",
         )
         .eq(queryColumn, identifier)
         .single();
@@ -2245,6 +2411,9 @@ function CustomerView({
               <div>
                 <p className={cn("text-sm font-black", theme.accent)}>Zone Store</p>
                 <h1 className="mt-1 text-xl font-black md:text-2xl">اشتراك {theme.name}</h1>
+                {link?.link_number != null && (
+                  <p className={cn("mt-1 text-xs font-black", theme.accent)}>عميل رقم #{link.link_number}</p>
+                )}
               </div>
             </div>
             <button

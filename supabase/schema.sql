@@ -29,6 +29,33 @@ create table if not exists public.customer_links (
 alter table public.customer_links
   add column if not exists short_id text;
 
+create sequence if not exists public.customer_links_link_number_seq start with 100;
+
+alter table public.customer_links
+  add column if not exists link_number bigint;
+
+alter table public.customer_links
+  alter column link_number set default nextval('public.customer_links_link_number_seq');
+
+update public.customer_links
+  set link_number = nextval('public.customer_links_link_number_seq')
+  where link_number is null;
+
+alter table public.customer_links
+  alter column link_number set not null;
+
+alter table public.customer_links
+  add column if not exists code_request_limit integer not null default 1;
+
+alter table public.customer_links
+  add column if not exists code_requested_count integer not null default 0;
+
+alter table public.customer_links
+  add column if not exists verification_code text;
+
+alter table public.customer_links
+  add column if not exists verification_code_received_at timestamptz;
+
 alter table public.accounts
   add column if not exists service_type text not null default 'netflix';
 
@@ -61,6 +88,9 @@ create unique index if not exists customer_links_short_id_key
   on public.customer_links(short_id)
   where short_id is not null;
 
+create unique index if not exists customer_links_link_number_key
+  on public.customer_links(link_number);
+
 create index if not exists accounts_created_at_idx on public.accounts(created_at desc);
 create index if not exists customer_links_account_id_idx on public.customer_links(account_id);
 create index if not exists customer_links_uuid_idx on public.customer_links(uuid);
@@ -76,6 +106,7 @@ drop policy if exists "Allow anon dashboard deletes accounts" on public.accounts
 drop policy if exists "Allow anon customer link reads" on public.customer_links;
 drop policy if exists "Allow anon customer link writes" on public.customer_links;
 drop policy if exists "Allow anon customer link deletes" on public.customer_links;
+drop policy if exists "Allow anon customer link updates" on public.customer_links;
 
 create policy "Allow anon dashboard reads accounts"
   on public.accounts for select
@@ -113,5 +144,12 @@ create policy "Allow anon customer link deletes"
   to anon
   using (true);
 
+create policy "Allow anon customer link updates"
+  on public.customer_links for update
+  to anon
+  using (true)
+  with check (true);
+
 grant select, insert, update, delete on public.accounts to anon, authenticated;
-grant select, insert, delete on public.customer_links to anon, authenticated;
+grant select, insert, update, delete on public.customer_links to anon, authenticated;
+grant usage, select on sequence public.customer_links_link_number_seq to anon, authenticated;
