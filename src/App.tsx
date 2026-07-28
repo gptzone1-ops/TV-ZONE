@@ -1924,13 +1924,18 @@ function CustomerView({
   const [agreeDisclaimer, setAgreeDisclaimer] = useState(false);
   const [codeRequestState, setCodeRequestState] = useState<"idle" | "loading" | "ready" | "failed">("idle");
   const [codeRequestSeconds, setCodeRequestSeconds] = useState(0);
+  const [nowTick, setNowTick] = useState(() => Date.now());
   const deviceStorageKey = `zone-device-choice:${lookup}:${identifier}`;
+  const codeAttemptKey = `zone-code-attempted:${lookup}:${identifier}`;
   const [deviceView, setDeviceView] = useState<DeviceView | null>(() => {
     const saved = localStorage.getItem(deviceStorageKey);
     return saved === "mobile" || saved === "screen" ? saved : null;
   });
   const [pendingDeviceView, setPendingDeviceView] = useState<DeviceView | null>(null);
   const [agreeDeviceChoice, setAgreeDeviceChoice] = useState(false);
+  const [attemptUsed, setAttemptUsed] = useState(() => localStorage.getItem(codeAttemptKey) === "true");
+  const [showPreRequestModal, setShowPreRequestModal] = useState(false);
+  const [agreePreRequest, setAgreePreRequest] = useState(false);
   const pollTimerRef = useRef<number | null>(null);
   const timeoutRef = useRef<number | null>(null);
   const countdownRef = useRef<number | null>(null);
@@ -1973,6 +1978,12 @@ function CustomerView({
   }, [deviceStorageKey]);
 
   useEffect(() => {
+    setAttemptUsed(localStorage.getItem(codeAttemptKey) === "true");
+    setShowPreRequestModal(false);
+    setAgreePreRequest(false);
+  }, [codeAttemptKey]);
+
+  useEffect(() => {
     const shouldLock = showDisclaimer || showReminder || Boolean(pendingDeviceView);
     const previous = document.body.style.overflow;
     if (shouldLock) document.body.style.overflow = "hidden";
@@ -1982,7 +1993,9 @@ function CustomerView({
   }, [showDisclaimer, showReminder, pendingDeviceView]);
 
   useEffect(() => {
+    const timer = window.setInterval(() => setNowTick(Date.now()), 1000);
     return () => {
+      window.clearInterval(timer);
       if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
       if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
       if (countdownRef.current) window.clearInterval(countdownRef.current);
@@ -1995,8 +2008,15 @@ function CustomerView({
   const supportWhatsAppUrl = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(
     `مرحباً اريد الحصول على الكود المخصص للحساب: ${account?.email || ""}`,
   )}`;
+  const attemptsExhaustedWhatsAppUrl = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(
+    `مرحباً، نفدت محاولة طلب الكود لهذا الحساب: ${account?.email || ""}. أحتاج مساعدة من الدعم الفني.`,
+  )}`;
   const deviceLabel = (device: DeviceView) => (device === "mobile" ? "جوال / آيباد / بي سي / لابتوب" : "شاشة / سوني");
   const deviceChoiceLocked = Boolean(deviceView);
+  const codeReceivedAtMs = account?.verification_code_received_at ? new Date(account.verification_code_received_at).getTime() : null;
+  const codeExpiresAtMs = codeReceivedAtMs ? codeReceivedAtMs + 120_000 : null;
+  const codeSecondsRemaining = codeExpiresAtMs ? Math.max(0, Math.ceil((codeExpiresAtMs - nowTick) / 1000)) : 0;
+  const codeIsVisible = Boolean(account?.verification_code && codeExpiresAtMs && codeExpiresAtMs > nowTick);
 
   function requestDeviceChoice(device: DeviceView) {
     if (deviceChoiceLocked) return;
@@ -2015,6 +2035,21 @@ function CustomerView({
   function cancelDeviceChoice() {
     setPendingDeviceView(null);
     setAgreeDeviceChoice(false);
+  }
+
+  function openPreRequestModal() {
+    if (attemptUsed || codeIsVisible) return;
+    setShowPreRequestModal(true);
+    setAgreePreRequest(false);
+  }
+
+  function confirmPreRequest() {
+    if (attemptUsed) return;
+    localStorage.setItem(codeAttemptKey, "true");
+    setAttemptUsed(true);
+    setShowPreRequestModal(false);
+    setAgreePreRequest(false);
+    startCodeRequest();
   }
 
   async function pollVerificationCode(accountId: string, startedAt: number) {
@@ -2069,7 +2104,7 @@ function CustomerView({
 
   function startCodeRequest() {
     const accountId = account?.id;
-    if (!accountId) return;
+    if (!accountId || attemptUsed) return;
 
     setCodeRequestState("loading");
     setCodeRequestSeconds(15);
@@ -2267,7 +2302,7 @@ function CustomerView({
                         />
                       </div>
                     </div>
-                  ) : account.verification_code ? (
+                  ) : deviceView === "mobile" && codeIsVisible ? (
                     <div className="rounded-[1.75rem] border border-[#E0D4F8] bg-[#FCFAFF] p-4 shadow-card">
                       <div className="mb-3 flex items-center justify-between gap-3">
                         <div>
@@ -2292,15 +2327,37 @@ function CustomerView({
                             {formatDateTime(account.verification_code_received_at)}
                           </p>
                         )}
+                        <p className="mt-2 text-xs font-black text-[#7C2CE8]">
+                          ينتهي الكود خلال: {String(Math.floor(codeSecondsRemaining / 60)).padStart(2, "0")}:
+                          {String(codeSecondsRemaining % 60).padStart(2, "0")}
+                        </p>
+                        {attemptUsed && (
+                          <p className="mt-2 text-xs font-bold text-zinc-500">تم استهلاك محاولة طلب الكود لهذا الحساب.</p>
+                        )}
                       </div>
-                      <button
-                        type="button"
-                        onClick={startCodeRequest}
+                    </div>
+                  ) : deviceView === "mobile" && attemptUsed ? (
+                    <div className="rounded-[1.75rem] border border-[#E0D4F8] bg-white p-4 shadow-card">
+                      <div className="flex items-center gap-4">
+                        <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-[#F0E7FF] text-[#8B35F5]">
+                          <ShieldCheck className="h-7 w-7" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-lg font-black">نفاذ رصيد طلب الأكواد لهذا الحساب</p>
+                          <p className="mt-1 text-xs font-bold leading-6 text-zinc-500">
+                            تم استهلاك محاولة طلب الكود الوحيدة لهذا الحساب. تواصل مع الدعم الفني عبر الواتساب للمساعدة.
+                          </p>
+                        </div>
+                      </div>
+                      <a
+                        href={attemptsExhaustedWhatsAppUrl}
+                        target="_blank"
+                        rel="noreferrer"
                         className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#8B35F5] text-sm font-black text-white shadow-[0_14px_32px_rgba(139,53,245,0.24)] transition hover:bg-[#7626DD]"
                       >
-                        <Sparkles className="h-4 w-4" />
-                        طلب كود جديد
-                      </button>
+                        <WhatsAppLogo className="h-5 w-5" />
+                        تواصل مع الدعم الفني عبر الواتساب
+                      </a>
                     </div>
                   ) : (
                     <div className="rounded-[1.75rem] border border-[#E0D4F8] bg-gradient-to-l from-white to-[#F7F2FF] p-4 shadow-card">
@@ -2317,39 +2374,12 @@ function CustomerView({
                       </div>
                       <button
                         type="button"
-                        onClick={startCodeRequest}
+                        onClick={openPreRequestModal}
                         className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#8B35F5] text-sm font-black text-white shadow-[0_14px_32px_rgba(139,53,245,0.24)] transition hover:bg-[#7626DD]"
                       >
                         <KeyRound className="h-4 w-4" />
                         طلب كود التحقق
                       </button>
-                    </div>
-                  )}
-
-                  {deviceView === "mobile" && codeRequestState === "failed" && !account.verification_code && (
-                    <div className="rounded-[1.75rem] border border-[#E0D4F8] bg-white p-4 shadow-card">
-                      <p className="text-sm font-black text-zinc-700">لم يصل الكود بعد.</p>
-                      <p className="mt-1 text-xs font-bold text-zinc-500">
-                        جرب مرة أخرى أو تواصل مع الدعم عبر الواتساب كخيار احتياطي.
-                      </p>
-                      <div className="mt-4 flex flex-col gap-3 sm:flex-row">
-                        <button
-                          type="button"
-                          onClick={startCodeRequest}
-                          className="h-12 flex-1 rounded-2xl bg-[#8B35F5] px-5 text-sm font-black text-white shadow-[0_14px_32px_rgba(139,53,245,0.24)] transition hover:bg-[#7626DD]"
-                        >
-                          إعادة المحاولة
-                        </button>
-                        <a
-                          href={supportWhatsAppUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="flex h-12 flex-1 items-center justify-center gap-2 rounded-2xl border border-[#E0D4F8] bg-[#F8F4FF] px-5 text-sm font-black text-[#7C2CE8] transition hover:bg-[#F0E7FF]"
-                        >
-                          <WhatsAppLogo className="h-5 w-5" />
-                          تواصل مع الدعم عبر الواتساب
-                        </a>
-                      </div>
                     </div>
                   )}
                 </div>
@@ -2427,6 +2457,18 @@ function CustomerView({
               onClose={() => {
                 setShowReminder(false);
                 setToast({ label: "تمت الموافقة، يمكنك الآن متابعة بيانات الحساب.", at: Date.now() });
+              }}
+            />
+          )}
+
+          {showPreRequestModal && (
+            <PreRequestModal
+              checked={agreePreRequest}
+              onToggle={setAgreePreRequest}
+              onContinue={confirmPreRequest}
+              onCancel={() => {
+                setShowPreRequestModal(false);
+                setAgreePreRequest(false);
               }}
             />
           )}
@@ -2555,6 +2597,64 @@ function DeviceChoiceModal({
             className="h-13 rounded-2xl border border-[#E0D4F8] bg-white px-5 text-sm font-black text-[#7C2CE8] transition hover:bg-[#F5EEFF]"
           >
             تغيير الاختيار / إلغاء
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PreRequestModal({
+  checked,
+  onToggle,
+  onContinue,
+  onCancel,
+}: {
+  checked: boolean;
+  onToggle: (checked: boolean) => void;
+  onContinue: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-[86] flex items-center justify-center bg-black/65 px-4 py-6 backdrop-blur-sm">
+      <div className="w-full max-w-xl animate-rise rounded-[2rem] border border-white bg-white p-6 shadow-premium-lg md:p-8">
+        <div className="mb-5 text-center">
+          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#F0E7FF] text-[#8B35F5]">
+            <ShieldCheck className="h-7 w-7" />
+          </div>
+          <h2 className="text-3xl font-black md:text-4xl">تأكيد محاولة تسجيل الدخول</h2>
+          <p className="mt-4 text-sm font-bold leading-8 text-zinc-700">
+            هل قمت بإدخال البريد الإلكتروني والضغط على تسجيل الدخول في تطبيق Netflix أولاً؟ تنبيه هام: يحق لك طلب الكود لمرة واحدة فقط لهذا الحساب.
+          </p>
+        </div>
+
+        <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-[#E4D6FA] bg-[#F8F4FF] px-4 py-4 text-right">
+          <input
+            type="checkbox"
+            checked={checked}
+            onChange={(event) => onToggle(event.target.checked)}
+            className="mt-1 h-5 w-5 rounded border-[#CDBAF2] text-[#8B35F5] focus:ring-[#8B35F5]"
+          />
+          <span className="text-sm font-black leading-7 text-zinc-800 md:text-base">
+            أقر بأنني بدأت تسجيل الدخول وأعلم أن هذه المحاولة هي الوحيدة المتاحة لهذا الحساب.
+          </span>
+        </label>
+
+        <div className="mt-6 grid gap-3 sm:grid-cols-2">
+          <button
+            type="button"
+            onClick={onContinue}
+            disabled={!checked}
+            className="h-13 rounded-2xl bg-[#8B35F5] px-5 text-sm font-black text-white shadow-[0_14px_32px_rgba(139,53,245,0.24)] transition hover:bg-[#7626DD] disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            نعم، بدأت تسجيل الدخول
+          </button>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="h-13 rounded-2xl border border-[#E0D4F8] bg-white px-5 text-sm font-black text-[#7C2CE8] transition hover:bg-[#F5EEFF]"
+          >
+            تراجع
           </button>
         </div>
       </div>
