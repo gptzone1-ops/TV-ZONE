@@ -22,6 +22,8 @@ export type CustomerLink = {
   account_id: string;
   uuid: string;
   short_id?: string | null;
+  token?: string | null;
+  access_key?: string | null;
   profile_name: string;
   profile_label: string;
   profile_code: string;
