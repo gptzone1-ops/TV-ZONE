@@ -60,8 +60,6 @@ const adminEmail = import.meta.env.VITE_ADMIN_EMAIL || "admin@zonestore.sa";
 const adminAuthKey = "zone-admin-auth";
 const adminAuthValue = `remembered:${adminPassword}`;
 const whatsappNumber = "966581688656";
-const whatsappRequestMessage = "مرحباً، أريد الحصول على كود التحقق لحسابي";
-const whatsappRequestUrl = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(whatsappRequestMessage)}`;
 const disclaimerStorageKey = "disclaimer_accepted";
 const dayMs = 1000 * 60 * 60 * 24;
 
@@ -1922,6 +1920,9 @@ function CustomerView({
   const account = link?.accounts;
   const service = serviceOf(account);
   const theme = serviceThemes[service];
+  const customerWhatsAppUrl = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(
+    `مرحباً اريد الحصول على الكود المخصص للحساب: ${account?.email || ""}`,
+  )}`;
 
   return (
     <Shell toast={toast}>
@@ -1999,7 +2000,7 @@ function CustomerView({
                 <div className="space-y-5">
                   <LoginCopyCard label="البريد الإلكتروني" value={account.email} icon={Mail} setToast={setToast} theme={theme} />
                   <a
-                    href={whatsappRequestUrl}
+                    href={customerWhatsAppUrl}
                     target="_blank"
                     rel="noreferrer"
                     className="flex items-center gap-4 rounded-[1.75rem] border border-green-100 bg-gradient-to-l from-white to-[#F8FFF9] p-4 text-right shadow-card transition duration-300 hover:-translate-y-1 hover:border-[#25D366] hover:shadow-premium"
@@ -2093,7 +2094,7 @@ function CustomerView({
           )}
 
           <a
-            href={whatsappRequestUrl}
+            href={customerWhatsAppUrl}
             target="_blank"
             rel="noreferrer"
             className={cn("fixed bottom-5 left-5 z-40 flex h-[60px] w-[60px] animate-whatsapp-pulse items-center justify-center rounded-full bg-gradient-to-br text-white backdrop-blur transition duration-300 hover:-translate-y-1 hover:shadow-premium-lg", theme.gradient, theme.glow)}
