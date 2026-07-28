@@ -167,6 +167,8 @@ const demoAccount: NetflixAccount = {
   email: "zone.netflix@example.com",
   password: "Zone@2026",
   use_automated_code: true,
+  code_request_limit: 1,
+  code_requested_count: 0,
   service_type: "netflix",
   account_type: "private",
   expires_at: defaultExpiryDate(),
@@ -291,6 +293,8 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
         expires_at,
         service_type: selectedService,
         use_automated_code: true,
+        code_request_limit: 1,
+        code_requested_count: 0,
         ...form,
       };
       const createdLinks = slots.map((slot) => ({
@@ -310,7 +314,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     setLoading(true);
     const { data: account, error: accountError } = await supabase
       .from("accounts")
-      .insert({ ...form, expires_at, service_type: selectedService, use_automated_code: true })
+      .insert({ ...form, expires_at, service_type: selectedService, use_automated_code: true, code_request_limit: 1, code_requested_count: 0 })
       .select()
       .single();
 
@@ -340,7 +344,15 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
 
   async function updateAccount(
     accountId: string,
-    form: { email: string; password: string; supplier_code_url?: string; created_at?: string; expires_at?: string },
+    form: {
+      email?: string;
+      password?: string;
+      supplier_code_url?: string;
+      created_at?: string;
+      expires_at?: string;
+      code_request_limit?: number;
+      code_requested_count?: number;
+    },
   ) {
     if (!supabase) {
       setAccounts((current) =>
@@ -348,10 +360,15 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
           account.id === accountId
             ? {
                 ...account,
-                ...form,
-                supplier_code_url: form.supplier_code_url || null,
+                ...(form.email ? { email: form.email } : {}),
+                ...(form.password ? { password: form.password } : {}),
+                ...(Object.prototype.hasOwnProperty.call(form, "supplier_code_url")
+                  ? { supplier_code_url: form.supplier_code_url || null }
+                  : {}),
                 created_at: form.created_at || account.created_at,
                 expires_at: form.expires_at || account.expires_at,
+                ...(typeof form.code_request_limit === "number" ? { code_request_limit: form.code_request_limit } : {}),
+                ...(typeof form.code_requested_count === "number" ? { code_requested_count: form.code_requested_count } : {}),
               }
             : account,
         ),
@@ -364,11 +381,15 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     const { error } = await supabase
       .from("accounts")
       .update({
-        email: form.email,
-        password: form.password,
-        supplier_code_url: form.supplier_code_url || null,
+        ...(form.email ? { email: form.email } : {}),
+        ...(form.password ? { password: form.password } : {}),
+        ...(Object.prototype.hasOwnProperty.call(form, "supplier_code_url")
+          ? { supplier_code_url: form.supplier_code_url || null }
+          : {}),
         ...(form.created_at ? { created_at: form.created_at } : {}),
         ...(form.expires_at ? { expires_at: form.expires_at } : {}),
+        ...(typeof form.code_request_limit === "number" ? { code_request_limit: form.code_request_limit } : {}),
+        ...(typeof form.code_requested_count === "number" ? { code_requested_count: form.code_requested_count } : {}),
       })
       .eq("id", accountId);
     setLoading(false);
@@ -383,10 +404,15 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
         account.id === accountId
           ? {
               ...account,
-              ...form,
-              supplier_code_url: form.supplier_code_url || null,
+              ...(form.email ? { email: form.email } : {}),
+              ...(form.password ? { password: form.password } : {}),
+              ...(Object.prototype.hasOwnProperty.call(form, "supplier_code_url")
+                ? { supplier_code_url: form.supplier_code_url || null }
+                : {}),
               created_at: form.created_at || account.created_at,
               expires_at: form.expires_at || account.expires_at,
+              ...(typeof form.code_request_limit === "number" ? { code_request_limit: form.code_request_limit } : {}),
+              ...(typeof form.code_requested_count === "number" ? { code_requested_count: form.code_requested_count } : {}),
             }
           : account,
       ),
@@ -414,6 +440,45 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     setAccounts((current) => current.map((account) => (account.id === accountId ? { ...account, ...form } : account)));
     setToast({ label: "تم حفظ التواريخ", at: Date.now() });
     return true;
+  }
+
+  async function refreshAccountCode(accountId: string) {
+    if (!supabase) {
+      const account = accounts.find((item) => item.id === accountId);
+      if (account?.verification_code) {
+        setToast({ label: "تم عرض آخر كود محفوظ محلياً", at: Date.now() });
+        return true;
+      }
+      setToast({ label: "لا يوجد كود محفوظ لهذا الحساب", at: Date.now() });
+      return false;
+    }
+
+    const { data, error } = await supabase
+      .from("accounts")
+      .select("verification_code,verification_code_received_at,code_request_limit,code_requested_count")
+      .eq("id", accountId)
+      .maybeSingle();
+
+    if (error || !data) {
+      setToast({ label: "تعذر جلب الكود من Supabase", at: Date.now() });
+      return false;
+    }
+
+    setAccounts((current) =>
+      current.map((account) =>
+        account.id === accountId
+          ? {
+              ...account,
+              verification_code: data.verification_code || null,
+              verification_code_received_at: data.verification_code_received_at || null,
+              code_request_limit: data.code_request_limit ?? account.code_request_limit,
+              code_requested_count: data.code_requested_count ?? account.code_requested_count,
+            }
+          : account,
+      ),
+    );
+    setToast({ label: data.verification_code ? "تم جلب آخر كود للحساب" : "لا يوجد كود محفوظ لهذا الحساب", at: Date.now() });
+    return Boolean(data.verification_code);
   }
 
   async function deleteCustomerLinks(ids: string[]) {
@@ -540,6 +605,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
           onDeleteLinks={deleteCustomerLinks}
           onUpdateDates={updateAccountDates}
           onUpdate={updateAccount}
+          onRefreshCode={refreshAccountCode}
           onLogout={logout}
         />
       </Shell>
@@ -1299,7 +1365,13 @@ function AccountForm({
   onAdd: (form: { email: string; password: string; account_type: AccountType; supplier_code_url?: string }) => Promise<boolean>;
   onUpdate: (
     accountId: string,
-    form: { email: string; password: string; supplier_code_url?: string },
+    form: {
+      email?: string;
+      password?: string;
+      supplier_code_url?: string;
+      code_request_limit?: number;
+      code_requested_count?: number;
+    },
   ) => Promise<boolean>;
   loading: boolean;
   service: ServiceType;
@@ -1488,6 +1560,7 @@ function AccountDetail({
   onDeleteLinks,
   onUpdateDates,
   onUpdate,
+  onRefreshCode,
   onLogout,
 }: {
   account: NetflixAccount;
@@ -1498,6 +1571,7 @@ function AccountDetail({
   onDeleteLinks: (ids: string[]) => Promise<boolean>;
   onUpdateDates: (accountId: string, form: { created_at: string; expires_at: string }) => Promise<boolean>;
   onUpdate: Parameters<typeof AccountForm>[0]["onUpdate"];
+  onRefreshCode: (accountId: string) => Promise<boolean>;
   onLogout: () => void;
 }) {
   const expired = isExpired(account.expires_at);
@@ -1510,6 +1584,9 @@ function AccountDetail({
   const [savingDates, setSavingDates] = useState(false);
   const [supplierCodeUrl, setSupplierCodeUrl] = useState(account.supplier_code_url || "");
   const [savingSupplierCode, setSavingSupplierCode] = useState(false);
+  const [codeLimit, setCodeLimit] = useState(String(account.code_request_limit ?? 1));
+  const [savingCodeBalance, setSavingCodeBalance] = useState(false);
+  const [refreshingCode, setRefreshingCode] = useState(false);
 
   useEffect(() => {
     setSelectedLinkIds([]);
@@ -1517,7 +1594,8 @@ function AccountDetail({
     setStartDate(new Date(account.created_at).toISOString().slice(0, 10));
     setEndDate(new Date(account.expires_at).toISOString().slice(0, 10));
     setSupplierCodeUrl(account.supplier_code_url || "");
-  }, [account.created_at, account.expires_at, account.id]);
+    setCodeLimit(String(account.code_request_limit ?? 1));
+  }, [account.code_request_limit, account.created_at, account.expires_at, account.id, account.supplier_code_url]);
 
   const linksToCopy = selectedLinkIds.length ? links.filter((link) => selectedLinkIds.includes(link.id)) : links;
   const linksToCopyText = linksToCopy
@@ -1708,10 +1786,37 @@ function AccountDetail({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-2 rounded-full border border-[#E4D6FA] bg-white p-1">
+              <input
+                type="number"
+                min="0"
+                value={codeLimit}
+                onChange={(event) => setCodeLimit(event.target.value)}
+                className="h-9 w-20 rounded-full bg-[#F8F4FF] px-3 text-center text-sm font-black text-[#7C2CE8] outline-none"
+                aria-label="رصيد محاولات الأكواد"
+              />
+              <button
+                type="button"
+                onClick={async () => {
+                  const nextLimit = Math.max(0, Number.parseInt(codeLimit || "0", 10) || 0);
+                  setSavingCodeBalance(true);
+                  const succeeded = await onUpdate(account.id, {
+                    code_request_limit: nextLimit,
+                    code_requested_count: 0,
+                  });
+                  setSavingCodeBalance(false);
+                  if (succeeded) setToast({ label: "تم تحديث رصيد الأكواد وتصفير المحاولات", at: Date.now() });
+                }}
+                disabled={savingCodeBalance}
+                className="h-9 rounded-full bg-[#8B35F5] px-4 text-xs font-black text-white transition hover:bg-[#7626DD] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                تعديل رصيد الأكواد
+              </button>
+            </div>
             <button
               type="button"
               onClick={() => setToast({ label: "ميزة تعديل الرصيد قيد الإعداد", at: Date.now() })}
-              className="rounded-full border border-[#E4D6FA] bg-white px-4 py-2 text-sm font-black text-[#7C2CE8] transition hover:bg-[#F5EEFF]"
+              className="hidden rounded-full border border-[#E4D6FA] bg-white px-4 py-2 text-sm font-black text-[#7C2CE8] transition hover:bg-[#F5EEFF]"
             >
               تعديل الرصيد
             </button>
@@ -1843,6 +1948,18 @@ function AccountDetail({
                   )}
                   <button
                     type="button"
+                    onClick={async () => {
+                      setRefreshingCode(true);
+                      await onRefreshCode(account.id);
+                      setRefreshingCode(false);
+                    }}
+                    disabled={refreshingCode}
+                    className="h-11 rounded-2xl bg-[#8B35F5] px-5 text-sm font-black text-white shadow-[0_12px_28px_rgba(139,53,245,0.20)] transition hover:bg-[#7626DD] disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    جلب الكود (صلاحية المشرف)
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => account.verification_code && copyText(account.verification_code, setToast)}
                     disabled={!account.verification_code}
                     className="h-11 rounded-2xl border border-[#E0D4F8] bg-[#F5EEFF] px-5 text-sm font-black text-[#7C2CE8] transition hover:bg-[#8B35F5] hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
@@ -1928,14 +2045,12 @@ function CustomerView({
   const [codeRequestSeconds, setCodeRequestSeconds] = useState(0);
   const [nowTick, setNowTick] = useState(() => Date.now());
   const deviceStorageKey = `zone-device-choice:${lookup}:${identifier}`;
-  const codeAttemptKey = `zone-code-attempted:${lookup}:${identifier}`;
   const [deviceView, setDeviceView] = useState<DeviceView | null>(() => {
     const saved = localStorage.getItem(deviceStorageKey);
     return saved === "mobile" || saved === "screen" ? saved : null;
   });
   const [pendingDeviceView, setPendingDeviceView] = useState<DeviceView | null>(null);
   const [agreeDeviceChoice, setAgreeDeviceChoice] = useState(false);
-  const [attemptUsed, setAttemptUsed] = useState(() => localStorage.getItem(codeAttemptKey) === "true");
   const [showPreRequestModal, setShowPreRequestModal] = useState(false);
   const [agreePreRequest, setAgreePreRequest] = useState(false);
   const pollTimerRef = useRef<number | null>(null);
@@ -1960,7 +2075,7 @@ function CustomerView({
       const { data, error } = await supabase
         .from("customer_links")
         .select(
-          "id,account_id,uuid,short_id,profile_name,profile_label,profile_code,service_type,created_at,accounts(id,email,use_automated_code,verification_code,verification_code_received_at,service_type,account_type,expires_at,created_at)",
+          "id,account_id,uuid,short_id,profile_name,profile_label,profile_code,service_type,created_at,accounts(id,email,use_automated_code,code_request_limit,code_requested_count,verification_code,verification_code_received_at,service_type,account_type,expires_at,created_at)",
         )
         .eq(queryColumn, identifier)
         .single();
@@ -1978,12 +2093,6 @@ function CustomerView({
     setPendingDeviceView(null);
     setAgreeDeviceChoice(false);
   }, [deviceStorageKey]);
-
-  useEffect(() => {
-    setAttemptUsed(localStorage.getItem(codeAttemptKey) === "true");
-    setShowPreRequestModal(false);
-    setAgreePreRequest(false);
-  }, [codeAttemptKey]);
 
   useEffect(() => {
     const shouldLock = showDisclaimer || showReminder || Boolean(pendingDeviceView);
@@ -2020,6 +2129,10 @@ function CustomerView({
   const codeSecondsRemaining = codeExpiresAtMs ? Math.max(0, Math.ceil((codeExpiresAtMs - nowTick) / 1000)) : 0;
   const codeIsVisible = Boolean(account?.verification_code && codeExpiresAtMs && codeExpiresAtMs > nowTick);
   const automatedCodeEnabled = account?.use_automated_code !== false;
+  const codeRequestLimit = Math.max(0, account?.code_request_limit ?? 1);
+  const codeRequestedCount = Math.max(0, account?.code_requested_count ?? 0);
+  const hasCodeRequestCredit = codeRequestedCount < codeRequestLimit;
+  const attemptUsed = automatedCodeEnabled && !hasCodeRequestCredit;
 
   useEffect(() => {
     if (automatedCodeEnabled) return;
@@ -2060,10 +2173,32 @@ function CustomerView({
     setAgreePreRequest(false);
   }
 
-  function confirmPreRequest() {
-    if (!automatedCodeEnabled || attemptUsed) return;
-    localStorage.setItem(codeAttemptKey, "true");
-    setAttemptUsed(true);
+  async function confirmPreRequest() {
+    if (!automatedCodeEnabled || attemptUsed || !account?.id) return;
+    const nextCount = codeRequestedCount + 1;
+    if (supabase) {
+      const { error } = await supabase
+        .from("accounts")
+        .update({ code_requested_count: nextCount })
+        .eq("id", account.id);
+
+      if (error) {
+        setToast({ label: "تعذر تحديث رصيد طلب الكود", at: Date.now() });
+        return;
+      }
+    }
+
+    setLink((current) =>
+      current && current.accounts
+        ? {
+            ...current,
+            accounts: {
+              ...current.accounts,
+              code_requested_count: nextCount,
+            },
+          }
+        : current,
+    );
     setShowPreRequestModal(false);
     setAgreePreRequest(false);
     startCodeRequest();
