@@ -51,6 +51,24 @@ alter table public.customer_links
   add column if not exists code_requested_count integer not null default 0;
 
 alter table public.customer_links
+  add column if not exists selected_device text;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'customer_links_selected_device_check'
+      and conrelid = 'public.customer_links'::regclass
+  ) then
+    alter table public.customer_links
+      add constraint customer_links_selected_device_check
+      check (selected_device in ('mobile', 'screen') or selected_device is null);
+  end if;
+end
+$$;
+
+alter table public.customer_links
   add column if not exists verification_code text;
 
 alter table public.customer_links

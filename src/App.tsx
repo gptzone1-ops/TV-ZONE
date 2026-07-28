@@ -935,10 +935,8 @@ function Dashboard({
                         : "border-rose-200 bg-rose-50 text-rose-700",
                     )}
                   >
-                    <p className="text-xs font-black">حالة الرصيد</p>
-                    <p className="mt-1 text-lg font-black">
-                      {remaining > 0 ? `المتبقي: ${remaining} من ${limit}` : "المتبقي: 0 - مستهلك"}
-                    </p>
+                    <p className="text-xs font-black">الرصيد المتبقي</p>
+                    <p className="mt-1 text-3xl font-black">{remaining}</p>
                   </div>
                 );
               })()}
@@ -1075,9 +1073,7 @@ function CustomerBalanceModal({
           <div>
             <p className="text-xs font-black text-[#8B35F5]">عميل رقم #{link.link_number ?? "—"}</p>
             <h2 className="mt-1 text-2xl font-black text-zinc-950">تعديل رصيد الأكواد</h2>
-            <p className="mt-2 text-sm font-bold text-zinc-500">
-              المتبقي حالياً: {currentRemaining} من {currentLimit}
-            </p>
+            <p className="mt-2 text-sm font-bold text-zinc-500">الرصيد المتبقي: {currentRemaining}</p>
           </div>
           <button
             type="button"
@@ -2117,8 +2113,11 @@ function AccountDetail({
                     >
                       <SlidersHorizontal className="h-4 w-4" />
                       تعديل رصيد الأكواد
-                      <span className="text-xs text-zinc-500">
-                        ({link.code_requested_count ?? 0}/{link.code_request_limit ?? 1})
+                      <span className="rounded-full bg-white px-2 py-1 text-xs text-zinc-600">
+                        {Math.max(
+                          0,
+                          (link.code_request_limit ?? 1) - (link.code_requested_count ?? 0),
+                        )}
                       </span>
                     </button>
                   </article>
@@ -2274,8 +2273,12 @@ function AccountDetail({
               <span>
                 <strong className="block text-sm font-black text-zinc-800">تصفير المحاولات المستهلكة</strong>
                 <span className="mt-1 block text-xs font-bold text-zinc-500">
-                  الرصيد الحالي: {editingCodeBalanceLink.code_requested_count ?? 0} مستخدم من{" "}
-                  {editingCodeBalanceLink.code_request_limit ?? 1}
+                  الرصيد المتبقي:{" "}
+                  {Math.max(
+                    0,
+                    (editingCodeBalanceLink.code_request_limit ?? 1) -
+                      (editingCodeBalanceLink.code_requested_count ?? 0),
+                  )}
                 </span>
               </span>
             </label>
@@ -2336,11 +2339,7 @@ function CustomerView({
   const [codeRequestState, setCodeRequestState] = useState<"idle" | "loading" | "ready" | "failed">("idle");
   const [codeRequestSeconds, setCodeRequestSeconds] = useState(0);
   const [nowTick, setNowTick] = useState(() => Date.now());
-  const deviceStorageKey = `zone-device-choice:${lookup}:${identifier}`;
-  const [deviceView, setDeviceView] = useState<DeviceView | null>(() => {
-    const saved = localStorage.getItem(deviceStorageKey);
-    return saved === "mobile" || saved === "screen" ? saved : null;
-  });
+  const [deviceView, setDeviceView] = useState<DeviceView | null>(null);
   const [pendingDeviceView, setPendingDeviceView] = useState<DeviceView | null>(null);
   const [agreeDeviceChoice, setAgreeDeviceChoice] = useState(false);
   const [showPreRequestModal, setShowPreRequestModal] = useState(false);
@@ -2367,7 +2366,7 @@ function CustomerView({
       const { data, error } = await supabase
         .from("customer_links")
         .select(
-          "id,account_id,uuid,short_id,link_number,code_request_limit,code_requested_count,profile_name,profile_label,profile_code,service_type,created_at,accounts(id,email,use_automated_code,verification_code,verification_code_received_at,service_type,account_type,expires_at,created_at)",
+          "id,account_id,uuid,short_id,link_number,code_request_limit,code_requested_count,selected_device,profile_name,profile_label,profile_code,service_type,created_at,accounts(id,email,use_automated_code,verification_code,verification_code_received_at,service_type,account_type,expires_at,created_at)",
         )
         .eq(queryColumn, identifier)
         .single();
@@ -2380,11 +2379,11 @@ function CustomerView({
   }, [identifier, lookup]);
 
   useEffect(() => {
-    const saved = localStorage.getItem(deviceStorageKey);
-    setDeviceView(saved === "mobile" || saved === "screen" ? saved : null);
+    const selectedDevice = link?.selected_device;
+    setDeviceView(selectedDevice === "mobile" || selectedDevice === "screen" ? selectedDevice : null);
     setPendingDeviceView(null);
     setAgreeDeviceChoice(false);
-  }, [deviceStorageKey]);
+  }, [link?.id, link?.selected_device]);
 
   useEffect(() => {
     const shouldLock = showDisclaimer || showReminder || Boolean(pendingDeviceView);
@@ -2441,15 +2440,51 @@ function CustomerView({
   }, [automatedCodeEnabled]);
 
   function requestDeviceChoice(device: DeviceView) {
-    if (!automatedCodeEnabled || deviceChoiceLocked) return;
+    if (!automatedCodeEnabled || deviceChoiceLocked || attemptUsed) return;
     setPendingDeviceView(device);
     setAgreeDeviceChoice(false);
   }
 
-  function confirmDeviceChoice() {
-    if (!pendingDeviceView) return;
-    localStorage.setItem(deviceStorageKey, pendingDeviceView);
-    setDeviceView(pendingDeviceView);
+  async function confirmDeviceChoice() {
+    if (!pendingDeviceView || !link?.id || attemptUsed) return;
+    const selectedDevice = pendingDeviceView;
+
+    if (supabase) {
+      const { data, error } = await supabase
+        .from("customer_links")
+        .update({ selected_device: selectedDevice })
+        .eq("id", link.id)
+        .is("selected_device", null)
+        .select("selected_device")
+        .maybeSingle();
+
+      if (error) {
+        console.error("Supabase customer device lock error:", error);
+        setToast({ label: "تعذر حفظ نوع الجهاز، حدّث الصفحة وحاول مجدداً", at: Date.now() });
+        return;
+      }
+
+      if (!data?.selected_device) {
+        const { data: currentLink, error: refreshError } = await supabase
+          .from("customer_links")
+          .select("selected_device")
+          .eq("id", link.id)
+          .maybeSingle();
+        if (refreshError) console.error("Supabase customer device refresh error:", refreshError);
+        if (currentLink?.selected_device === "mobile" || currentLink?.selected_device === "screen") {
+          setLink((current) =>
+            current ? { ...current, selected_device: currentLink.selected_device } : current,
+          );
+          setDeviceView(currentLink.selected_device);
+        }
+        setPendingDeviceView(null);
+        setAgreeDeviceChoice(false);
+        return;
+      }
+    }
+
+    setLink((current) => (current ? { ...current, selected_device: selectedDevice } : current));
+    setDeviceView(selectedDevice);
     setPendingDeviceView(null);
     setAgreeDeviceChoice(false);
   }
@@ -2703,7 +2738,7 @@ function CustomerView({
                       <button
                         type="button"
                         onClick={() => requestDeviceChoice("mobile")}
-                        disabled={deviceChoiceLocked}
+                        disabled={deviceChoiceLocked || attemptUsed}
                         className={cn(
                           "flex min-h-12 items-center justify-center gap-2 rounded-2xl px-3 text-sm font-black transition disabled:cursor-not-allowed",
                           deviceView === "mobile"
@@ -2717,7 +2752,7 @@ function CustomerView({
                       <button
                         type="button"
                         onClick={() => requestDeviceChoice("screen")}
-                        disabled={deviceChoiceLocked}
+                        disabled={deviceChoiceLocked || attemptUsed}
                         className={cn(
                           "flex min-h-12 items-center justify-center gap-2 rounded-2xl px-3 text-sm font-black transition disabled:cursor-not-allowed",
                           deviceView === "screen"
@@ -2729,7 +2764,11 @@ function CustomerView({
                         شاشة / سوني
                       </button>
                     </div>
-                    {deviceChoiceLocked ? (
+                    {attemptUsed && !deviceChoiceLocked ? (
+                      <p className="mt-3 rounded-2xl bg-white/80 px-4 py-3 text-xs font-black text-rose-600">
+                        تم استهلاك رصيد الأكواد ولا يمكن اختيار جهاز جديد.
+                      </p>
+                    ) : deviceChoiceLocked ? (
                       <p className="mt-3 rounded-2xl bg-white/80 px-4 py-3 text-xs font-black text-[#7C2CE8]">
                         تم تأكيد نوع الجهاز ولا يمكن تغييره.
                       </p>
@@ -2740,7 +2779,30 @@ function CustomerView({
                     )}
                   </div>
 
-                  {!deviceView ? null : deviceView === "screen" ? (
+                  {!deviceView && attemptUsed ? (
+                    <div className="rounded-[1.75rem] border border-rose-200 bg-rose-50 p-4 shadow-card">
+                      <div className="flex items-center gap-4">
+                        <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-white text-rose-600">
+                          <ShieldCheck className="h-7 w-7" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-lg font-black text-rose-700">نفاذ رصيد طلب الأكواد لهذا الحساب</p>
+                          <p className="mt-1 text-xs font-bold leading-6 text-rose-600">
+                            تم حفظ حالة الاستخدام في قاعدة البيانات ولا يمكن إعادة اختيار الجهاز أو طلب كود جديد.
+                          </p>
+                        </div>
+                      </div>
+                      <a
+                        href={attemptsExhaustedWhatsAppUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#8B35F5] text-sm font-black text-white transition hover:bg-[#7626DD]"
+                      >
+                        <WhatsAppLogo className="h-5 w-5" />
+                        تواصل مع الدعم الفني
+                      </a>
+                    </div>
+                  ) : !deviceView ? null : deviceView === "screen" ? (
                     <div className="rounded-[1.75rem] border border-[#E0D4F8] bg-gradient-to-l from-white to-[#F7F2FF] p-4 shadow-card">
                       <div className="flex items-center gap-4">
                         <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-[#F0E7FF] text-[#8B35F5]">
