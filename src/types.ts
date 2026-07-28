@@ -5,6 +5,7 @@ export type NetflixAccount = {
   id: string;
   email: string;
   password: string;
+  use_automated_code?: boolean | null;
   supplier_code_url?: string | null;
   verification_code?: string | null;
   verification_code_received_at?: string | null;

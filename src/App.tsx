@@ -166,6 +166,7 @@ const demoAccount: NetflixAccount = {
   id: "demo-account",
   email: "zone.netflix@example.com",
   password: "Zone@2026",
+  use_automated_code: true,
   service_type: "netflix",
   account_type: "private",
   expires_at: defaultExpiryDate(),
@@ -289,6 +290,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
         created_at: new Date().toISOString(),
         expires_at,
         service_type: selectedService,
+        use_automated_code: true,
         ...form,
       };
       const createdLinks = slots.map((slot) => ({
@@ -308,7 +310,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     setLoading(true);
     const { data: account, error: accountError } = await supabase
       .from("accounts")
-      .insert({ ...form, expires_at, service_type: selectedService })
+      .insert({ ...form, expires_at, service_type: selectedService, use_automated_code: true })
       .select()
       .single();
 
@@ -1958,7 +1960,7 @@ function CustomerView({
       const { data, error } = await supabase
         .from("customer_links")
         .select(
-          "id,account_id,uuid,short_id,profile_name,profile_label,profile_code,service_type,created_at,accounts(id,email,verification_code,verification_code_received_at,service_type,account_type,expires_at,created_at)",
+          "id,account_id,uuid,short_id,profile_name,profile_label,profile_code,service_type,created_at,accounts(id,email,use_automated_code,verification_code,verification_code_received_at,service_type,account_type,expires_at,created_at)",
         )
         .eq(queryColumn, identifier)
         .single();
@@ -2017,9 +2019,24 @@ function CustomerView({
   const codeExpiresAtMs = codeReceivedAtMs ? codeReceivedAtMs + 120_000 : null;
   const codeSecondsRemaining = codeExpiresAtMs ? Math.max(0, Math.ceil((codeExpiresAtMs - nowTick) / 1000)) : 0;
   const codeIsVisible = Boolean(account?.verification_code && codeExpiresAtMs && codeExpiresAtMs > nowTick);
+  const automatedCodeEnabled = account?.use_automated_code !== false;
+
+  useEffect(() => {
+    if (automatedCodeEnabled) return;
+    setDeviceView(null);
+    setPendingDeviceView(null);
+    setAgreeDeviceChoice(false);
+    setShowPreRequestModal(false);
+    setAgreePreRequest(false);
+    setCodeRequestState("idle");
+    setCodeRequestSeconds(0);
+    if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
+    if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
+    if (countdownRef.current) window.clearInterval(countdownRef.current);
+  }, [automatedCodeEnabled]);
 
   function requestDeviceChoice(device: DeviceView) {
-    if (deviceChoiceLocked) return;
+    if (!automatedCodeEnabled || deviceChoiceLocked) return;
     setPendingDeviceView(device);
     setAgreeDeviceChoice(false);
   }
@@ -2038,13 +2055,13 @@ function CustomerView({
   }
 
   function openPreRequestModal() {
-    if (attemptUsed || codeIsVisible) return;
+    if (!automatedCodeEnabled || attemptUsed || codeIsVisible) return;
     setShowPreRequestModal(true);
     setAgreePreRequest(false);
   }
 
   function confirmPreRequest() {
-    if (attemptUsed) return;
+    if (!automatedCodeEnabled || attemptUsed) return;
     localStorage.setItem(codeAttemptKey, "true");
     setAttemptUsed(true);
     setShowPreRequestModal(false);
@@ -2104,7 +2121,7 @@ function CustomerView({
 
   function startCodeRequest() {
     const accountId = account?.id;
-    if (!accountId || attemptUsed) return;
+    if (!automatedCodeEnabled || !accountId || attemptUsed) return;
 
     setCodeRequestState("loading");
     setCodeRequestSeconds(15);
@@ -2217,7 +2234,31 @@ function CustomerView({
 
                 <div className="space-y-5">
                   <LoginCopyCard label="البريد الإلكتروني" value={account.email} icon={Mail} setToast={setToast} theme={theme} />
-
+                  {!automatedCodeEnabled ? (
+                    <div className="rounded-[1.75rem] border border-[#E0D4F8] bg-gradient-to-l from-white to-[#F7F2FF] p-4 shadow-card">
+                      <div className="flex items-center gap-4">
+                        <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-[#F0E7FF] text-[#8B35F5]">
+                          <WhatsAppLogo className="h-7 w-7" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-lg font-black">للحصول على كود التحقق، تواصل معنا عبر الواتساب</p>
+                          <p className="mt-1 text-xs font-bold leading-6 text-zinc-500">
+                            هذا الحساب قديم ويعمل بالنظام اليدوي فقط، وسيتم تجهيز الكود من الدعم مباشرة.
+                          </p>
+                        </div>
+                      </div>
+                      <a
+                        href={supportWhatsAppUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#8B35F5] text-sm font-black text-white shadow-[0_14px_32px_rgba(139,53,245,0.24)] transition hover:bg-[#7626DD]"
+                      >
+                        <WhatsAppLogo className="h-5 w-5" />
+                        تواصل معنا عبر الواتساب
+                      </a>
+                    </div>
+                  ) : (
+                    <>
                   <div className="rounded-[1.75rem] border border-[#E0D4F8] bg-[#F8F4FF] p-3 shadow-card">
                     <p className="mb-3 px-2 text-sm font-black text-zinc-700">حدد الجهاز</p>
                     <div className="grid gap-2 sm:grid-cols-2">
@@ -2382,6 +2423,8 @@ function CustomerView({
                       </button>
                     </div>
                   )}
+                    </>
+                  )}
                 </div>
               </section>
 
@@ -2461,7 +2504,7 @@ function CustomerView({
             />
           )}
 
-          {showPreRequestModal && (
+          {automatedCodeEnabled && showPreRequestModal && (
             <PreRequestModal
               checked={agreePreRequest}
               onToggle={setAgreePreRequest}
@@ -2473,7 +2516,7 @@ function CustomerView({
             />
           )}
 
-          {pendingDeviceView && (
+          {automatedCodeEnabled && pendingDeviceView && (
             <DeviceChoiceModal
               deviceLabel={deviceLabel(pendingDeviceView)}
               checked={agreeDeviceChoice}
@@ -2483,7 +2526,7 @@ function CustomerView({
             />
           )}
 
-          {deviceView === "screen" && (
+          {automatedCodeEnabled && deviceView === "screen" && (
             <a
               href={supportWhatsAppUrl}
               target="_blank"

@@ -4,6 +4,7 @@ create table if not exists public.accounts (
   id uuid primary key default gen_random_uuid(),
   email text not null,
   password text not null,
+  use_automated_code boolean not null default true,
   supplier_code_url text,
   verification_code text,
   verification_code_received_at timestamptz,
@@ -30,6 +31,19 @@ alter table public.customer_links
 
 alter table public.accounts
   add column if not exists service_type text not null default 'netflix';
+
+alter table public.accounts
+  add column if not exists use_automated_code boolean;
+
+update public.accounts
+  set use_automated_code = false
+  where use_automated_code is null;
+
+alter table public.accounts
+  alter column use_automated_code set default true;
+
+alter table public.accounts
+  alter column use_automated_code set not null;
 
 alter table public.accounts
   add column if not exists supplier_code_url text;
