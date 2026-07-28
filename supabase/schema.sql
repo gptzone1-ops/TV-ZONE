@@ -5,8 +5,6 @@ create table if not exists public.accounts (
   email text not null,
   password text not null,
   use_automated_code boolean not null default true,
-  code_request_limit integer not null default 1,
-  code_requested_count integer not null default 0,
   supplier_code_url text,
   verification_code text,
   verification_code_received_at timestamptz,
@@ -46,32 +44,6 @@ alter table public.accounts
 
 alter table public.accounts
   alter column use_automated_code set not null;
-
-alter table public.accounts
-  add column if not exists code_request_limit integer;
-
-update public.accounts
-  set code_request_limit = 1
-  where code_request_limit is null;
-
-alter table public.accounts
-  alter column code_request_limit set default 1;
-
-alter table public.accounts
-  alter column code_request_limit set not null;
-
-alter table public.accounts
-  add column if not exists code_requested_count integer;
-
-update public.accounts
-  set code_requested_count = 0
-  where code_requested_count is null;
-
-alter table public.accounts
-  alter column code_requested_count set default 0;
-
-alter table public.accounts
-  alter column code_requested_count set not null;
 
 alter table public.accounts
   add column if not exists supplier_code_url text;
