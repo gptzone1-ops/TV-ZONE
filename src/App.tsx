@@ -2076,17 +2076,20 @@ function CustomerView({
         return;
       }
 
-      const selection =
-        "id,account_id,uuid,short_id,token,access_key,profile_name,profile_label,profile_code,service_type,created_at,accounts(id,email,use_automated_code,code_request_limit,code_requested_count,verification_code,verification_code_received_at,service_type,account_type,expires_at,created_at)";
+      // Load the link first. Joining accounts here made valid links fail when
+      // an older database is missing one of the newer account columns.
+      const linkSelection =
+        "id,account_id,uuid,short_id,token,access_key,profile_name,profile_label,profile_code,service_type,created_at";
 
       const attempts =
         lookup === "short"
           ? [
-              supabase.from("customer_links").select(selection).eq("short_id", identifier).maybeSingle(),
-              supabase.from("customer_links").select(selection).eq("token", identifier).maybeSingle(),
-              supabase.from("customer_links").select(selection).eq("access_key", identifier).maybeSingle(),
+              supabase.from("customer_links").select(linkSelection).eq("short_id", identifier).maybeSingle(),
+              supabase.from("customer_links").select(linkSelection).eq("token", identifier).maybeSingle(),
+              supabase.from("customer_links").select(linkSelection).eq("access_key", identifier).maybeSingle(),
+              supabase.from("customer_links").select(linkSelection).eq("id", identifier).maybeSingle(),
             ]
-          : [supabase.from("customer_links").select(selection).eq("uuid", identifier).maybeSingle()];
+          : [supabase.from("customer_links").select(linkSelection).eq("uuid", identifier).maybeSingle()];
 
       for (const attempt of attempts) {
         const { data, error } = await attempt;
@@ -2095,7 +2098,28 @@ function CustomerView({
           continue;
         }
         if (data) {
-          setLink(data as unknown as CustomerLink);
+          const rawLink = data as CustomerLink;
+          const accountSelection =
+            "id,email,password,use_automated_code,code_request_limit,code_requested_count,verification_code,verification_code_received_at,service_type,account_type,expires_at,created_at";
+          const { data: accountData, error: accountError } = await supabase
+            .from("accounts")
+            .select(accountSelection)
+            .eq("id", rawLink.account_id)
+            .maybeSingle();
+
+          if (accountError) {
+            console.error("Supabase account load error:", accountError);
+          }
+
+          if (accountData) {
+            setLink({ ...rawLink, accounts: accountData as NetflixAccount });
+          } else {
+            console.error("Supabase account load error:", {
+              message: "No account found for customer link",
+              accountId: rawLink.account_id,
+              linkId: rawLink.id,
+            });
+          }
           setLoading(false);
           return;
         }
