@@ -2016,13 +2016,14 @@ function CustomerView({
           : current,
       );
       setCodeRequestState("ready");
+      setToast({ label: "تم استلام كود جديد", at: Date.now() });
       if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
       if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
       if (countdownRef.current) window.clearInterval(countdownRef.current);
       return;
     }
 
-    if (Date.now() - startedAt >= 10_000) {
+    if (Date.now() - startedAt >= 15_000) {
       setCodeRequestState("failed");
       if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
       if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
@@ -2035,7 +2036,7 @@ function CustomerView({
     if (!accountId) return;
 
     setCodeRequestState("loading");
-    setCodeRequestSeconds(10);
+    setCodeRequestSeconds(15);
     requestBaselineRef.current = {
       code: account?.verification_code || null,
       receivedAt: account?.verification_code_received_at || null,
@@ -2067,7 +2068,7 @@ function CustomerView({
       if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
       if (countdownRef.current) window.clearInterval(countdownRef.current);
       setCodeRequestState((current) => (current === "ready" ? current : "failed"));
-    }, 10_000);
+    }, 15_000);
   }
 
   return (
@@ -2149,8 +2150,8 @@ function CustomerView({
                     <div className="rounded-[1.75rem] border border-[#E0D4F8] bg-[#FCFAFF] p-4 shadow-card">
                       <div className="flex items-center justify-between gap-3">
                         <div>
-                          <p className="text-sm font-black text-zinc-700">جاري البحث عن كود حديث...</p>
-                          <p className="mt-1 text-xs font-bold text-zinc-500">سيتم فحص الحساب كل ثانيتين لمدة 10 ثوانٍ</p>
+                          <p className="text-sm font-black text-zinc-700">جاري فحص وتحديث الكود...</p>
+                          <p className="mt-1 text-xs font-bold text-zinc-500">سيتم فحص الحساب كل ثانيتين لمدة 15 ثانية</p>
                         </div>
                         <div className="rounded-full bg-[#F5EEFF] px-4 py-2 text-sm font-black text-[#7C2CE8]">
                           {codeRequestSeconds}s
