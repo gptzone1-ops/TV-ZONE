@@ -2063,11 +2063,7 @@ function CustomerView({
     async function loadCustomer() {
       if (!supabase) {
         const demo =
-          demoLinks.find((item) =>
-            lookup === "short"
-              ? [item.short_id, item.token, item.access_key].includes(identifier)
-              : item.uuid === identifier,
-          ) || {
+          demoLinks.find((item) => (lookup === "short" ? item.short_id === identifier : item.uuid === identifier)) || {
             ...demoLinks[0],
             [lookup === "short" ? "short_id" : "uuid"]: identifier,
           };
@@ -2076,36 +2072,24 @@ function CustomerView({
         return;
       }
 
-      const selection =
-        "id,account_id,uuid,short_id,token,access_key,profile_name,profile_label,profile_code,service_type,created_at,accounts(id,email,use_automated_code,code_request_limit,code_requested_count,verification_code,verification_code_received_at,service_type,account_type,expires_at,created_at)";
+      let request = supabase
+        .from("customer_links")
+        .select(
+          "id,account_id,uuid,short_id,token,access_key,profile_name,profile_label,profile_code,service_type,created_at,accounts(id,email,use_automated_code,code_request_limit,code_requested_count,verification_code,verification_code_received_at,service_type,account_type,expires_at,created_at)",
+        );
 
-      const attempts =
+      request =
         lookup === "short"
-          ? [
-              supabase.from("customer_links").select(selection).eq("short_id", identifier).maybeSingle(),
-              supabase.from("customer_links").select(selection).eq("token", identifier).maybeSingle(),
-              supabase.from("customer_links").select(selection).eq("access_key", identifier).maybeSingle(),
-            ]
-          : [supabase.from("customer_links").select(selection).eq("uuid", identifier).maybeSingle()];
+          ? request.or(`short_id.eq.${identifier},token.eq.${identifier},access_key.eq.${identifier}`)
+          : request.eq("uuid", identifier);
 
-      for (const attempt of attempts) {
-        const { data, error } = await attempt;
-        if (error) {
-          console.error("Supabase customer link load error:", error);
-          continue;
-        }
-        if (data) {
-          setLink(data as unknown as CustomerLink);
-          setLoading(false);
-          return;
-        }
+      const { data, error } = await request.maybeSingle();
+
+      if (error) {
+        console.error("Supabase customer link load error:", error);
+      } else if (data) {
+        setLink(data as unknown as CustomerLink);
       }
-
-      console.error("Supabase customer link load error:", {
-        message: "No matching customer link found",
-        identifier,
-        lookup,
-      });
       setLoading(false);
     }
 
