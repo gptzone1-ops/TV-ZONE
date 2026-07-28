@@ -528,6 +528,27 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     return true;
   }
 
+  async function resetCustomerDevice(linkId: string) {
+    if (supabase) {
+      const { error } = await supabase
+        .from("customer_links")
+        .update({ selected_device: null })
+        .eq("id", linkId);
+
+      if (error) {
+        console.error("Supabase customer device reset error:", error);
+        setToast({ label: "تعذر إعادة ضبط الجهاز المختار", at: Date.now() });
+        return false;
+      }
+    }
+
+    setLinks((current) =>
+      current.map((link) => (link.id === linkId ? { ...link, selected_device: null } : link)),
+    );
+    setToast({ label: "تم إعادة إتاحة اختيار الجهاز للعميل بنجاح", at: Date.now() });
+    return true;
+  }
+
   async function deleteAccount(accountId: string) {
     if (!window.confirm("هل تريد حذف هذا الحساب وجميع روابط العملاء التابعة له؟")) return;
 
@@ -647,6 +668,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
           onDelete={deleteAccount}
           onDeleteLinks={deleteCustomerLinks}
           onUpdateCustomerCodeBalance={updateCustomerCodeBalance}
+          onResetCustomerDevice={resetCustomerDevice}
           onUpdateDates={updateAccountDates}
           onUpdate={updateAccount}
           onLogout={logout}
@@ -683,6 +705,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
         }}
         onDelete={deleteAccount}
         onUpdateCustomerCodeBalance={updateCustomerCodeBalance}
+        onResetCustomerDevice={resetCustomerDevice}
         onLogout={logout}
       />
     </Shell>
@@ -829,6 +852,7 @@ function Dashboard({
   onSelect,
   onDelete,
   onUpdateCustomerCodeBalance,
+  onResetCustomerDevice,
   onBackToServices,
   onLogout,
 }: {
@@ -848,6 +872,7 @@ function Dashboard({
     codeRequestLimit: number,
     resetRequestedCount: boolean,
   ) => Promise<boolean>;
+  onResetCustomerDevice: (linkId: string) => Promise<boolean>;
   onBackToServices: () => void;
   onLogout: () => void;
 }) {
@@ -993,6 +1018,7 @@ function Dashboard({
                 );
               })()}
 
+              <div className="flex flex-col gap-2">
               <button
                 type="button"
                 onClick={() => setEditingCustomerBalance(customerSearchResult.link)}
@@ -1000,6 +1026,18 @@ function Dashboard({
               >
                 تعديل الرصيد
               </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (!window.confirm("هل تريد إعادة ضبط الجهاز المختار لهذا العميل؟")) return;
+                    await onResetCustomerDevice(customerSearchResult.link.id);
+                  }}
+                  className="flex h-11 items-center justify-center gap-2 rounded-2xl border border-amber-200 bg-amber-50 px-4 text-xs font-black text-amber-700 transition hover:bg-amber-100"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  إعادة ضبط الجهاز
+                </button>
+              </div>
             </div>
           </section>
         )}
@@ -1740,6 +1778,7 @@ function AccountDetail({
   onDelete,
   onDeleteLinks,
   onUpdateCustomerCodeBalance,
+  onResetCustomerDevice,
   onUpdateDates,
   onUpdate,
   onLogout,
@@ -1755,6 +1794,7 @@ function AccountDetail({
     codeRequestLimit: number,
     resetRequestedCount: boolean,
   ) => Promise<boolean>;
+  onResetCustomerDevice: (linkId: string) => Promise<boolean>;
   onUpdateDates: (accountId: string, form: { created_at: string; expires_at: string }) => Promise<boolean>;
   onUpdate: Parameters<typeof AccountForm>[0]["onUpdate"];
   onLogout: () => void;
@@ -2139,6 +2179,17 @@ function AccountDetail({
                           (link.code_request_limit ?? 1) - (link.code_requested_count ?? 0),
                         )}
                       </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (!window.confirm("هل تريد إعادة ضبط الجهاز المختار لهذا العميل؟")) return;
+                        await onResetCustomerDevice(link.id);
+                      }}
+                      className="mt-2 flex h-11 w-full items-center justify-center gap-2 rounded-2xl border border-amber-200 bg-amber-50 text-sm font-black text-amber-700 transition hover:bg-amber-100"
+                    >
+                      <RefreshCw className="h-4 w-4" />
+                      إعادة ضبط الجهاز المختار
                     </button>
                   </article>
                 );
