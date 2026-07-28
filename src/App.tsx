@@ -38,6 +38,7 @@ import { hasSupabaseConfig, supabase } from "./lib/supabase";
 import type { AccountType, CustomerLink, NetflixAccount, ServiceType } from "./types";
 
 type Screen = "selector" | "netflix" | "account";
+type DeviceView = "mobile" | "screen";
 type Toast = { label: string; at: number } | null;
 type StatTone = "neutral" | "green" | "red";
 type AccountTypeFilter = "all" | AccountType;
@@ -1923,6 +1924,7 @@ function CustomerView({
   const [agreeDisclaimer, setAgreeDisclaimer] = useState(false);
   const [codeRequestState, setCodeRequestState] = useState<"idle" | "loading" | "ready" | "failed">("idle");
   const [codeRequestSeconds, setCodeRequestSeconds] = useState(0);
+  const [deviceView, setDeviceView] = useState<DeviceView>("mobile");
   const pollTimerRef = useRef<number | null>(null);
   const timeoutRef = useRef<number | null>(null);
   const countdownRef = useRef<number | null>(null);
@@ -2146,7 +2148,63 @@ function CustomerView({
 
                 <div className="space-y-5">
                   <LoginCopyCard label="البريد الإلكتروني" value={account.email} icon={Mail} setToast={setToast} theme={theme} />
-                  {codeRequestState === "loading" ? (
+
+                  <div className="rounded-[1.75rem] border border-[#E0D4F8] bg-[#F8F4FF] p-3 shadow-card">
+                    <p className="mb-3 px-2 text-sm font-black text-zinc-700">حدد الجهاز</p>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <button
+                        type="button"
+                        onClick={() => setDeviceView("mobile")}
+                        className={cn(
+                          "flex min-h-12 items-center justify-center gap-2 rounded-2xl px-3 text-sm font-black transition",
+                          deviceView === "mobile"
+                            ? "bg-[#8B35F5] text-white shadow-[0_12px_26px_rgba(139,53,245,0.22)]"
+                            : "bg-white text-[#7C2CE8] hover:bg-[#F0E7FF]",
+                        )}
+                      >
+                        <Smartphone className="h-4 w-4" />
+                        جوال / آيباد / بي سي / لابتوب
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDeviceView("screen")}
+                        className={cn(
+                          "flex min-h-12 items-center justify-center gap-2 rounded-2xl px-3 text-sm font-black transition",
+                          deviceView === "screen"
+                            ? "bg-[#8B35F5] text-white shadow-[0_12px_26px_rgba(139,53,245,0.22)]"
+                            : "bg-white text-[#7C2CE8] hover:bg-[#F0E7FF]",
+                        )}
+                      >
+                        <MonitorPlay className="h-4 w-4" />
+                        شاشة / سوني
+                      </button>
+                    </div>
+                  </div>
+
+                  {deviceView === "screen" ? (
+                    <div className="rounded-[1.75rem] border border-[#E0D4F8] bg-gradient-to-l from-white to-[#F7F2FF] p-4 shadow-card">
+                      <div className="flex items-center gap-4">
+                        <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-[#F0E7FF] text-[#8B35F5]">
+                          <WhatsAppLogo className="h-7 w-7" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-lg font-black">شاشة / سوني</p>
+                          <p className="mt-1 text-xs font-bold leading-6 text-zinc-500">
+                            لهذا النوع من الأجهزة، تواصل مع الدعم للحصول على الكود ومساعدتك في الدخول.
+                          </p>
+                        </div>
+                      </div>
+                      <a
+                        href={supportWhatsAppUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#8B35F5] text-sm font-black text-white shadow-[0_14px_32px_rgba(139,53,245,0.24)] transition hover:bg-[#7626DD]"
+                      >
+                        <WhatsAppLogo className="h-5 w-5" />
+                        تواصل مع الدعم للحصول على الكود
+                      </a>
+                    </div>
+                  ) : codeRequestState === "loading" ? (
                     <div className="rounded-[1.75rem] border border-[#E0D4F8] bg-[#FCFAFF] p-4 shadow-card">
                       <div className="flex items-center justify-between gap-3">
                         <div>
@@ -2160,7 +2218,7 @@ function CustomerView({
                       <div className="mt-4 h-2 overflow-hidden rounded-full bg-[#EDE3FF]">
                         <div
                           className="h-full rounded-full bg-[#8B35F5] transition-all"
-                          style={{ width: `${Math.max(10 - codeRequestSeconds, 0) * 10}%` }}
+                          style={{ width: `${(Math.max(15 - codeRequestSeconds, 0) / 15) * 100}%` }}
                         />
                       </div>
                     </div>
@@ -2208,7 +2266,7 @@ function CustomerView({
                         <div className="min-w-0 flex-1">
                           <p className="text-lg font-black">طلب كود التحقق</p>
                           <p className="mt-1 text-xs font-bold leading-6 text-zinc-500">
-                            اضغط للبحث تلقائياً داخل قاعدة البيانات لمدة 10 ثوانٍ.
+                            اضغط للبحث تلقائياً داخل قاعدة البيانات لمدة 15 ثانية.
                           </p>
                         </div>
                       </div>
@@ -2223,7 +2281,7 @@ function CustomerView({
                     </div>
                   )}
 
-                  {codeRequestState === "failed" && (
+                  {deviceView === "mobile" && codeRequestState === "failed" && !account.verification_code && (
                     <div className="rounded-[1.75rem] border border-[#E0D4F8] bg-white p-4 shadow-card">
                       <p className="text-sm font-black text-zinc-700">لم يصل الكود بعد.</p>
                       <p className="mt-1 text-xs font-bold text-zinc-500">
