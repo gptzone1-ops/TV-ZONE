@@ -43,6 +43,7 @@ type DeviceView = "mobile" | "screen";
 type Toast = { label: string; at: number } | null;
 type StatTone = "neutral" | "green" | "red";
 type AccountTypeFilter = "all" | AccountType;
+type CustomerSearchResult = { link: CustomerLink; account: NetflixAccount };
 type ServiceTheme = {
   type: ServiceType;
   name: string;
@@ -536,6 +537,14 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
 
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId) || null;
   const activeLinks = links.filter((link) => link.account_id === selectedAccountId);
+  const customerNumberMatch = query.trim().match(/^#?(\d+)$/);
+  const customerSearchResult = customerNumberMatch
+    ? (() => {
+        const link = links.find((item) => item.link_number === Number(customerNumberMatch[1]));
+        const account = link ? accounts.find((item) => item.id === link.account_id) : null;
+        return link && account ? { link, account } : null;
+      })()
+    : null;
   const activeAccounts = serviceAccounts.filter((account) => !isExpired(account.expires_at)).length;
   const expiredAccounts = serviceAccounts.filter((account) => isExpired(account.expires_at)).length;
   const privateAccounts = serviceAccounts.filter((account) => account.account_type === "private").length;
@@ -600,6 +609,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
         accounts={filteredAccounts}
         loading={loading}
         query={query}
+        customerSearchResult={customerSearchResult}
         stats={[
           { label: "الحسابات", value: serviceAccounts.length, icon: Users, tone: "neutral" },
           { label: "الحسابات الفعالة", value: activeAccounts, icon: CircleCheck, tone: "green" },
@@ -620,6 +630,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
           setScreen("account");
         }}
         onDelete={deleteAccount}
+        onUpdateCustomerCodeBalance={updateCustomerCodeBalance}
         onLogout={logout}
       />
     </Shell>
@@ -758,12 +769,14 @@ function Dashboard({
   stats,
   service,
   query,
+  customerSearchResult,
   loading,
   onQuery,
   onAdd,
   onUpdate,
   onSelect,
   onDelete,
+  onUpdateCustomerCodeBalance,
   onBackToServices,
   onLogout,
 }: {
@@ -771,12 +784,18 @@ function Dashboard({
   stats: Array<{ label: string; value: number; icon: LucideIcon; tone: StatTone }>;
   service: ServiceType;
   query: string;
+  customerSearchResult: CustomerSearchResult | null;
   loading: boolean;
   onQuery: (query: string) => void;
   onAdd: Parameters<typeof AccountForm>[0]["onAdd"];
   onUpdate: Parameters<typeof AccountForm>[0]["onUpdate"];
   onSelect: (id: string) => void;
   onDelete: (id: string) => Promise<void>;
+  onUpdateCustomerCodeBalance: (
+    linkId: string,
+    codeRequestLimit: number,
+    resetRequestedCount: boolean,
+  ) => Promise<boolean>;
   onBackToServices: () => void;
   onLogout: () => void;
 }) {
@@ -784,6 +803,7 @@ function Dashboard({
   const [editingAccount, setEditingAccount] = useState<NetflixAccount | null>(null);
   const [filterOpen, setFilterOpen] = useState(false);
   const [accountTypeFilter, setAccountTypeFilter] = useState<AccountTypeFilter>("all");
+  const [editingCustomerBalance, setEditingCustomerBalance] = useState<CustomerLink | null>(null);
 
   const openAddForm = () => {
     setEditingAccount(null);
@@ -887,6 +907,54 @@ function Dashboard({
           </div>
         </section>
 
+        {customerSearchResult && (
+          <section className="rounded-[2rem] border border-[#E8DCFF] bg-white p-5 shadow-[0_18px_55px_rgba(70,40,120,0.10)] md:p-7">
+            <div className="mb-5">
+              <p className="text-xs font-black text-[#8B35F5]">نتيجة البحث برقم العميل</p>
+              <h2 className="mt-1 text-2xl font-black">عميل #{customerSearchResult.link.link_number}</h2>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-[1fr_auto_auto] md:items-center">
+              <div className="min-w-0 rounded-2xl border border-[#E8DDF8] bg-[#FCFAFF] p-4">
+                <p className="text-xs font-black text-zinc-500">البريد الإلكتروني</p>
+                <p className="mt-2 break-all text-lg font-black text-zinc-950" dir="ltr">
+                  {customerSearchResult.account.email}
+                </p>
+              </div>
+
+              {(() => {
+                const limit = Math.max(0, customerSearchResult.link.code_request_limit ?? 1);
+                const used = Math.max(0, customerSearchResult.link.code_requested_count ?? 0);
+                const remaining = Math.max(0, limit - used);
+                return (
+                  <div
+                    className={cn(
+                      "rounded-2xl border px-5 py-4 text-center",
+                      remaining > 0
+                        ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                        : "border-rose-200 bg-rose-50 text-rose-700",
+                    )}
+                  >
+                    <p className="text-xs font-black">حالة الرصيد</p>
+                    <p className="mt-1 text-lg font-black">
+                      {remaining > 0 ? `المتبقي: ${remaining} من ${limit}` : "المتبقي: 0 - مستهلك"}
+                    </p>
+                  </div>
+                );
+              })()}
+
+              <button
+                type="button"
+                onClick={() => setEditingCustomerBalance(customerSearchResult.link)}
+                className="h-13 rounded-2xl bg-[#8B35F5] px-6 text-sm font-black text-white shadow-[0_12px_28px_rgba(139,53,245,0.24)] transition hover:-translate-y-0.5 hover:bg-[#7626DD]"
+              >
+                تعديل الرصيد
+              </button>
+            </div>
+          </section>
+        )}
+
+        {!customerSearchResult && (
         <section className="overflow-hidden rounded-[2rem] border border-[#E8DCFF] bg-white shadow-[0_18px_55px_rgba(70,40,120,0.10)]">
           <div className="flex flex-col gap-4 border-b border-[#EEE7F8] px-5 py-5 md:flex-row md:items-center md:justify-between">
             <div>
@@ -960,6 +1028,7 @@ function Dashboard({
             </div>
           )}
         </section>
+        )}
       </div>
 
       {formOpen && (
@@ -972,6 +1041,106 @@ function Dashboard({
           onClose={() => setFormOpen(false)}
         />
       )}
+      {editingCustomerBalance && (
+        <CustomerBalanceModal
+          link={editingCustomerBalance}
+          onClose={() => setEditingCustomerBalance(null)}
+          onSave={onUpdateCustomerCodeBalance}
+        />
+      )}
+    </div>
+  );
+}
+
+function CustomerBalanceModal({
+  link,
+  onClose,
+  onSave,
+}: {
+  link: CustomerLink;
+  onClose: () => void;
+  onSave: (linkId: string, codeRequestLimit: number, resetRequestedCount: boolean) => Promise<boolean>;
+}) {
+  const [limit, setLimit] = useState(String(link.code_request_limit ?? 1));
+  const [resetCount, setResetCount] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const currentLimit = Math.max(0, link.code_request_limit ?? 1);
+  const currentUsed = Math.max(0, link.code_requested_count ?? 0);
+  const currentRemaining = Math.max(0, currentLimit - currentUsed);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/55 p-4 backdrop-blur-sm">
+      <div className="w-full max-w-md rounded-[2rem] border border-[#E4D6FA] bg-white p-6 shadow-premium-lg" role="dialog" aria-modal="true">
+        <div className="mb-5 flex items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-black text-[#8B35F5]">عميل رقم #{link.link_number ?? "—"}</p>
+            <h2 className="mt-1 text-2xl font-black text-zinc-950">تعديل رصيد الأكواد</h2>
+            <p className="mt-2 text-sm font-bold text-zinc-500">
+              المتبقي حالياً: {currentRemaining} من {currentLimit}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-10 w-10 items-center justify-center rounded-xl border border-[#E4D6FA] text-zinc-500 transition hover:bg-[#F8F4FF]"
+            aria-label="إغلاق"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <label className="block">
+          <span className="mb-2 block text-sm font-black text-zinc-700">رفع حد المحاولات</span>
+          <input
+            type="number"
+            min="0"
+            step="1"
+            value={limit}
+            onChange={(event) => setLimit(event.target.value)}
+            className="admin-modal-input"
+          />
+        </label>
+
+        <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-2xl border border-[#E4D6FA] bg-[#FCFAFF] p-4">
+          <input
+            type="checkbox"
+            checked={resetCount}
+            onChange={(event) => setResetCount(event.target.checked)}
+            className="mt-1 h-4 w-4 rounded border-[#CDBAF2] text-[#8B35F5] focus:ring-[#8B35F5]"
+          />
+          <span>
+            <strong className="block text-sm font-black text-zinc-800">إعادة تصفير المحاولات المستهلكة</strong>
+            <span className="mt-1 block text-xs font-bold text-zinc-500">
+              سيصبح عدد المحاولات المستهلكة صفراً فور الحفظ.
+            </span>
+          </span>
+        </label>
+
+        <div className="mt-6 flex gap-3">
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-12 rounded-xl border border-[#E4D6FA] px-5 text-sm font-black text-zinc-600 transition hover:bg-zinc-50"
+          >
+            إلغاء
+          </button>
+          <button
+            type="button"
+            disabled={saving || limit.trim() === ""}
+            onClick={async () => {
+              const numericLimit = Number(limit);
+              if (!Number.isInteger(numericLimit) || numericLimit < 0) return;
+              setSaving(true);
+              const succeeded = await onSave(link.id, numericLimit, resetCount);
+              setSaving(false);
+              if (succeeded) onClose();
+            }}
+            className="h-12 flex-1 rounded-xl bg-[#8B35F5] px-5 text-sm font-black text-white shadow-[0_12px_28px_rgba(139,53,245,0.22)] transition hover:bg-[#7626DD] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {saving ? "جاري الحفظ..." : "حفظ الرصيد"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -2168,14 +2337,12 @@ function CustomerView({
   const [codeRequestSeconds, setCodeRequestSeconds] = useState(0);
   const [nowTick, setNowTick] = useState(() => Date.now());
   const deviceStorageKey = `zone-device-choice:${lookup}:${identifier}`;
-  const codeAttemptKey = `zone-code-attempted:${lookup}:${identifier}`;
   const [deviceView, setDeviceView] = useState<DeviceView | null>(() => {
     const saved = localStorage.getItem(deviceStorageKey);
     return saved === "mobile" || saved === "screen" ? saved : null;
   });
   const [pendingDeviceView, setPendingDeviceView] = useState<DeviceView | null>(null);
   const [agreeDeviceChoice, setAgreeDeviceChoice] = useState(false);
-  const [attemptUsed, setAttemptUsed] = useState(() => localStorage.getItem(codeAttemptKey) === "true");
   const [showPreRequestModal, setShowPreRequestModal] = useState(false);
   const [agreePreRequest, setAgreePreRequest] = useState(false);
   const pollTimerRef = useRef<number | null>(null);
@@ -2220,12 +2387,6 @@ function CustomerView({
   }, [deviceStorageKey]);
 
   useEffect(() => {
-    setAttemptUsed(localStorage.getItem(codeAttemptKey) === "true");
-    setShowPreRequestModal(false);
-    setAgreePreRequest(false);
-  }, [codeAttemptKey]);
-
-  useEffect(() => {
     const shouldLock = showDisclaimer || showReminder || Boolean(pendingDeviceView);
     const previous = document.body.style.overflow;
     if (shouldLock) document.body.style.overflow = "hidden";
@@ -2260,6 +2421,10 @@ function CustomerView({
   const codeSecondsRemaining = codeExpiresAtMs ? Math.max(0, Math.ceil((codeExpiresAtMs - nowTick) / 1000)) : 0;
   const codeIsVisible = Boolean(account?.verification_code && codeExpiresAtMs && codeExpiresAtMs > nowTick);
   const automatedCodeEnabled = account?.use_automated_code !== false;
+  const codeRequestLimit = Math.max(0, link?.code_request_limit ?? 1);
+  const codeRequestedCount = Math.max(0, link?.code_requested_count ?? 0);
+  const hasCodeRequestCredit = codeRequestedCount < codeRequestLimit;
+  const attemptUsed = !hasCodeRequestCredit;
 
   useEffect(() => {
     if (automatedCodeEnabled) return;
@@ -2300,10 +2465,40 @@ function CustomerView({
     setAgreePreRequest(false);
   }
 
-  function confirmPreRequest() {
-    if (!automatedCodeEnabled || attemptUsed) return;
-    localStorage.setItem(codeAttemptKey, "true");
-    setAttemptUsed(true);
+  async function confirmPreRequest() {
+    if (!automatedCodeEnabled || !link?.id || !hasCodeRequestCredit) return;
+    const nextRequestedCount = codeRequestedCount + 1;
+
+    if (supabase) {
+      const { data, error } = await supabase
+        .from("customer_links")
+        .update({ code_requested_count: nextRequestedCount })
+        .eq("id", link.id)
+        .eq("code_requested_count", codeRequestedCount)
+        .select("code_requested_count,code_request_limit")
+        .maybeSingle();
+
+      if (error || !data) {
+        console.error("Supabase customer code request count update error:", error);
+        setToast({ label: "تعذر خصم محاولة الكود، حدّث الصفحة وحاول مجدداً", at: Date.now() });
+        return;
+      }
+
+      setLink((current) =>
+        current
+          ? {
+              ...current,
+              code_requested_count: data.code_requested_count,
+              code_request_limit: data.code_request_limit,
+            }
+          : current,
+      );
+    } else {
+      setLink((current) =>
+        current ? { ...current, code_requested_count: nextRequestedCount } : current,
+      );
+    }
+
     setShowPreRequestModal(false);
     setAgreePreRequest(false);
     startCodeRequest();
@@ -2361,7 +2556,7 @@ function CustomerView({
 
   function startCodeRequest() {
     const accountId = account?.id;
-    if (!automatedCodeEnabled || !accountId || attemptUsed) return;
+    if (!automatedCodeEnabled || !accountId) return;
 
     setCodeRequestState("loading");
     setCodeRequestSeconds(15);
