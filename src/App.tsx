@@ -444,12 +444,12 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
   async function updateCustomerCodeBalance(
     linkId: string,
     codeRequestLimit: number,
-    resetRequestedCount: boolean,
+    _resetRequestedCount: boolean,
   ) {
     const normalizedLimit = Math.max(0, Math.floor(codeRequestLimit));
     const updates = {
       code_request_limit: normalizedLimit,
-      ...(resetRequestedCount ? { code_requested_count: 0 } : {}),
+      code_requested_count: 0,
     };
 
     if (supabase) {
@@ -467,7 +467,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
           ? {
               ...link,
               code_request_limit: normalizedLimit,
-              ...(resetRequestedCount ? { code_requested_count: 0 } : {}),
+              code_requested_count: 0,
             }
           : link,
       ),
@@ -1060,7 +1060,6 @@ function CustomerBalanceModal({
   onSave: (linkId: string, codeRequestLimit: number, resetRequestedCount: boolean) => Promise<boolean>;
 }) {
   const [limit, setLimit] = useState(String(link.code_request_limit ?? 1));
-  const [resetCount, setResetCount] = useState(false);
   const [saving, setSaving] = useState(false);
   const currentLimit = Math.max(0, link.code_request_limit ?? 1);
   const currentUsed = Math.max(0, link.code_requested_count ?? 0);
@@ -1097,20 +1096,9 @@ function CustomerBalanceModal({
           />
         </label>
 
-        <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-2xl border border-[#E4D6FA] bg-[#FCFAFF] p-4">
-          <input
-            type="checkbox"
-            checked={resetCount}
-            onChange={(event) => setResetCount(event.target.checked)}
-            className="mt-1 h-4 w-4 rounded border-[#CDBAF2] text-[#8B35F5] focus:ring-[#8B35F5]"
-          />
-          <span>
-            <strong className="block text-sm font-black text-zinc-800">إعادة تصفير المحاولات المستهلكة</strong>
-            <span className="mt-1 block text-xs font-bold text-zinc-500">
-              سيصبح عدد المحاولات المستهلكة صفراً فور الحفظ.
-            </span>
-          </span>
-        </label>
+        <p className="mt-4 rounded-2xl border border-[#E4D6FA] bg-[#FCFAFF] p-4 text-sm font-bold text-zinc-600">
+          الرقم المدخل سيصبح الرصيد المتاح مباشرة، وسيتم تصفير المحاولات المستهلكة تلقائياً.
+        </p>
 
         <div className="mt-6 flex gap-3">
           <button
@@ -1127,7 +1115,7 @@ function CustomerBalanceModal({
               const numericLimit = Number(limit);
               if (!Number.isInteger(numericLimit) || numericLimit < 0) return;
               setSaving(true);
-              const succeeded = await onSave(link.id, numericLimit, resetCount);
+              const succeeded = await onSave(link.id, numericLimit, true);
               setSaving(false);
               if (succeeded) onClose();
             }}
@@ -1736,7 +1724,6 @@ function AccountDetail({
   const [loadingAdminVerificationCode, setLoadingAdminVerificationCode] = useState(false);
   const [editingCodeBalanceLink, setEditingCodeBalanceLink] = useState<CustomerLink | null>(null);
   const [codeBalanceLimit, setCodeBalanceLimit] = useState("1");
-  const [resetCodeBalanceCount, setResetCodeBalanceCount] = useState(false);
   const [savingCodeBalance, setSavingCodeBalance] = useState(false);
 
   useEffect(() => {
@@ -2107,7 +2094,6 @@ function AccountDetail({
                       onClick={() => {
                         setEditingCodeBalanceLink(link);
                         setCodeBalanceLimit(String(link.code_request_limit ?? 1));
-                        setResetCodeBalanceCount(false);
                       }}
                       className="mt-2 flex h-11 w-full items-center justify-center gap-2 rounded-2xl border border-[#DCCBFA] bg-[#F8F4FF] text-sm font-black text-[#7C2CE8] transition hover:border-[#8B35F5] hover:bg-[#F3ECFF]"
                     >
@@ -2263,25 +2249,15 @@ function AccountDetail({
               />
             </label>
 
-            <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-2xl border border-[#E4D6FA] bg-[#FCFAFF] p-4">
-              <input
-                type="checkbox"
-                checked={resetCodeBalanceCount}
-                onChange={(event) => setResetCodeBalanceCount(event.target.checked)}
-                className="mt-1 h-4 w-4 rounded border-[#CDBAF2] text-[#8B35F5] focus:ring-[#8B35F5]"
-              />
-              <span>
-                <strong className="block text-sm font-black text-zinc-800">تصفير المحاولات المستهلكة</strong>
-                <span className="mt-1 block text-xs font-bold text-zinc-500">
-                  الرصيد المتبقي:{" "}
-                  {Math.max(
-                    0,
-                    (editingCodeBalanceLink.code_request_limit ?? 1) -
-                      (editingCodeBalanceLink.code_requested_count ?? 0),
-                  )}
-                </span>
-              </span>
-            </label>
+            <p className="mt-4 rounded-2xl border border-[#E4D6FA] bg-[#FCFAFF] p-4 text-sm font-bold text-zinc-600">
+              الرصيد المتبقي:{" "}
+              {Math.max(
+                0,
+                (editingCodeBalanceLink.code_request_limit ?? 1) -
+                  (editingCodeBalanceLink.code_requested_count ?? 0),
+              )}
+              . الرقم الجديد سيصبح الرصيد المتاح وسيتم تصفير الاستهلاك تلقائياً.
+            </p>
 
             <div className="mt-6 flex gap-3">
               <button
@@ -2304,7 +2280,7 @@ function AccountDetail({
                   const succeeded = await onUpdateCustomerCodeBalance(
                     editingCodeBalanceLink.id,
                     limit,
-                    resetCodeBalanceCount,
+                    true,
                   );
                   setSavingCodeBalance(false);
                   if (succeeded) setEditingCodeBalanceLink(null);
