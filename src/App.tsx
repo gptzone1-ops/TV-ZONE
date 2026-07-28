@@ -164,6 +164,58 @@ async function copyTextSilent(text: string) {
   await navigator.clipboard.writeText(text);
 }
 
+type VerificationCodeResult = {
+  code: string | null;
+  receivedAt: string | null;
+  error: unknown;
+};
+
+async function readLatestVerificationCode(accountId: string): Promise<VerificationCodeResult> {
+  if (!supabase) {
+    return { code: null, receivedAt: null, error: null };
+  }
+
+  const { data, error } = await supabase
+    .from("accounts")
+    .select("verification_code,verification_code_received_at")
+    .eq("id", accountId)
+    .maybeSingle();
+
+  if (!error && data?.verification_code) {
+    return {
+      code: data.verification_code,
+      receivedAt: data.verification_code_received_at || null,
+      error: null,
+    };
+  }
+
+  if (error) console.error("Supabase verification code read error:", error);
+
+  const fallback = await supabase
+    .from("customer_links")
+    .select("verification_code,verification_code_received_at")
+    .eq("account_id", accountId)
+    .not("verification_code", "is", null)
+    .order("verification_code_received_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!fallback.error && fallback.data?.verification_code) {
+    return {
+      code: fallback.data.verification_code,
+      receivedAt: fallback.data.verification_code_received_at || null,
+      error: null,
+    };
+  }
+
+  if (fallback.error) console.error("Supabase customer link code fallback error:", fallback.error);
+  return {
+    code: null,
+    receivedAt: null,
+    error: error || fallback.error || null,
+  };
+}
+
 const demoAccount: NetflixAccount = {
   id: "demo-account",
   email: "zone.netflix@example.com",
@@ -1759,47 +1811,29 @@ function AccountDetail({
     }
 
     setLoadingAdminVerificationCode(true);
-    const selection = "verification_code,verification_code_received_at";
-    const attempts = [
-      supabase
-        .from("customer_links")
-        .select(selection)
-        .eq("account_id", account.id)
-        .not("verification_code", "is", null)
-        .order("verification_code_received_at", { ascending: false })
-        .limit(1)
-        .maybeSingle(),
-      supabase
-        .from("customer_links")
-        .select(selection)
-        .eq("id", account.id)
-        .not("verification_code", "is", null)
-        .order("verification_code_received_at", { ascending: false })
-        .limit(1)
-        .maybeSingle(),
-      supabase
-        .from("customer_links")
-        .select(selection)
-        .ilike("email", account.email)
-        .not("verification_code", "is", null)
-        .order("verification_code_received_at", { ascending: false })
-        .limit(1)
-        .maybeSingle(),
-    ];
+    const latestCode = await readLatestVerificationCode(account.id);
 
-    for (const attempt of attempts) {
-      const { data, error } = await attempt;
-      if (error) {
-        console.error("Supabase admin verification code read error:", error);
-        continue;
+    if (latestCode.code) {
+      const { error: saveError } = await supabase
+        .from("customer_links")
+        .update({
+          verification_code: latestCode.code,
+          verification_code_received_at: latestCode.receivedAt || new Date().toISOString(),
+        })
+        .eq("account_id", account.id);
+
+      if (saveError) {
+        console.error("Supabase customer link verification code sync error:", saveError);
       }
-      if (data?.verification_code) {
-        setAdminVerificationCode(data.verification_code);
-        setAdminVerificationCodeReceivedAt(data.verification_code_received_at || "");
-        setLoadingAdminVerificationCode(false);
-        setToast({ label: "تم جلب كود التحقق للمشرف", at: Date.now() });
-        return;
-      }
+
+      setAdminVerificationCode(latestCode.code);
+      setAdminVerificationCodeReceivedAt(latestCode.receivedAt || "");
+      setLoadingAdminVerificationCode(false);
+      setToast({
+        label: saveError ? "تم جلب الكود لكن تعذر مزامنته مع روابط العملاء" : "تم جلب كود التحقق للمشرف",
+        at: Date.now(),
+      });
+      return;
     }
 
     setLoadingAdminVerificationCode(false);
@@ -2523,20 +2557,15 @@ function CustomerView({
       return;
     }
 
-    const { data, error } = await supabase
-      .from("accounts")
-      .select("verification_code,verification_code_received_at")
-      .eq("id", accountId)
-      .maybeSingle();
-
-    const currentCode = data?.verification_code || null;
-    const currentReceivedAt = data?.verification_code_received_at || null;
+    const latestCode = await readLatestVerificationCode(accountId);
+    const currentCode = latestCode.code;
+    const currentReceivedAt = latestCode.receivedAt;
     const baseline = requestBaselineRef.current;
     const hasFreshCode =
       Boolean(currentCode) &&
       (baseline.code !== currentCode || baseline.receivedAt !== currentReceivedAt);
 
-    if (!error && hasFreshCode) {
+    if (!latestCode.error && hasFreshCode) {
       setLink((current) =>
         current && current.accounts
           ? {
