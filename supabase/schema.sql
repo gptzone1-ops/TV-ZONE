@@ -127,12 +127,26 @@ alter table public.accounts
 alter table public.customer_links
   add column if not exists service_type text not null default 'netflix';
 
+alter table if exists public.customer_links
+  drop constraint if exists unique_customer_email;
+
+alter table if exists public.customer_links
+  drop constraint if exists customer_links_email_key;
+
+drop index if exists public.unique_customer_email;
+drop index if exists public.customer_links_email_key;
+drop index if exists public.customer_links_email_unique;
+
 create unique index if not exists customer_links_short_id_key
   on public.customer_links(short_id)
   where short_id is not null;
 
 create unique index if not exists customer_links_link_number_key
   on public.customer_links(link_number);
+
+create index if not exists customer_links_email_idx
+  on public.customer_links(lower(email))
+  where email is not null and btrim(email) <> '';
 
 create index if not exists accounts_created_at_idx on public.accounts(created_at desc);
 create index if not exists customer_links_account_id_idx on public.customer_links(account_id);

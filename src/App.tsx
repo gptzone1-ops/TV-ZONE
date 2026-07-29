@@ -137,10 +137,15 @@ function isDuplicateEmailError(error: unknown) {
   const message = `${supabaseError?.message || ""} ${supabaseError?.details || ""}`.toLowerCase();
   return (
     supabaseError?.code === "23505" ||
-    message.includes("unique_customer_email") ||
     message.includes("unique constraint") ||
     message.includes("duplicate key")
   );
+}
+
+function isCustomerLinksEmailConstraintError(error: unknown) {
+  const supabaseError = error as { message?: string; details?: string } | null;
+  const message = `${supabaseError?.message || ""} ${supabaseError?.details || ""}`.toLowerCase();
+  return message.includes("unique_customer_email") || message.includes("customer_links_email");
 }
 
 function accountFormSucceeded(result: AccountFormResult) {
@@ -483,6 +488,20 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     }
 
     if (linksError) {
+      if (isCustomerLinksEmailConstraintError(linksError)) {
+        await supabase.from("accounts").delete().eq("id", account.id);
+        setLoading(false);
+        setToast({
+          label: "يوجد قيد مكرر خاطئ على روابط العملاء. نفّذ SQL إزالة unique_customer_email ثم أعد المحاولة.",
+          at: Date.now(),
+          tone: "error",
+        });
+        return {
+          ok: false,
+          error: "يوجد قيد مكرر خاطئ على روابط العملاء. نفّذ SQL إزالة unique_customer_email ثم أعد المحاولة.",
+        };
+      }
+
       if (isDuplicateEmailError(linksError)) {
         await supabase.from("accounts").delete().eq("id", account.id);
         setLoading(false);
