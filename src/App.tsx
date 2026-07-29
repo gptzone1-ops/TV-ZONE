@@ -850,8 +850,28 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     );
   }, [serviceAccounts, links, query]);
 
+  const linksByAccount = useMemo(() => {
+    const grouped = new Map<string, CustomerLink[]>();
+
+    links.forEach((link) => {
+      const accountLinks = grouped.get(link.account_id) || [];
+      accountLinks.push(link);
+      grouped.set(link.account_id, accountLinks);
+    });
+
+    grouped.forEach((accountLinks) => {
+      accountLinks.sort((first, second) =>
+        first.profile_name.localeCompare(second.profile_name, undefined, {
+          numeric: true,
+          sensitivity: "base",
+        }),
+      );
+    });
+
+    return grouped;
+  }, [links]);
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId) || null;
-  const activeLinks = links.filter((link) => link.account_id === selectedAccountId);
+  const activeLinks = selectedAccountId ? linksByAccount.get(selectedAccountId) || [] : [];
   const customerNumberMatch = query.trim().match(/^#?(\d+)$/);
   const customerSearchResult = customerNumberMatch
     ? (() => {
