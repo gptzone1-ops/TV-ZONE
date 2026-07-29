@@ -25,6 +25,7 @@ export type CustomerLink = {
   selected_device?: "mobile" | "screen" | null;
   tv_approval_url?: string | null;
   tv_approval_requested_at?: string | null;
+  tv_approval_visible_at?: string | null;
   updated_at?: string | null;
   uuid: string;
   short_id?: string | null;

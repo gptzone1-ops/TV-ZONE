@@ -40,10 +40,11 @@ import type { AccountType, CustomerLink, NetflixAccount, ServiceType } from "./t
 
 type Screen = "selector" | "netflix" | "account";
 type DeviceView = "mobile" | "screen";
-type Toast = { label: string; at: number } | null;
+type Toast = { label: string; at: number; tone?: "success" | "error" } | null;
 type StatTone = "neutral" | "green" | "red";
 type AccountTypeFilter = "all" | AccountType;
 type CustomerSearchResult = { link: CustomerLink; account: NetflixAccount };
+type AccountFormResult = boolean | { ok: boolean; error?: string };
 type ServiceTheme = {
   type: ServiceType;
   name: string;
@@ -65,6 +66,11 @@ const adminAuthValue = `remembered:${adminPassword}`;
 const whatsappNumber = "966581688656";
 const disclaimerStorageKey = "disclaimer_accepted";
 const dayMs = 1000 * 60 * 60 * 24;
+const tvApprovalRecentWindowMs = 5 * 60 * 1000;
+const tvApprovalRevealMs = 2 * 60 * 1000;
+const tvApprovalPollMs = 3 * 1000;
+const duplicateEmailMessage = "عفواً، هذا البريد الإلكتروني مسجل مسبقاً ولا يمكن تكراره";
+const duplicateEmailSaveMessage = duplicateEmailMessage;
 
 const serviceThemes: Record<ServiceType, ServiceTheme> = {
   netflix: {
@@ -119,6 +125,29 @@ function daysRemaining(expiresAt: string) {
 
 function isExpired(expiresAt: string) {
   return daysRemaining(expiresAt) <= 0;
+}
+
+function normalizeEmail(email: string) {
+  return email.trim().toLowerCase();
+}
+
+function isDuplicateEmailError(error: unknown) {
+  const supabaseError = error as { code?: string; message?: string; details?: string } | null;
+  const message = `${supabaseError?.message || ""} ${supabaseError?.details || ""}`.toLowerCase();
+  return (
+    supabaseError?.code === "23505" ||
+    message.includes("unique_customer_email") ||
+    message.includes("unique constraint") ||
+    message.includes("duplicate key")
+  );
+}
+
+function accountFormSucceeded(result: AccountFormResult) {
+  return typeof result === "boolean" ? result : result.ok;
+}
+
+function accountFormError(result: AccountFormResult) {
+  return typeof result === "boolean" ? undefined : result.error;
 }
 
 function remainingLabel(expiresAt: string) {
@@ -339,9 +368,44 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     setLoading(false);
   }
 
-  async function addAccount(form: { email: string; password: string; account_type: AccountType; supplier_code_url?: string }) {
+  async function emailAlreadyExists(email: string, exceptAccountId?: string) {
+    const normalized = normalizeEmail(email);
+    if (
+      accounts.some((account) => account.id !== exceptAccountId && normalizeEmail(account.email) === normalized) ||
+      links.some((link) => link.account_id !== exceptAccountId && normalizeEmail(link.email || "") === normalized)
+    ) {
+      return true;
+    }
+
+    if (!supabase) return false;
+
+    const { data, error } = await supabase
+      .from("customer_links")
+      .select("id,account_id")
+      .eq("email", normalized);
+
+    if (error) {
+      console.error("Supabase duplicate email validation error:", error);
+      throw new Error("duplicate_email_lookup_failed");
+    }
+
+    return Boolean((data || []).some((link) => link.account_id !== exceptAccountId));
+  }
+
+  async function addAccount(form: { email: string; password: string; account_type: AccountType; supplier_code_url?: string }): Promise<AccountFormResult> {
     const expires_at = defaultExpiryDate();
     const slots = buildProfileSlots(form.account_type, selectedService);
+    const normalizedEmail = normalizeEmail(form.email);
+
+    try {
+      if (await emailAlreadyExists(normalizedEmail)) {
+        setToast({ label: duplicateEmailMessage, at: Date.now(), tone: "error" });
+        return { ok: false, error: duplicateEmailMessage };
+      }
+    } catch {
+      setToast({ label: "تعذر التحقق من البريد الإلكتروني، حاول مرة أخرى", at: Date.now(), tone: "error" });
+      return { ok: false, error: "تعذر التحقق من البريد الإلكتروني، حاول مرة أخرى" };
+    }
 
     if (!supabase) {
       const account: NetflixAccount = {
@@ -351,6 +415,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
         service_type: selectedService,
         use_automated_code: true,
         ...form,
+        email: normalizedEmail,
       };
       const createdLinks = slots.map((slot) => ({
         id: crypto.randomUUID(),
@@ -368,30 +433,60 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     }
 
     setLoading(true);
-    const { data: account, error: accountError } = await supabase
-      .from("accounts")
-      .insert({ ...form, expires_at, service_type: selectedService, use_automated_code: true })
-      .select()
-      .single();
+    let account: NetflixAccount | null = null;
+    try {
+      const { data, error: accountError } = await supabase
+        .from("accounts")
+        .insert({ ...form, email: normalizedEmail, expires_at, service_type: selectedService, use_automated_code: true })
+        .select()
+        .single();
 
-    if (accountError || !account) {
+      if (accountError) throw accountError;
+      account = data as NetflixAccount;
+    } catch (error) {
       setLoading(false);
-      setToast({ label: "تعذر إنشاء الحساب", at: Date.now() });
+      if (isDuplicateEmailError(error)) {
+        setToast({ label: duplicateEmailSaveMessage, at: Date.now(), tone: "error" });
+        return { ok: false, error: duplicateEmailSaveMessage };
+      }
+      console.error("Supabase account insert error:", error);
+      setToast({ label: "تعذر إنشاء الحساب", at: Date.now(), tone: "error" });
       return false;
     }
 
-    const { error: linksError } = await supabase.from("customer_links").insert(
-      slots.map((slot) => ({
-        account_id: account.id,
-        email: form.email,
-        ...slot,
-      })),
-    );
+    if (!account) {
+      setLoading(false);
+      setToast({ label: "تعذر إنشاء الحساب", at: Date.now(), tone: "error" });
+      return false;
+    }
 
-    setToast({
-      label: linksError ? "تم إنشاء الحساب وتعذر إنشاء الروابط" : "تم إنشاء الحساب والروابط",
-      at: Date.now(),
-    });
+    let linksError: unknown = null;
+    try {
+      const { error } = await supabase.from("customer_links").insert(
+        slots.map((slot) => ({
+          account_id: account.id,
+          email: normalizedEmail,
+          ...slot,
+        })),
+      );
+      if (error) throw error;
+    } catch (error) {
+      linksError = error;
+    }
+
+    if (linksError) {
+      if (isDuplicateEmailError(linksError)) {
+        await supabase.from("accounts").delete().eq("id", account.id);
+        setLoading(false);
+        setToast({ label: duplicateEmailSaveMessage, at: Date.now(), tone: "error" });
+        return { ok: false, error: duplicateEmailSaveMessage };
+      }
+
+      console.error("Supabase customer links insert error:", linksError);
+      setToast({ label: "تم إنشاء الحساب وتعذر إنشاء الروابط", at: Date.now(), tone: "error" });
+    } else {
+      setToast({ label: "تم إنشاء الحساب والروابط", at: Date.now() });
+    }
     await loadData();
     setSelectedAccountId(account.id);
     setScreen("account");
@@ -402,7 +497,19 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
   async function updateAccount(
     accountId: string,
     form: { email: string; password: string; supplier_code_url?: string; created_at?: string; expires_at?: string },
-  ) {
+  ): Promise<AccountFormResult> {
+    const normalizedEmail = normalizeEmail(form.email);
+
+    try {
+      if (await emailAlreadyExists(normalizedEmail, accountId)) {
+        setToast({ label: duplicateEmailMessage, at: Date.now(), tone: "error" });
+        return { ok: false, error: duplicateEmailMessage };
+      }
+    } catch {
+      setToast({ label: "تعذر التحقق من البريد الإلكتروني، حاول مرة أخرى", at: Date.now(), tone: "error" });
+      return { ok: false, error: "تعذر التحقق من البريد الإلكتروني، حاول مرة أخرى" };
+    }
+
     if (!supabase) {
       setAccounts((current) =>
         current.map((account) =>
@@ -410,12 +517,16 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
             ? {
                 ...account,
                 ...form,
+                email: normalizedEmail,
                 supplier_code_url: form.supplier_code_url || null,
                 created_at: form.created_at || account.created_at,
                 expires_at: form.expires_at || account.expires_at,
               }
             : account,
         ),
+      );
+      setLinks((current) =>
+        current.map((link) => (link.account_id === accountId ? { ...link, email: normalizedEmail } : link)),
       );
       setToast({ label: "تم حفظ التعديلات محلياً", at: Date.now() });
       return true;
@@ -425,17 +536,35 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     const { error } = await supabase
       .from("accounts")
       .update({
-        email: form.email,
+        email: normalizedEmail,
         password: form.password,
         supplier_code_url: form.supplier_code_url || null,
         ...(form.created_at ? { created_at: form.created_at } : {}),
         ...(form.expires_at ? { expires_at: form.expires_at } : {}),
       })
       .eq("id", accountId);
-    setLoading(false);
 
     if (error) {
-      setToast({ label: "تعذر حفظ تعديلات الحساب", at: Date.now() });
+      setLoading(false);
+      if (isDuplicateEmailError(error)) {
+        setToast({ label: duplicateEmailSaveMessage, at: Date.now(), tone: "error" });
+        return { ok: false, error: duplicateEmailSaveMessage };
+      }
+      setToast({ label: "تعذر حفظ تعديلات الحساب", at: Date.now(), tone: "error" });
+      return false;
+    }
+
+    const { error: linksUpdateError } = await supabase.from("customer_links").update({ email: normalizedEmail }).eq("account_id", accountId);
+    setLoading(false);
+
+    if (linksUpdateError) {
+      if (isDuplicateEmailError(linksUpdateError)) {
+        setToast({ label: duplicateEmailSaveMessage, at: Date.now(), tone: "error" });
+        return { ok: false, error: duplicateEmailSaveMessage };
+      }
+
+      console.error("Supabase customer link email update error:", linksUpdateError);
+      setToast({ label: "تم حفظ الحساب وتعذر تحديث روابط العملاء", at: Date.now(), tone: "error" });
       return false;
     }
 
@@ -445,12 +574,16 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
           ? {
               ...account,
               ...form,
+              email: normalizedEmail,
               supplier_code_url: form.supplier_code_url || null,
               created_at: form.created_at || account.created_at,
               expires_at: form.expires_at || account.expires_at,
             }
           : account,
       ),
+    );
+    setLinks((current) =>
+      current.map((link) => (link.account_id === accountId ? { ...link, email: normalizedEmail } : link)),
     );
     setToast({ label: "تم حفظ تعديلات الحساب", at: Date.now() });
     return true;
@@ -726,8 +859,13 @@ function Shell({ children, toast }: { children: React.ReactNode; toast: Toast })
     <main className="min-h-screen bg-white text-ink" dir="rtl">
       {children}
       {toast && (
-        <div className="fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 animate-rise items-center gap-2 rounded-full bg-emerald-600 px-5 py-3 text-sm font-bold text-white shadow-premium">
-          <Check className="h-4 w-4 text-white" />
+        <div
+          className={cn(
+            "fixed bottom-6 left-1/2 z-50 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 animate-rise items-center gap-2 rounded-full px-5 py-3 text-center text-sm font-bold text-white shadow-premium",
+            toast.tone === "error" ? "bg-rose-600" : "bg-emerald-600",
+          )}
+        >
+          {toast.tone === "error" ? <CircleX className="h-4 w-4 shrink-0 text-white" /> : <Check className="h-4 w-4 shrink-0 text-white" />}
           {toast.label}
         </div>
       )}
@@ -1608,11 +1746,11 @@ function AccountForm({
   initialAccount,
   onClose,
 }: {
-  onAdd: (form: { email: string; password: string; account_type: AccountType; supplier_code_url?: string }) => Promise<boolean>;
+  onAdd: (form: { email: string; password: string; account_type: AccountType; supplier_code_url?: string }) => Promise<AccountFormResult>;
   onUpdate: (
     accountId: string,
     form: { email: string; password: string; supplier_code_url?: string },
-  ) => Promise<boolean>;
+  ) => Promise<AccountFormResult>;
   loading: boolean;
   service: ServiceType;
   initialAccount: NetflixAccount | null;
@@ -1623,17 +1761,23 @@ function AccountForm({
   const [email, setEmail] = useState(initialAccount?.email || "");
   const [password, setPassword] = useState(initialAccount?.password || "");
   const [supplierCodeUrl, setSupplierCodeUrl] = useState(initialAccount?.supplier_code_url || "");
+  const [formError, setFormError] = useState("");
   const calculatedExpiry = defaultExpiryDate();
   const theme = serviceThemes[service];
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    setFormError("");
     const supplier_code_url = supplierCodeUrl.trim() || undefined;
-    const succeeded = initialAccount
-      ? await onUpdate(initialAccount.id, { email, password, supplier_code_url })
-      : await onAdd({ email, password, account_type: accountType, supplier_code_url });
+    const result = initialAccount
+      ? await onUpdate(initialAccount.id, { email: normalizeEmail(email), password, supplier_code_url })
+      : await onAdd({ email: normalizeEmail(email), password, account_type: accountType, supplier_code_url });
 
-    if (succeeded) onClose();
+    if (accountFormSucceeded(result)) {
+      onClose();
+    } else {
+      setFormError(accountFormError(result) || "تعذر حفظ الحساب، حاول مرة أخرى");
+    }
   }
 
   return (
@@ -1718,6 +1862,12 @@ function AccountForm({
             />
           </Field>
         </div>
+
+        {formError && (
+          <p className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-black text-rose-700">
+            {formError}
+          </p>
+        )}
 
         <Field icon={Link2} label="رابط جلب الأكواد">
           <input
@@ -2444,6 +2594,7 @@ function CustomerView({
   const tvTimeoutRef = useRef<number | null>(null);
   const tvCountdownRef = useRef<number | null>(null);
   const tvRequestStartedAtRef = useRef(0);
+  const tvRevealInFlightRef = useRef(false);
   const requestBaselineRef = useRef<{ code: string | null; receivedAt: string | null }>({ code: null, receivedAt: null });
 
   useEffect(() => {
@@ -2463,7 +2614,7 @@ function CustomerView({
       const { data, error } = await supabase
         .from("customer_links")
         .select(
-          "*,accounts(id,email,use_automated_code,verification_code,verification_code_received_at,service_type,account_type,expires_at,created_at)",
+          "*,accounts(id,email,use_automated_code,verification_code,verification_code_received_at,service_type,account_type,expires_at,created_at),tv_approval_visible_at",
         )
         .eq(queryColumn, identifier)
         .single();
@@ -2519,32 +2670,23 @@ function CustomerView({
   const codeExpiresAtMs = codeReceivedAtMs ? codeReceivedAtMs + 120_000 : null;
   const codeSecondsRemaining = codeExpiresAtMs ? Math.max(0, Math.ceil((codeExpiresAtMs - nowTick) / 1000)) : 0;
   const codeIsVisible = Boolean(account?.verification_code && codeExpiresAtMs && codeExpiresAtMs > nowTick);
-  const tvApprovalReceivedAtMs = link?.updated_at ? new Date(link.updated_at).getTime() : null;
-  const tvApprovalRequestedAtMs = link?.tv_approval_requested_at
-    ? new Date(link.tv_approval_requested_at).getTime()
+  const tvApprovalVisibleAtMs = link?.tv_approval_visible_at
+    ? new Date(link.tv_approval_visible_at).getTime()
     : null;
-  const tvApprovalIsFreshForRequest = Boolean(
-    tvApprovalReceivedAtMs &&
-      tvApprovalRequestedAtMs &&
-      tvApprovalReceivedAtMs >= tvApprovalRequestedAtMs,
-  );
   const tvApprovalExpiresAtMs =
-    tvApprovalReceivedAtMs && !Number.isNaN(tvApprovalReceivedAtMs)
-      ? tvApprovalReceivedAtMs + 120_000
+    tvApprovalVisibleAtMs && !Number.isNaN(tvApprovalVisibleAtMs)
+      ? tvApprovalVisibleAtMs + tvApprovalRevealMs
       : null;
   const tvApprovalSecondsRemaining = tvApprovalExpiresAtMs
     ? Math.max(0, Math.ceil((tvApprovalExpiresAtMs - nowTick) / 1000))
     : 0;
   const tvApprovalIsVisible = Boolean(
-    (link?.code_requested_count ?? 0) > 0 &&
-      tvApprovalIsFreshForRequest &&
-      tvApprovalUrl &&
+    tvApprovalUrl &&
       tvApprovalExpiresAtMs &&
       tvApprovalExpiresAtMs > nowTick,
   );
   const tvApprovalHasExpired = Boolean(
-    tvApprovalIsFreshForRequest &&
-      tvApprovalUrl &&
+    tvApprovalUrl &&
       tvApprovalExpiresAtMs &&
       tvApprovalExpiresAtMs <= nowTick,
   );
@@ -2553,6 +2695,104 @@ function CustomerView({
   const codeRequestedCount = Math.max(0, link?.code_requested_count ?? 0);
   const hasCodeRequestCredit = codeRequestedCount < codeRequestLimit;
   const attemptUsed = !hasCodeRequestCredit;
+  const hasRecentTvApprovalUrl = (candidate?: Pick<CustomerLink, "tv_approval_url" | "updated_at"> | null) => {
+    const candidateUrl = String(candidate?.tv_approval_url || "").trim();
+    const receivedAtMs = candidate?.updated_at ? new Date(candidate.updated_at).getTime() : 0;
+    return Boolean(
+      candidateUrl &&
+        receivedAtMs &&
+        !Number.isNaN(receivedAtMs) &&
+        Date.now() - receivedAtMs <= tvApprovalRecentWindowMs,
+    );
+  };
+
+  const revealTvApprovalUrl = async (candidate: Partial<CustomerLink>) => {
+    if (!link?.id || tvRevealInFlightRef.current) return false;
+
+    const candidateUrl = String(candidate.tv_approval_url || "").trim();
+    if (!candidateUrl) return false;
+
+    const visibleAt = candidate.tv_approval_visible_at || new Date().toISOString();
+    const visibleAtMs = new Date(visibleAt).getTime();
+    const alreadyVisible = Boolean(
+      candidate.tv_approval_visible_at &&
+        visibleAtMs &&
+        !Number.isNaN(visibleAtMs) &&
+        visibleAtMs + tvApprovalRevealMs > Date.now(),
+    );
+
+    const currentRequestedCount = Math.max(0, Number(candidate.code_requested_count ?? codeRequestedCount));
+    const currentRequestLimit = Math.max(0, Number(candidate.code_request_limit ?? codeRequestLimit));
+    const candidateHasCredit = currentRequestedCount < currentRequestLimit;
+
+    if (!alreadyVisible && !candidateHasCredit) {
+      setTvRequestState("failed");
+      setTvRequestSeconds(0);
+      setToast({ label: "نفد رصيد طلب رابط الشاشة لهذا الحساب، يرجى التواصل مع الدعم", at: Date.now() });
+      return false;
+    }
+
+    tvRevealInFlightRef.current = true;
+    const nextRequestedCount = alreadyVisible ? currentRequestedCount : currentRequestedCount + 1;
+    const nextVisibleAt = alreadyVisible ? candidate.tv_approval_visible_at || visibleAt : visibleAt;
+
+    if (supabase && !alreadyVisible) {
+      const { data, error } = await supabase
+        .from("customer_links")
+        .update({
+          code_requested_count: nextRequestedCount,
+          tv_approval_visible_at: nextVisibleAt,
+        })
+        .eq("id", link.id)
+        .eq("code_requested_count", currentRequestedCount)
+        .select("code_requested_count,code_request_limit,tv_approval_url,tv_approval_requested_at,tv_approval_visible_at,updated_at")
+        .maybeSingle();
+
+      if (error || !data) {
+        console.error("Supabase TV approval reveal update error:", error);
+        tvRevealInFlightRef.current = false;
+        setTvRequestState("failed");
+        setTvRequestSeconds(0);
+        setToast({ label: "تعذر احتساب محاولة رابط الشاشة، حدّث الصفحة وحاول مجدداً", at: Date.now() });
+        return false;
+      }
+
+      setLink((current) =>
+        current
+          ? {
+              ...current,
+              code_requested_count: data.code_requested_count,
+              code_request_limit: data.code_request_limit,
+              tv_approval_url: data.tv_approval_url,
+              tv_approval_requested_at: data.tv_approval_requested_at,
+              tv_approval_visible_at: data.tv_approval_visible_at,
+              updated_at: data.updated_at,
+            }
+          : current,
+      );
+    } else {
+      setLink((current) =>
+        current
+          ? {
+              ...current,
+              code_requested_count: nextRequestedCount,
+              tv_approval_url: candidateUrl,
+              tv_approval_requested_at: candidate.tv_approval_requested_at ?? current.tv_approval_requested_at,
+              tv_approval_visible_at: nextVisibleAt,
+              updated_at: candidate.updated_at ?? current.updated_at,
+            }
+          : current,
+      );
+    }
+
+    setTvRequestState("ready");
+    setTvRequestSeconds(0);
+    if (tvTimeoutRef.current) window.clearTimeout(tvTimeoutRef.current);
+    if (tvCountdownRef.current) window.clearInterval(tvCountdownRef.current);
+    setToast({ label: "تم استلام رابط الدخول للشاشة", at: Date.now() });
+    tvRevealInFlightRef.current = false;
+    return true;
+  };
 
   useEffect(() => {
     if (automatedCodeEnabled) return;
@@ -2577,33 +2817,11 @@ function CustomerView({
     const client = supabase;
     let active = true;
 
-    const markTvApprovalReady = (
-      updatedAt?: string | null,
-      requestedAt?: string | null,
-    ) => {
-      const updatedAtMs = updatedAt ? new Date(updatedAt).getTime() : 0;
-      const requestedAtMs = requestedAt ? new Date(requestedAt).getTime() : 0;
-      const requiredFreshnessMs = Math.max(
-        tvRequestStartedAtRef.current,
-        Number.isNaN(requestedAtMs) ? 0 : requestedAtMs,
-      );
-      if (
-        requiredFreshnessMs > 0 &&
-        (!updatedAtMs || updatedAtMs < requiredFreshnessMs)
-      ) {
-        return;
-      }
-      setTvRequestState("ready");
-      setTvRequestSeconds(0);
-      if (tvTimeoutRef.current) window.clearTimeout(tvTimeoutRef.current);
-      if (tvCountdownRef.current) window.clearInterval(tvCountdownRef.current);
-    };
-
     const refreshTvApprovalUrl = async () => {
       const { data, error } = await client
         .from("customer_links")
         .select(
-          "tv_approval_url,tv_approval_requested_at,updated_at,code_request_limit,code_requested_count",
+          "tv_approval_url,tv_approval_requested_at,tv_approval_visible_at,updated_at,code_request_limit,code_requested_count",
         )
         .eq("id", link.id)
         .maybeSingle();
@@ -2620,20 +2838,18 @@ function CustomerView({
                 ...current,
                 tv_approval_url: data.tv_approval_url || null,
                 tv_approval_requested_at: data.tv_approval_requested_at,
+                tv_approval_visible_at: data.tv_approval_visible_at,
                 updated_at: data.updated_at,
                 code_request_limit: data.code_request_limit,
                 code_requested_count: data.code_requested_count,
               }
             : current,
         );
-        if (data.tv_approval_url) {
-          markTvApprovalReady(data.updated_at, data.tv_approval_requested_at);
-        }
       }
     };
 
     void refreshTvApprovalUrl();
-    const timer = window.setInterval(() => void refreshTvApprovalUrl(), 2000);
+    const timer = window.setInterval(() => void refreshTvApprovalUrl(), 3000);
     const channel = client
       .channel(`customer-tv-approval-${link.id}`)
       .on(
@@ -2657,6 +2873,11 @@ function CustomerView({
                       current.tv_approval_requested_at ||
                       "",
                   ),
+                  tv_approval_visible_at: String(
+                    payload.new.tv_approval_visible_at ||
+                      current.tv_approval_visible_at ||
+                      "",
+                  ),
                   updated_at: String(payload.new.updated_at || ""),
                   code_request_limit: Number(
                     payload.new.code_request_limit ?? current.code_request_limit ?? 1,
@@ -2667,12 +2888,6 @@ function CustomerView({
                 }
               : current,
           );
-          if (nextUrl) {
-            markTvApprovalReady(
-              String(payload.new.updated_at || ""),
-              String(payload.new.tv_approval_requested_at || ""),
-            );
-          }
         },
       )
       .subscribe();
@@ -2879,23 +3094,43 @@ function CustomerView({
       return;
     }
 
-    const requestedAt = new Date().toISOString();
-    const nextRequestedCount = codeRequestedCount + 1;
     setTvRequestState("loading");
-    setTvRequestSeconds(15);
+    setTvRequestSeconds(120);
+
+    if (tvTimeoutRef.current) window.clearTimeout(tvTimeoutRef.current);
+    if (tvCountdownRef.current) window.clearInterval(tvCountdownRef.current);
 
     if (supabase) {
+      const { data: currentTvLink, error: currentTvLinkError } = await supabase
+        .from("customer_links")
+        .select("code_requested_count,code_request_limit,tv_approval_requested_at,tv_approval_url,tv_approval_visible_at,updated_at")
+        .eq("id", link.id)
+        .maybeSingle();
+
+      if (currentTvLinkError) {
+        console.error("Supabase TV approval recent URL check error:", currentTvLinkError);
+        setTvRequestState("failed");
+        setTvRequestSeconds(0);
+        setToast({ label: "تعذر فحص رابط الشاشة، حاول مرة أخرى", at: Date.now() });
+        return;
+      }
+
+      if (currentTvLink?.tv_approval_url && hasRecentTvApprovalUrl(currentTvLink)) {
+        await revealTvApprovalUrl(currentTvLink);
+        return;
+      }
+
+      const requestedAt = new Date().toISOString();
       const { data, error } = await supabase
         .from("customer_links")
         .update({
-          code_requested_count: nextRequestedCount,
           tv_approval_requested_at: requestedAt,
           tv_approval_url: null,
+          tv_approval_visible_at: null,
           updated_at: requestedAt,
         })
         .eq("id", link.id)
-        .eq("code_requested_count", codeRequestedCount)
-        .select("code_requested_count,code_request_limit,tv_approval_requested_at,tv_approval_url,updated_at")
+        .select("code_requested_count,code_request_limit,tv_approval_requested_at,tv_approval_url,tv_approval_visible_at,updated_at")
         .maybeSingle();
 
       if (error || !data) {
@@ -2914,18 +3149,20 @@ function CustomerView({
               code_request_limit: data.code_request_limit,
               tv_approval_requested_at: data.tv_approval_requested_at,
               tv_approval_url: data.tv_approval_url,
+              tv_approval_visible_at: data.tv_approval_visible_at,
               updated_at: data.updated_at,
             }
           : current,
       );
     } else {
+      const requestedAt = new Date().toISOString();
       setLink((current) =>
         current
           ? {
               ...current,
-              code_requested_count: nextRequestedCount,
-              tv_approval_requested_at: requestedAt,
+              tv_approval_requested_at: new Date().toISOString(),
               tv_approval_url: null,
+              tv_approval_visible_at: null,
               updated_at: requestedAt,
             }
           : current,
@@ -2933,8 +3170,6 @@ function CustomerView({
     }
 
     tvRequestStartedAtRef.current = Date.now();
-    if (tvTimeoutRef.current) window.clearTimeout(tvTimeoutRef.current);
-    if (tvCountdownRef.current) window.clearInterval(tvCountdownRef.current);
 
     tvCountdownRef.current = window.setInterval(() => {
       setTvRequestSeconds((current) => {
@@ -2946,12 +3181,38 @@ function CustomerView({
       });
     }, 1000);
 
-    tvTimeoutRef.current = window.setTimeout(() => {
-      if (tvTimeoutRef.current) window.clearTimeout(tvTimeoutRef.current);
-      if (tvCountdownRef.current) window.clearInterval(tvCountdownRef.current);
-      setTvRequestState((current) => (current === "ready" ? current : "failed"));
-      setTvRequestSeconds(0);
-    }, 15_000);
+    const pollTvApprovalUrl = async () => {
+      if (!supabase || !link?.id) return;
+      const { data, error } = await supabase
+        .from("customer_links")
+        .select("code_requested_count,code_request_limit,tv_approval_requested_at,tv_approval_url,tv_approval_visible_at,updated_at")
+        .eq("id", link.id)
+        .maybeSingle();
+
+      if (error) {
+        console.error("Supabase TV approval polling error:", error);
+        return;
+      }
+
+      if (data?.tv_approval_url && hasRecentTvApprovalUrl(data)) {
+        await revealTvApprovalUrl(data);
+      }
+    };
+
+    if (tvTimeoutRef.current) window.clearTimeout(tvTimeoutRef.current);
+    tvTimeoutRef.current = window.setInterval(() => {
+      if (Date.now() - tvRequestStartedAtRef.current >= tvApprovalRevealMs) {
+        if (tvTimeoutRef.current) window.clearInterval(tvTimeoutRef.current);
+        if (tvCountdownRef.current) window.clearInterval(tvCountdownRef.current);
+        setTvRequestState((current) => (current === "ready" ? current : "failed"));
+        setTvRequestSeconds(0);
+        return;
+      }
+
+      void pollTvApprovalUrl();
+    }, tvApprovalPollMs);
+
+    void pollTvApprovalUrl();
   }
 
   return (
@@ -3142,7 +3403,7 @@ function CustomerView({
                       ) : tvRequestState === "loading" ? (
                         <div className="mb-4 flex items-center justify-center gap-2 rounded-2xl border border-[#DCCBFA] bg-white px-4 py-3 text-center text-xs font-black text-[#7C2CE8]">
                           <RefreshCw className="h-4 w-4 animate-spin" />
-                          جاري انتظار رابط الموافقة المباشر...
+                          جاري انتظار رابط الموافقة المباشر... {tvRequestSeconds}s
                         </div>
                       ) : tvApprovalHasExpired ? (
                         <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-center">
