@@ -34,7 +34,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { LEGACY_PROFILE_CODES, PROFILE_CODES, accountTypeLabel, buildProfileSlots } from "./lib/profiles";
+import { LEGACY_PROFILE_CODES, PROFILE_CODES, accountTypeLabel, buildProfileSlots, generateShortId } from "./lib/profiles";
 import { hasSupabaseConfig, supabase } from "./lib/supabase";
 import type { AccountType, CustomerLink, NetflixAccount, ServiceType } from "./types";
 
@@ -144,6 +144,15 @@ function isCustomerLinksEmailConstraintError(error: unknown) {
   const supabaseError = error as { message?: string; details?: string } | null;
   const message = `${supabaseError?.message || ""} ${supabaseError?.details || ""}`.toLowerCase();
   return message.includes("unique_customer_email") || message.includes("customer_links_email");
+}
+
+function isShortIdConflictError(error: unknown) {
+  const supabaseError = error as { code?: string; message?: string; details?: string } | null;
+  const message = `${supabaseError?.message || ""} ${supabaseError?.details || ""}`.toLowerCase();
+  return (
+    supabaseError?.code === "23505" &&
+    (message.includes("short_id") || message.includes("customer_links_short_id"))
+  );
 }
 
 function accountFormSucceeded(result: AccountFormResult) {
@@ -448,9 +457,57 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     return true;
   }
 
+  async function createUniqueShortIds(count: number) {
+    const reserved = new Set(
+      links
+        .map((link) => String(link.short_id || "").trim())
+        .filter(Boolean),
+    );
+    const generated: string[] = [];
+
+    while (generated.length < count) {
+      const candidates = new Set<string>();
+      const required = count - generated.length;
+
+      while (candidates.size < Math.max(required * 2, 8)) {
+        const candidate = generateShortId();
+        if (!reserved.has(candidate)) candidates.add(candidate);
+      }
+
+      let existing = new Set<string>();
+      if (supabase) {
+        const candidateList = Array.from(candidates);
+        const { data, error } = await supabase
+          .from("customer_links")
+          .select("short_id")
+          .in("short_id", candidateList);
+
+        if (error) {
+          console.error("Supabase short ID uniqueness check error:", error);
+          throw new Error("short_id_lookup_failed");
+        }
+
+        existing = new Set(
+          (data || [])
+            .map((item) => String(item.short_id || "").trim())
+            .filter(Boolean),
+        );
+      }
+
+      for (const candidate of candidates) {
+        if (existing.has(candidate) || reserved.has(candidate)) continue;
+        reserved.add(candidate);
+        generated.push(candidate);
+        if (generated.length === count) break;
+      }
+    }
+
+    return generated;
+  }
+
   async function addAccount(form: { email: string; password: string; account_type: AccountType; supplier_code_url?: string }): Promise<AccountFormResult> {
     const expires_at = defaultExpiryDate();
-    const slots = buildProfileSlots(form.account_type, selectedService);
+    let slots = buildProfileSlots(form.account_type, selectedService);
     const normalizedEmail = normalizeEmail(form.email);
 
     if (!normalizedEmail) {
@@ -472,6 +529,14 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     } catch {
       setToast({ label: "تعذر التحقق من البريد الإلكتروني، حاول مرة أخرى", at: Date.now(), tone: "error" });
       return { ok: false, error: "تعذر التحقق من البريد الإلكتروني، حاول مرة أخرى" };
+    }
+
+    try {
+      const shortIds = await createUniqueShortIds(slots.length);
+      slots = slots.map((slot, index) => ({ ...slot, short_id: shortIds[index] }));
+    } catch {
+      setToast({ label: "تعذر توليد روابط قصيرة فريدة، حاول مرة أخرى", at: Date.now(), tone: "error" });
+      return { ok: false, error: "تعذر توليد روابط قصيرة فريدة، حاول مرة أخرى" };
     }
 
     if (!supabase) {
@@ -528,17 +593,30 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     }
 
     let linksError: unknown = null;
-    try {
-      const { error } = await supabase.from("customer_links").insert(
-        slots.map((slot) => ({
-          account_id: account.id,
-          email: normalizedEmail,
-          ...slot,
-        })),
-      );
-      if (error) throw error;
-    } catch (error) {
-      linksError = error;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const { error } = await supabase.from("customer_links").insert(
+          slots.map((slot) => ({
+            account_id: account.id,
+            email: normalizedEmail,
+            ...slot,
+          })),
+        );
+        if (error) throw error;
+        linksError = null;
+        break;
+      } catch (error) {
+        linksError = error;
+        if (!isShortIdConflictError(error) || attempt === 2) break;
+
+        try {
+          const shortIds = await createUniqueShortIds(slots.length);
+          slots = slots.map((slot, index) => ({ ...slot, short_id: shortIds[index] }));
+        } catch (shortIdError) {
+          linksError = shortIdError;
+          break;
+        }
+      }
     }
 
     if (linksError) {
@@ -554,6 +632,13 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
           ok: false,
           error: "يوجد قيد مكرر خاطئ على روابط العملاء. نفّذ SQL إزالة unique_customer_email ثم أعد المحاولة.",
         };
+      }
+
+      if (isShortIdConflictError(linksError)) {
+        await supabase.from("accounts").delete().eq("id", account.id);
+        setLoading(false);
+        setToast({ label: "تعذر حجز رابط قصير فريد، أعد المحاولة", at: Date.now(), tone: "error" });
+        return { ok: false, error: "تعذر حجز رابط قصير فريد، أعد المحاولة" };
       }
 
       if (isDuplicateEmailError(linksError)) {

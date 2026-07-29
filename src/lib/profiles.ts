@@ -19,7 +19,7 @@ export const PROFILE_CODES: Record<string, string> = {
 export const PROFILE_NAMES = Object.keys(PROFILE_CODES);
 export const SHAHID_PROFILE_NAMES = ["A", "B", "C", "D"];
 
-export function generateShortId(length = 6) {
+export function generateShortId(length = 4) {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
   return Array.from({ length }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("");
 }
@@ -35,7 +35,7 @@ export function buildProfileSlots(accountType: "private" | "shared", serviceType
       profile_code: serviceType === "shahid" ? "" : PROFILE_CODES[profileName],
       service_type: serviceType,
       uuid: crypto.randomUUID(),
-      short_id: generateShortId(6),
+      short_id: generateShortId(),
     })),
   );
 }

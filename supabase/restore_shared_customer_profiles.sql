@@ -72,7 +72,7 @@ select
   missing.account_id,
   missing.email,
   gen_random_uuid(),
-  encode(gen_random_bytes(4), 'hex'),
+  encode(gen_random_bytes(2), 'hex'),
   missing.service_type,
   missing.profile_name,
   missing.profile_label,
