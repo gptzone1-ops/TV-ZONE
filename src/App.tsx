@@ -509,6 +509,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     const updates = {
       code_request_limit: normalizedLimit,
       code_requested_count: 0,
+      tv_approval_requested_at: null,
     };
 
     if (supabase) {
@@ -527,6 +528,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
               ...link,
               code_request_limit: normalizedLimit,
               code_requested_count: 0,
+              tv_approval_requested_at: null,
             }
           : link,
       ),
@@ -2428,6 +2430,8 @@ function CustomerView({
   const [agreeDisclaimer, setAgreeDisclaimer] = useState(false);
   const [codeRequestState, setCodeRequestState] = useState<"idle" | "loading" | "ready" | "failed">("idle");
   const [codeRequestSeconds, setCodeRequestSeconds] = useState(0);
+  const [tvRequestState, setTvRequestState] = useState<"idle" | "loading" | "ready" | "failed">("idle");
+  const [tvRequestSeconds, setTvRequestSeconds] = useState(0);
   const [nowTick, setNowTick] = useState(() => Date.now());
   const [deviceView, setDeviceView] = useState<DeviceView | null>(null);
   const [pendingDeviceView, setPendingDeviceView] = useState<DeviceView | null>(null);
@@ -2437,6 +2441,9 @@ function CustomerView({
   const pollTimerRef = useRef<number | null>(null);
   const timeoutRef = useRef<number | null>(null);
   const countdownRef = useRef<number | null>(null);
+  const tvTimeoutRef = useRef<number | null>(null);
+  const tvCountdownRef = useRef<number | null>(null);
+  const tvRequestStartedAtRef = useRef(0);
   const requestBaselineRef = useRef<{ code: string | null; receivedAt: string | null }>({ code: null, receivedAt: null });
 
   useEffect(() => {
@@ -2491,6 +2498,8 @@ function CustomerView({
       if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
       if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
       if (countdownRef.current) window.clearInterval(countdownRef.current);
+      if (tvTimeoutRef.current) window.clearTimeout(tvTimeoutRef.current);
+      if (tvCountdownRef.current) window.clearInterval(tvCountdownRef.current);
     };
   }, []);
 
@@ -2510,6 +2519,35 @@ function CustomerView({
   const codeExpiresAtMs = codeReceivedAtMs ? codeReceivedAtMs + 120_000 : null;
   const codeSecondsRemaining = codeExpiresAtMs ? Math.max(0, Math.ceil((codeExpiresAtMs - nowTick) / 1000)) : 0;
   const codeIsVisible = Boolean(account?.verification_code && codeExpiresAtMs && codeExpiresAtMs > nowTick);
+  const tvApprovalReceivedAtMs = link?.updated_at ? new Date(link.updated_at).getTime() : null;
+  const tvApprovalRequestedAtMs = link?.tv_approval_requested_at
+    ? new Date(link.tv_approval_requested_at).getTime()
+    : null;
+  const tvApprovalIsFreshForRequest = Boolean(
+    tvApprovalReceivedAtMs &&
+      tvApprovalRequestedAtMs &&
+      tvApprovalReceivedAtMs >= tvApprovalRequestedAtMs,
+  );
+  const tvApprovalExpiresAtMs =
+    tvApprovalReceivedAtMs && !Number.isNaN(tvApprovalReceivedAtMs)
+      ? tvApprovalReceivedAtMs + 120_000
+      : null;
+  const tvApprovalSecondsRemaining = tvApprovalExpiresAtMs
+    ? Math.max(0, Math.ceil((tvApprovalExpiresAtMs - nowTick) / 1000))
+    : 0;
+  const tvApprovalIsVisible = Boolean(
+    (link?.code_requested_count ?? 0) > 0 &&
+      tvApprovalIsFreshForRequest &&
+      tvApprovalUrl &&
+      tvApprovalExpiresAtMs &&
+      tvApprovalExpiresAtMs > nowTick,
+  );
+  const tvApprovalHasExpired = Boolean(
+    tvApprovalIsFreshForRequest &&
+      tvApprovalUrl &&
+      tvApprovalExpiresAtMs &&
+      tvApprovalExpiresAtMs <= nowTick,
+  );
   const automatedCodeEnabled = account?.use_automated_code !== false;
   const codeRequestLimit = Math.max(0, link?.code_request_limit ?? 1);
   const codeRequestedCount = Math.max(0, link?.code_requested_count ?? 0);
@@ -2525,9 +2563,13 @@ function CustomerView({
     setAgreePreRequest(false);
     setCodeRequestState("idle");
     setCodeRequestSeconds(0);
+    setTvRequestState("idle");
+    setTvRequestSeconds(0);
     if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
     if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
     if (countdownRef.current) window.clearInterval(countdownRef.current);
+    if (tvTimeoutRef.current) window.clearTimeout(tvTimeoutRef.current);
+    if (tvCountdownRef.current) window.clearInterval(tvCountdownRef.current);
   }, [automatedCodeEnabled]);
 
   useEffect(() => {
@@ -2535,10 +2577,34 @@ function CustomerView({
     const client = supabase;
     let active = true;
 
+    const markTvApprovalReady = (
+      updatedAt?: string | null,
+      requestedAt?: string | null,
+    ) => {
+      const updatedAtMs = updatedAt ? new Date(updatedAt).getTime() : 0;
+      const requestedAtMs = requestedAt ? new Date(requestedAt).getTime() : 0;
+      const requiredFreshnessMs = Math.max(
+        tvRequestStartedAtRef.current,
+        Number.isNaN(requestedAtMs) ? 0 : requestedAtMs,
+      );
+      if (
+        requiredFreshnessMs > 0 &&
+        (!updatedAtMs || updatedAtMs < requiredFreshnessMs)
+      ) {
+        return;
+      }
+      setTvRequestState("ready");
+      setTvRequestSeconds(0);
+      if (tvTimeoutRef.current) window.clearTimeout(tvTimeoutRef.current);
+      if (tvCountdownRef.current) window.clearInterval(tvCountdownRef.current);
+    };
+
     const refreshTvApprovalUrl = async () => {
       const { data, error } = await client
         .from("customer_links")
-        .select("tv_approval_url")
+        .select(
+          "tv_approval_url,tv_approval_requested_at,updated_at,code_request_limit,code_requested_count",
+        )
         .eq("id", link.id)
         .maybeSingle();
 
@@ -2547,15 +2613,22 @@ function CustomerView({
         return;
       }
 
-      if (active && data?.tv_approval_url) {
+      if (active && data) {
         setLink((current) =>
           current
             ? {
                 ...current,
-                tv_approval_url: data.tv_approval_url,
+                tv_approval_url: data.tv_approval_url || null,
+                tv_approval_requested_at: data.tv_approval_requested_at,
+                updated_at: data.updated_at,
+                code_request_limit: data.code_request_limit,
+                code_requested_count: data.code_requested_count,
               }
             : current,
         );
+        if (data.tv_approval_url) {
+          markTvApprovalReady(data.updated_at, data.tv_approval_requested_at);
+        }
       }
     };
 
@@ -2573,15 +2646,33 @@ function CustomerView({
         },
         (payload) => {
           const nextUrl = String(payload.new.tv_approval_url || "").trim();
-          if (!active || !nextUrl) return;
+          if (!active) return;
           setLink((current) =>
             current
               ? {
                   ...current,
-                  tv_approval_url: nextUrl,
+                  tv_approval_url: nextUrl || null,
+                  tv_approval_requested_at: String(
+                    payload.new.tv_approval_requested_at ||
+                      current.tv_approval_requested_at ||
+                      "",
+                  ),
+                  updated_at: String(payload.new.updated_at || ""),
+                  code_request_limit: Number(
+                    payload.new.code_request_limit ?? current.code_request_limit ?? 1,
+                  ),
+                  code_requested_count: Number(
+                    payload.new.code_requested_count ?? current.code_requested_count ?? 0,
+                  ),
                 }
               : current,
           );
+          if (nextUrl) {
+            markTvApprovalReady(
+              String(payload.new.updated_at || ""),
+              String(payload.new.tv_approval_requested_at || ""),
+            );
+          }
         },
       )
       .subscribe();
@@ -2778,6 +2869,91 @@ function CustomerView({
     }, 15_000);
   }
 
+  async function startTvApprovalRequest() {
+    if (
+      !automatedCodeEnabled ||
+      !link?.id ||
+      !hasCodeRequestCredit ||
+      tvRequestState === "loading"
+    ) {
+      return;
+    }
+
+    const requestedAt = new Date().toISOString();
+    const nextRequestedCount = codeRequestedCount + 1;
+    setTvRequestState("loading");
+    setTvRequestSeconds(15);
+
+    if (supabase) {
+      const { data, error } = await supabase
+        .from("customer_links")
+        .update({
+          code_requested_count: nextRequestedCount,
+          tv_approval_requested_at: requestedAt,
+          tv_approval_url: null,
+          updated_at: requestedAt,
+        })
+        .eq("id", link.id)
+        .eq("code_requested_count", codeRequestedCount)
+        .select("code_requested_count,code_request_limit,tv_approval_requested_at,tv_approval_url,updated_at")
+        .maybeSingle();
+
+      if (error || !data) {
+        console.error("Supabase TV approval request update error:", error);
+        setTvRequestState("failed");
+        setTvRequestSeconds(0);
+        setToast({ label: "تعذر طلب رابط الدخول للشاشة، حاول مرة أخرى", at: Date.now() });
+        return;
+      }
+
+      setLink((current) =>
+        current
+          ? {
+              ...current,
+              code_requested_count: data.code_requested_count,
+              code_request_limit: data.code_request_limit,
+              tv_approval_requested_at: data.tv_approval_requested_at,
+              tv_approval_url: data.tv_approval_url,
+              updated_at: data.updated_at,
+            }
+          : current,
+      );
+    } else {
+      setLink((current) =>
+        current
+          ? {
+              ...current,
+              code_requested_count: nextRequestedCount,
+              tv_approval_requested_at: requestedAt,
+              tv_approval_url: null,
+              updated_at: requestedAt,
+            }
+          : current,
+      );
+    }
+
+    tvRequestStartedAtRef.current = Date.now();
+    if (tvTimeoutRef.current) window.clearTimeout(tvTimeoutRef.current);
+    if (tvCountdownRef.current) window.clearInterval(tvCountdownRef.current);
+
+    tvCountdownRef.current = window.setInterval(() => {
+      setTvRequestSeconds((current) => {
+        if (current <= 1) {
+          if (tvCountdownRef.current) window.clearInterval(tvCountdownRef.current);
+          return 0;
+        }
+        return current - 1;
+      });
+    }, 1000);
+
+    tvTimeoutRef.current = window.setTimeout(() => {
+      if (tvTimeoutRef.current) window.clearTimeout(tvTimeoutRef.current);
+      if (tvCountdownRef.current) window.clearInterval(tvCountdownRef.current);
+      setTvRequestState((current) => (current === "ready" ? current : "failed"));
+      setTvRequestSeconds(0);
+    }, 15_000);
+  }
+
   return (
     <Shell toast={toast}>
       <div className="min-h-screen bg-gradient-to-b from-[#F3F4F6] via-[#F9FAFB] to-white px-4 py-6 md:py-10" dir="rtl">
@@ -2953,7 +3129,7 @@ function CustomerView({
                     </div>
                   ) : !deviceView ? null : deviceView === "screen" ? (
                     <div className="rounded-[1.75rem] border border-[#E0D4F8] bg-gradient-to-l from-white to-[#F7F2FF] p-4 shadow-card">
-                      {tvApprovalUrl ? (
+                      {tvApprovalIsVisible ? (
                         <a
                           href={tvApprovalUrl}
                           target="_blank"
@@ -2963,11 +3139,39 @@ function CustomerView({
                           <ExternalLink className="h-5 w-5" />
                           اضغط هنا لتسجيل الدخول المباشر للشاشة / سوني
                         </a>
-                      ) : (
+                      ) : tvRequestState === "loading" ? (
                         <div className="mb-4 flex items-center justify-center gap-2 rounded-2xl border border-[#DCCBFA] bg-white px-4 py-3 text-center text-xs font-black text-[#7C2CE8]">
                           <RefreshCw className="h-4 w-4 animate-spin" />
                           جاري انتظار رابط الموافقة المباشر...
                         </div>
+                      ) : tvApprovalHasExpired ? (
+                        <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-center">
+                          <p className="text-sm font-black text-amber-800">
+                            انتهت صلاحية الرابط، يرجى طلب رابط جديد عند الحاجة
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => void startTvApprovalRequest()}
+                            disabled={!hasCodeRequestCredit}
+                            className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-2xl bg-[#8B35F5] text-sm font-black text-white transition hover:bg-[#7626DD] disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <RefreshCw className="h-4 w-4" />
+                            طلب رابط جديد
+                          </button>
+                        </div>
+                      ) : !hasCodeRequestCredit ? (
+                        <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-center text-sm font-black text-rose-700">
+                          نفد رصيد طلب رابط الشاشة لهذا الحساب، يرجى التواصل مع الدعم.
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => void startTvApprovalRequest()}
+                          className="mb-4 flex min-h-14 w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-l from-[#E50914] to-[#8B35F5] px-4 text-center text-sm font-black text-white shadow-[0_14px_34px_rgba(139,53,245,0.28)] transition hover:-translate-y-0.5"
+                        >
+                          <ExternalLink className="h-5 w-5" />
+                          جلب رابط الدخول للشاشة / سوني
+                        </button>
                       )}
                       <div className="flex items-center gap-4">
                         <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-[#F0E7FF] text-[#8B35F5]">
