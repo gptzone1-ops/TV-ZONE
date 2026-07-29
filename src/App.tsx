@@ -71,6 +71,7 @@ const tvApprovalRevealMs = 2 * 60 * 1000;
 const tvApprovalPollMs = 3 * 1000;
 const duplicateEmailMessage = "عفواً، هذا البريد الإلكتروني مسجل مسبقاً ولا يمكن تكراره";
 const duplicateEmailSaveMessage = duplicateEmailMessage;
+const emptyEmailMessage = "أدخل البريد الإلكتروني أولاً";
 
 const serviceThemes: Record<ServiceType, ServiceTheme> = {
   netflix: {
@@ -370,6 +371,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
 
   async function emailAlreadyExists(email: string, exceptAccountId?: string) {
     const normalized = normalizeEmail(email);
+    if (!normalized) return false;
     if (
       accounts.some((account) => account.id !== exceptAccountId && normalizeEmail(account.email) === normalized) ||
       links.some((link) => link.account_id !== exceptAccountId && normalizeEmail(link.email || "") === normalized)
@@ -389,13 +391,19 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       throw new Error("duplicate_email_lookup_failed");
     }
 
-    return Boolean((data || []).some((link) => link.account_id !== exceptAccountId));
+    const existing = (data || []).filter((link) => link.account_id !== exceptAccountId);
+    return existing.length > 0;
   }
 
   async function addAccount(form: { email: string; password: string; account_type: AccountType; supplier_code_url?: string }): Promise<AccountFormResult> {
     const expires_at = defaultExpiryDate();
     const slots = buildProfileSlots(form.account_type, selectedService);
     const normalizedEmail = normalizeEmail(form.email);
+
+    if (!normalizedEmail) {
+      setToast({ label: emptyEmailMessage, at: Date.now(), tone: "error" });
+      return { ok: false, error: emptyEmailMessage };
+    }
 
     try {
       if (await emailAlreadyExists(normalizedEmail)) {
@@ -499,6 +507,11 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     form: { email: string; password: string; supplier_code_url?: string; created_at?: string; expires_at?: string },
   ): Promise<AccountFormResult> {
     const normalizedEmail = normalizeEmail(form.email);
+
+    if (!normalizedEmail) {
+      setToast({ label: emptyEmailMessage, at: Date.now(), tone: "error" });
+      return { ok: false, error: emptyEmailMessage };
+    }
 
     try {
       if (await emailAlreadyExists(normalizedEmail, accountId)) {
