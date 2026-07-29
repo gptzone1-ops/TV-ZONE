@@ -71,6 +71,7 @@ const tvApprovalRevealMs = 2 * 60 * 1000;
 const tvApprovalPollMs = 3 * 1000;
 const duplicateEmailMessage = "عفواً، هذا البريد الإلكتروني مسجل مسبقاً ولا يمكن تكراره";
 const duplicateEmailSaveMessage = duplicateEmailMessage;
+const duplicateProfileMessage = (profileName: string) => `هذا الملف (${profileName}) مسجل مسبقاً لهذا الحساب`;
 const emptyEmailMessage = "أدخل البريد الإلكتروني أولاً";
 
 const serviceThemes: Record<ServiceType, ServiceTheme> = {
@@ -400,6 +401,56 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     return existing.length > 0;
   }
 
+  async function duplicateProfileForEmail(email: string, profileNames: string[], exceptAccountId?: string) {
+    const normalized = normalizeEmail(email);
+    const uniqueProfiles = Array.from(new Set(profileNames.filter(Boolean)));
+    if (!normalized || !uniqueProfiles.length) return null;
+
+    const localDuplicate = links.find(
+      (link) =>
+        link.account_id !== exceptAccountId &&
+        normalizeEmail(link.email || "") === normalized &&
+        uniqueProfiles.includes(link.profile_name),
+    );
+    if (localDuplicate) return localDuplicate.profile_name;
+
+    if (!supabase) return null;
+
+    const { data, error } = await supabase
+      .from("customer_links")
+      .select("id,account_id,profile_name")
+      .eq("email", normalized)
+      .in("profile_name", uniqueProfiles);
+
+    if (error) {
+      console.error("Supabase duplicate profile validation error:", error);
+      throw new Error("duplicate_profile_lookup_failed");
+    }
+
+    const existing = (data || []).filter((link) => link.account_id !== exceptAccountId);
+    return existing.length > 0 ? existing[0].profile_name : null;
+  }
+
+  async function validateAccountEmailAndProfiles(
+    email: string,
+    accountType: AccountType,
+    profileNames: string[],
+    exceptAccountId?: string,
+  ): Promise<AccountFormResult> {
+    if (accountType === "private") {
+      if (await emailAlreadyExists(email, exceptAccountId)) {
+        return { ok: false, error: duplicateEmailMessage };
+      }
+      return true;
+    }
+
+    const duplicateProfile = await duplicateProfileForEmail(email, profileNames, exceptAccountId);
+    if (duplicateProfile) {
+      return { ok: false, error: duplicateProfileMessage(duplicateProfile) };
+    }
+    return true;
+  }
+
   async function addAccount(form: { email: string; password: string; account_type: AccountType; supplier_code_url?: string }): Promise<AccountFormResult> {
     const expires_at = defaultExpiryDate();
     const slots = buildProfileSlots(form.account_type, selectedService);
@@ -411,9 +462,15 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     }
 
     try {
-      if (await emailAlreadyExists(normalizedEmail)) {
-        setToast({ label: duplicateEmailMessage, at: Date.now(), tone: "error" });
-        return { ok: false, error: duplicateEmailMessage };
+      const validation = await validateAccountEmailAndProfiles(
+        normalizedEmail,
+        form.account_type,
+        slots.map((slot) => slot.profile_name),
+      );
+      if (!accountFormSucceeded(validation)) {
+        const error = accountFormError(validation) || duplicateEmailMessage;
+        setToast({ label: error, at: Date.now(), tone: "error" });
+        return { ok: false, error };
       }
     } catch {
       setToast({ label: "تعذر التحقق من البريد الإلكتروني، حاول مرة أخرى", at: Date.now(), tone: "error" });
@@ -526,6 +583,10 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     form: { email: string; password: string; supplier_code_url?: string; created_at?: string; expires_at?: string },
   ): Promise<AccountFormResult> {
     const normalizedEmail = normalizeEmail(form.email);
+    const currentAccount = accounts.find((account) => account.id === accountId);
+    const currentProfileNames = links
+      .filter((link) => link.account_id === accountId)
+      .map((link) => link.profile_name);
 
     if (!normalizedEmail) {
       setToast({ label: emptyEmailMessage, at: Date.now(), tone: "error" });
@@ -533,9 +594,16 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     }
 
     try {
-      if (await emailAlreadyExists(normalizedEmail, accountId)) {
-        setToast({ label: duplicateEmailMessage, at: Date.now(), tone: "error" });
-        return { ok: false, error: duplicateEmailMessage };
+      const validation = await validateAccountEmailAndProfiles(
+        normalizedEmail,
+        currentAccount?.account_type || "private",
+        currentProfileNames,
+        accountId,
+      );
+      if (!accountFormSucceeded(validation)) {
+        const error = accountFormError(validation) || duplicateEmailMessage;
+        setToast({ label: error, at: Date.now(), tone: "error" });
+        return { ok: false, error };
       }
     } catch {
       setToast({ label: "تعذر التحقق من البريد الإلكتروني، حاول مرة أخرى", at: Date.now(), tone: "error" });
