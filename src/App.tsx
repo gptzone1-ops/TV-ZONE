@@ -6,6 +6,7 @@ import {
   ChevronDown,
   CircleCheck,
   CircleX,
+  Clock3,
   Clipboard,
   Copy,
   Edit3,
@@ -67,7 +68,7 @@ const whatsappNumber = "966581688656";
 const disclaimerStorageKey = "disclaimer_accepted";
 const dayMs = 1000 * 60 * 60 * 24;
 const verificationCodeLifetimeMs = 120 * 1000;
-const verificationCodePollMs = 2500;
+const verificationCodeFallbackWindowMs = 5 * 60 * 1000;
 const duplicateEmailMessage = "عفواً، هذا البريد الإلكتروني مسجل مسبقاً ولا يمكن تكراره";
 const duplicateEmailSaveMessage = duplicateEmailMessage;
 const duplicateProfileMessage = (profileName: string) => `هذا الملف (${profileName}) مسجل مسبقاً لهذا الحساب`;
@@ -2790,8 +2791,9 @@ function CustomerView({
   const [showDisclaimer, setShowDisclaimer] = useState(() => localStorage.getItem(disclaimerStorageKey) !== "true");
   const [showReminder, setShowReminder] = useState(false);
   const [agreeDisclaimer, setAgreeDisclaimer] = useState(false);
-  const [codeRequestState, setCodeRequestState] = useState<"idle" | "loading" | "ready" | "failed">("idle");
+  const [codeRequestState, setCodeRequestState] = useState<"idle" | "loading" | "ready" | "failed" | "expired">("idle");
   const [codeRequestSeconds, setCodeRequestSeconds] = useState(0);
+  const [codeDisplayExpiresAt, setCodeDisplayExpiresAt] = useState<number | null>(null);
   const [nowTick, setNowTick] = useState(() => Date.now());
   const [deviceView, setDeviceView] = useState<DeviceView | null>(null);
   const [pendingDeviceView, setPendingDeviceView] = useState<DeviceView | null>(null);
@@ -2801,7 +2803,7 @@ function CustomerView({
   const pollTimerRef = useRef<number | null>(null);
   const timeoutRef = useRef<number | null>(null);
   const countdownRef = useRef<number | null>(null);
-  const latestVerificationTimestampRef = useRef(0);
+  const codeSearchActiveRef = useRef(false);
   const requestBaselineRef = useRef<{ code: string | null; receivedAt: string | null }>({ code: null, receivedAt: null });
 
   useEffect(() => {
@@ -2856,6 +2858,7 @@ function CustomerView({
       if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
       if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
       if (countdownRef.current) window.clearInterval(countdownRef.current);
+      codeSearchActiveRef.current = false;
     };
   }, []);
 
@@ -2871,10 +2874,15 @@ function CustomerView({
   )}`;
   const deviceLabel = (device: DeviceView) => (device === "mobile" ? "جوال / آيباد / بي سي / لابتوب" : "شاشة / سوني");
   const deviceChoiceLocked = Boolean(deviceView);
-  const codeReceivedAtMs = account?.verification_code_received_at ? new Date(account.verification_code_received_at).getTime() : null;
-  const codeExpiresAtMs = codeReceivedAtMs ? codeReceivedAtMs + verificationCodeLifetimeMs : null;
-  const codeSecondsRemaining = codeExpiresAtMs ? Math.max(0, Math.ceil((codeExpiresAtMs - nowTick) / 1000)) : 0;
-  const codeIsVisible = Boolean(account?.verification_code && codeExpiresAtMs && codeExpiresAtMs > nowTick);
+  const codeSecondsRemaining = codeDisplayExpiresAt
+    ? Math.max(0, Math.ceil((codeDisplayExpiresAt - nowTick) / 1000))
+    : 0;
+  const codeIsVisible = Boolean(
+    codeRequestState === "ready" &&
+      account?.verification_code &&
+      codeDisplayExpiresAt &&
+      codeDisplayExpiresAt > nowTick,
+  );
   const automatedCodeEnabled = account?.use_automated_code !== false;
   const codeRequestLimit = Math.max(0, link?.code_request_limit ?? 1);
   const codeRequestedCount = Math.max(0, link?.code_requested_count ?? 0);
@@ -2890,6 +2898,8 @@ function CustomerView({
     setAgreePreRequest(false);
     setCodeRequestState("idle");
     setCodeRequestSeconds(0);
+    setCodeDisplayExpiresAt(null);
+    codeSearchActiveRef.current = false;
     if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
     if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
     if (countdownRef.current) window.clearInterval(countdownRef.current);
@@ -2959,59 +2969,15 @@ function CustomerView({
   }, [deviceView, link?.id]);
 
   useEffect(() => {
-    const receivedAtMs = account?.verification_code_received_at
-      ? new Date(account.verification_code_received_at).getTime()
-      : 0;
-    latestVerificationTimestampRef.current =
-      receivedAtMs && !Number.isNaN(receivedAtMs) ? receivedAtMs : 0;
-  }, [account?.verification_code_received_at, link?.id]);
-
-  useEffect(() => {
-    if (!supabase || !account?.id || !automatedCodeEnabled || deviceView !== "mobile") return;
-    let active = true;
-
-    const refreshLatestCode = async () => {
-      const latestCode = await readLatestVerificationCode(account.id);
-      if (!active || latestCode.error || !latestCode.code || !latestCode.receivedAt) return;
-
-      const receivedAtMs = new Date(latestCode.receivedAt).getTime();
-      const isRecent =
-        !Number.isNaN(receivedAtMs) &&
-        Date.now() - receivedAtMs <= verificationCodeLifetimeMs;
-
-      if (!isRecent || receivedAtMs <= latestVerificationTimestampRef.current) return;
-
-      const replacingExistingCode = latestVerificationTimestampRef.current > 0;
-      latestVerificationTimestampRef.current = receivedAtMs;
-      setLink((current) =>
-        current?.accounts
-          ? {
-              ...current,
-              accounts: {
-                ...current.accounts,
-                verification_code: latestCode.code,
-                verification_code_received_at: latestCode.receivedAt,
-              },
-            }
-          : current,
-      );
-      setCodeRequestState("ready");
-      if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
-      if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
-      if (countdownRef.current) window.clearInterval(countdownRef.current);
-      if (replacingExistingCode) {
-        setToast({ label: "تم استلام كود أحدث وتحديثه تلقائياً", at: Date.now() });
-      }
-    };
-
-    void refreshLatestCode();
-    const timer = window.setInterval(() => void refreshLatestCode(), verificationCodePollMs);
-
-    return () => {
-      active = false;
-      window.clearInterval(timer);
-    };
-  }, [account?.id, automatedCodeEnabled, deviceView]);
+    if (
+      codeRequestState === "ready" &&
+      codeDisplayExpiresAt &&
+      codeDisplayExpiresAt <= nowTick
+    ) {
+      setCodeRequestState("expired");
+      setCodeDisplayExpiresAt(null);
+    }
+  }, [codeDisplayExpiresAt, codeRequestState, nowTick]);
 
   function requestDeviceChoice(device: DeviceView) {
     if (!automatedCodeEnabled || deviceChoiceLocked || (device === "mobile" && attemptUsed)) return;
@@ -3113,75 +3079,96 @@ function CustomerView({
     startCodeRequest();
   }
 
-  async function pollVerificationCode(accountId: string, startedAt: number) {
-    if (!supabase) {
-      if (link?.accounts?.verification_code) {
-        setCodeRequestState("ready");
-      }
-      return;
-    }
+  function clearCodeSearchTimers() {
+    if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
+    if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
+    if (countdownRef.current) window.clearInterval(countdownRef.current);
+    pollTimerRef.current = null;
+    timeoutRef.current = null;
+    countdownRef.current = null;
+  }
+
+  function showVerificationCode(latestCode: VerificationCodeResult, message: string) {
+    if (!latestCode.code || !latestCode.receivedAt) return false;
+
+    setLink((current) =>
+      current?.accounts
+        ? {
+            ...current,
+            accounts: {
+              ...current.accounts,
+              verification_code: latestCode.code,
+              verification_code_received_at: latestCode.receivedAt,
+            },
+          }
+        : current,
+    );
+    codeSearchActiveRef.current = false;
+    clearCodeSearchTimers();
+    setCodeRequestSeconds(0);
+    setCodeDisplayExpiresAt(Date.now() + verificationCodeLifetimeMs);
+    setCodeRequestState("ready");
+    setToast({ label: message, at: Date.now() });
+    return true;
+  }
+
+  async function pollVerificationCode(accountId: string) {
+    if (!codeSearchActiveRef.current) return;
 
     const latestCode = await readLatestVerificationCode(accountId);
-    const currentCode = latestCode.code;
-    const currentReceivedAt = latestCode.receivedAt;
-    const currentReceivedAtMs = currentReceivedAt ? new Date(currentReceivedAt).getTime() : 0;
-    const isRecentCode = Boolean(
-      currentReceivedAtMs &&
-        !Number.isNaN(currentReceivedAtMs) &&
-        Date.now() - currentReceivedAtMs <= verificationCodeLifetimeMs,
-    );
-    const baseline = requestBaselineRef.current;
-    const hasFreshCode =
-      Boolean(currentCode) &&
-      isRecentCode &&
-      (baseline.code !== currentCode || baseline.receivedAt !== currentReceivedAt);
+    if (!codeSearchActiveRef.current || latestCode.error || !latestCode.code || !latestCode.receivedAt) return;
 
-    if (!latestCode.error && hasFreshCode) {
-      setLink((current) =>
-        current && current.accounts
-          ? {
-              ...current,
-              accounts: {
-                ...current.accounts,
-                verification_code: currentCode,
-                verification_code_received_at: currentReceivedAt,
-              },
-            }
-          : current,
-      );
-      setCodeRequestState("ready");
-      latestVerificationTimestampRef.current = currentReceivedAtMs;
-      setToast({ label: "تم استلام كود جديد", at: Date.now() });
-      if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
-      if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
-      if (countdownRef.current) window.clearInterval(countdownRef.current);
+    const baseline = requestBaselineRef.current;
+    const baselineTime = baseline.receivedAt ? new Date(baseline.receivedAt).getTime() : 0;
+    const latestTime = new Date(latestCode.receivedAt).getTime();
+    const isNewerCode =
+      !Number.isNaN(latestTime) &&
+      (latestTime > baselineTime ||
+        (!baseline.receivedAt && latestCode.code !== baseline.code));
+
+    if (isNewerCode) {
+      showVerificationCode(latestCode, "تم استلام كود جديد");
+    }
+  }
+
+  async function finishCodeSearch(accountId: string) {
+    if (!codeSearchActiveRef.current) return;
+    codeSearchActiveRef.current = false;
+    clearCodeSearchTimers();
+    setCodeRequestSeconds(0);
+
+    const latestCode = await readLatestVerificationCode(accountId);
+    const latestTime = latestCode.receivedAt ? new Date(latestCode.receivedAt).getTime() : 0;
+    const codeAge = latestTime ? Date.now() - latestTime : Number.POSITIVE_INFINITY;
+    const isWithinFallbackWindow =
+      Boolean(latestCode.code) &&
+      !latestCode.error &&
+      !Number.isNaN(latestTime) &&
+      codeAge >= 0 &&
+      codeAge <= verificationCodeFallbackWindowMs;
+
+    if (isWithinFallbackWindow) {
+      showVerificationCode(latestCode, "تم عرض أحدث كود متاح خلال آخر 5 دقائق");
       return;
     }
 
-    if (Date.now() - startedAt >= 15_000) {
-      setCodeRequestState("failed");
-      if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
-      if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
-      if (countdownRef.current) window.clearInterval(countdownRef.current);
-    }
+    setCodeDisplayExpiresAt(null);
+    setCodeRequestState("failed");
   }
 
   function startCodeRequest() {
     const accountId = account?.id;
     if (!automatedCodeEnabled || !accountId) return;
 
+    clearCodeSearchTimers();
+    codeSearchActiveRef.current = true;
     setCodeRequestState("loading");
     setCodeRequestSeconds(15);
+    setCodeDisplayExpiresAt(null);
     requestBaselineRef.current = {
       code: account?.verification_code || null,
       receivedAt: account?.verification_code_received_at || null,
     };
-
-    if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
-    if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
-    if (countdownRef.current) window.clearInterval(countdownRef.current);
-
-    const startedAt = Date.now();
 
     countdownRef.current = window.setInterval(() => {
       setCodeRequestSeconds((current) => {
@@ -3193,16 +3180,13 @@ function CustomerView({
       });
     }, 1000);
 
-    void pollVerificationCode(accountId, startedAt);
+    void pollVerificationCode(accountId);
     pollTimerRef.current = window.setInterval(() => {
-      void pollVerificationCode(accountId, startedAt);
+      void pollVerificationCode(accountId);
     }, 2000);
 
     timeoutRef.current = window.setTimeout(() => {
-      if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
-      if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
-      if (countdownRef.current) window.clearInterval(countdownRef.current);
-      setCodeRequestState((current) => (current === "ready" ? current : "failed"));
+      void finishCodeSearch(accountId);
     }, 15_000);
   }
 
@@ -3470,17 +3454,40 @@ function CustomerView({
                         )}
                       </div>
                     </div>
-                  ) : deviceView === "mobile" &&
-                    (attemptUsed || codeRequestState === "failed" || codeRequestState === "ready") ? (
+                  ) : deviceView === "mobile" && codeRequestState === "failed" ? (
                     <div className="rounded-[1.75rem] border border-[#E0D4F8] bg-white p-4 shadow-card">
                       <div className="flex items-center gap-4">
-                        <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-[#F0E7FF] text-[#8B35F5]">
-                          <RefreshCw className="h-7 w-7 animate-spin" />
+                        <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-rose-50 text-rose-600">
+                          <CircleX className="h-7 w-7" />
                         </div>
                         <div className="min-w-0 flex-1">
-                          <p className="text-lg font-black">جاري انتظار وصول الرمز الجديد...</p>
+                          <p className="text-lg font-black">لم يتم العثور على رمز جديد حديث، يرجى التواصل مع الدعم الفني</p>
                           <p className="mt-1 text-xs font-bold leading-6 text-zinc-500">
-                            يتم فحص أحدث كود في قاعدة البيانات تلقائياً كل بضع ثوانٍ، وسيظهر هنا فور وصوله.
+                            انتهت مهلة البحث ولا يوجد كود مستلم خلال آخر 5 دقائق.
+                          </p>
+                        </div>
+                      </div>
+                      <a
+                        href={attemptsExhaustedWhatsAppUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#8B35F5] text-sm font-black text-white shadow-[0_14px_32px_rgba(139,53,245,0.24)] transition hover:bg-[#7626DD]"
+                      >
+                        <WhatsAppLogo className="h-5 w-5" />
+                        تواصل مع الدعم الفني عبر الواتساب
+                      </a>
+                    </div>
+                  ) : deviceView === "mobile" &&
+                    (codeRequestState === "expired" || (attemptUsed && codeRequestState === "idle")) ? (
+                    <div className="rounded-[1.75rem] border border-amber-200 bg-amber-50 p-4 shadow-card">
+                      <div className="flex items-center gap-4">
+                        <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-white text-amber-700">
+                          <Clock3 className="h-7 w-7" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-lg font-black text-amber-900">انتهت صلاحية الرمز والحد المتاح</p>
+                          <p className="mt-1 text-xs font-bold leading-6 text-amber-800">
+                            لا يمكن البحث مجدداً إلا بعد أن يقوم المشرف بتجديد رصيد المحاولات.
                           </p>
                         </div>
                       </div>
