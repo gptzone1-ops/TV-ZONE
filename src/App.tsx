@@ -2495,6 +2495,7 @@ function CustomerView({
   const account = link?.accounts;
   const service = serviceOf(account);
   const theme = serviceThemes[service];
+  const tvApprovalUrl = String(link?.tv_approval_url || "").trim();
   const supportWhatsAppUrl = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(
     `مرحباً اريد الحصول على الكود المخصص للحساب: ${account?.email || ""}`,
   )}`;
@@ -2535,7 +2536,7 @@ function CustomerView({
     const refreshTvApprovalUrl = async () => {
       const { data, error } = await client
         .from("customer_links")
-        .select("tv_approval_url,updated_at")
+        .select("tv_approval_url")
         .eq("id", link.id)
         .maybeSingle();
 
@@ -2550,7 +2551,6 @@ function CustomerView({
             ? {
                 ...current,
                 tv_approval_url: data.tv_approval_url,
-                updated_at: data.updated_at,
               }
             : current,
         );
@@ -2577,7 +2577,6 @@ function CustomerView({
               ? {
                   ...current,
                   tv_approval_url: nextUrl,
-                  updated_at: String(payload.new.updated_at || ""),
                 }
               : current,
           );
@@ -2952,9 +2951,9 @@ function CustomerView({
                     </div>
                   ) : !deviceView ? null : deviceView === "screen" ? (
                     <div className="rounded-[1.75rem] border border-[#E0D4F8] bg-gradient-to-l from-white to-[#F7F2FF] p-4 shadow-card">
-                      {link.tv_approval_url ? (
+                      {tvApprovalUrl ? (
                         <a
-                          href={link.tv_approval_url}
+                          href={tvApprovalUrl}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="mb-4 flex min-h-14 w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-l from-[#E50914] to-[#8B35F5] px-4 text-center text-sm font-black text-white shadow-[0_14px_34px_rgba(139,53,245,0.28)] transition hover:-translate-y-0.5 hover:shadow-[0_18px_38px_rgba(229,9,20,0.24)]"
