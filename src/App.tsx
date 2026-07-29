@@ -66,6 +66,8 @@ const adminAuthValue = `remembered:${adminPassword}`;
 const whatsappNumber = "966581688656";
 const disclaimerStorageKey = "disclaimer_accepted";
 const dayMs = 1000 * 60 * 60 * 24;
+const verificationCodeLifetimeMs = 120 * 1000;
+const verificationCodePollMs = 2500;
 const duplicateEmailMessage = "عفواً، هذا البريد الإلكتروني مسجل مسبقاً ولا يمكن تكراره";
 const duplicateEmailSaveMessage = duplicateEmailMessage;
 const duplicateProfileMessage = (profileName: string) => `هذا الملف (${profileName}) مسجل مسبقاً لهذا الحساب`;
@@ -222,44 +224,54 @@ async function readLatestVerificationCode(accountId: string): Promise<Verificati
     return { code: null, receivedAt: null, error: null };
   }
 
-  const { data, error } = await supabase
-    .from("accounts")
-    .select("verification_code,verification_code_received_at")
-    .eq("id", accountId)
-    .maybeSingle();
+  const [accountResult, linkResult] = await Promise.all([
+    supabase
+      .from("accounts")
+      .select("verification_code,verification_code_received_at")
+      .eq("id", accountId)
+      .maybeSingle(),
+    supabase
+      .from("customer_links")
+      .select("verification_code,verification_code_received_at")
+      .eq("account_id", accountId)
+      .not("verification_code", "is", null)
+      .order("verification_code_received_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ]);
 
-  if (!error && data?.verification_code) {
+  if (accountResult.error) {
+    console.error("Supabase verification code read error:", accountResult.error);
+  }
+  if (linkResult.error) {
+    console.error("Supabase customer link code fallback error:", linkResult.error);
+  }
+
+  const candidates = [accountResult.data, linkResult.data]
+    .filter((candidate): candidate is NonNullable<typeof candidate> => Boolean(candidate?.verification_code))
+    .sort((first, second) => {
+      const firstTime = first.verification_code_received_at
+        ? new Date(first.verification_code_received_at).getTime()
+        : 0;
+      const secondTime = second.verification_code_received_at
+        ? new Date(second.verification_code_received_at).getTime()
+        : 0;
+      return secondTime - firstTime;
+    });
+
+  const latest = candidates[0];
+  if (latest?.verification_code) {
     return {
-      code: data.verification_code,
-      receivedAt: data.verification_code_received_at || null,
+      code: latest.verification_code,
+      receivedAt: latest.verification_code_received_at || null,
       error: null,
     };
   }
 
-  if (error) console.error("Supabase verification code read error:", error);
-
-  const fallback = await supabase
-    .from("customer_links")
-    .select("verification_code,verification_code_received_at")
-    .eq("account_id", accountId)
-    .not("verification_code", "is", null)
-    .order("verification_code_received_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (!fallback.error && fallback.data?.verification_code) {
-    return {
-      code: fallback.data.verification_code,
-      receivedAt: fallback.data.verification_code_received_at || null,
-      error: null,
-    };
-  }
-
-  if (fallback.error) console.error("Supabase customer link code fallback error:", fallback.error);
   return {
     code: null,
     receivedAt: null,
-    error: error || fallback.error || null,
+    error: accountResult.error || linkResult.error || null,
   };
 }
 
@@ -2789,6 +2801,7 @@ function CustomerView({
   const pollTimerRef = useRef<number | null>(null);
   const timeoutRef = useRef<number | null>(null);
   const countdownRef = useRef<number | null>(null);
+  const latestVerificationTimestampRef = useRef(0);
   const requestBaselineRef = useRef<{ code: string | null; receivedAt: string | null }>({ code: null, receivedAt: null });
 
   useEffect(() => {
@@ -2859,7 +2872,7 @@ function CustomerView({
   const deviceLabel = (device: DeviceView) => (device === "mobile" ? "جوال / آيباد / بي سي / لابتوب" : "شاشة / سوني");
   const deviceChoiceLocked = Boolean(deviceView);
   const codeReceivedAtMs = account?.verification_code_received_at ? new Date(account.verification_code_received_at).getTime() : null;
-  const codeExpiresAtMs = codeReceivedAtMs ? codeReceivedAtMs + 120_000 : null;
+  const codeExpiresAtMs = codeReceivedAtMs ? codeReceivedAtMs + verificationCodeLifetimeMs : null;
   const codeSecondsRemaining = codeExpiresAtMs ? Math.max(0, Math.ceil((codeExpiresAtMs - nowTick) / 1000)) : 0;
   const codeIsVisible = Boolean(account?.verification_code && codeExpiresAtMs && codeExpiresAtMs > nowTick);
   const automatedCodeEnabled = account?.use_automated_code !== false;
@@ -2944,6 +2957,61 @@ function CustomerView({
       void client.removeChannel(channel);
     };
   }, [deviceView, link?.id]);
+
+  useEffect(() => {
+    const receivedAtMs = account?.verification_code_received_at
+      ? new Date(account.verification_code_received_at).getTime()
+      : 0;
+    latestVerificationTimestampRef.current =
+      receivedAtMs && !Number.isNaN(receivedAtMs) ? receivedAtMs : 0;
+  }, [account?.verification_code_received_at, link?.id]);
+
+  useEffect(() => {
+    if (!supabase || !account?.id || !automatedCodeEnabled || deviceView !== "mobile") return;
+    let active = true;
+
+    const refreshLatestCode = async () => {
+      const latestCode = await readLatestVerificationCode(account.id);
+      if (!active || latestCode.error || !latestCode.code || !latestCode.receivedAt) return;
+
+      const receivedAtMs = new Date(latestCode.receivedAt).getTime();
+      const isRecent =
+        !Number.isNaN(receivedAtMs) &&
+        Date.now() - receivedAtMs <= verificationCodeLifetimeMs;
+
+      if (!isRecent || receivedAtMs <= latestVerificationTimestampRef.current) return;
+
+      const replacingExistingCode = latestVerificationTimestampRef.current > 0;
+      latestVerificationTimestampRef.current = receivedAtMs;
+      setLink((current) =>
+        current?.accounts
+          ? {
+              ...current,
+              accounts: {
+                ...current.accounts,
+                verification_code: latestCode.code,
+                verification_code_received_at: latestCode.receivedAt,
+              },
+            }
+          : current,
+      );
+      setCodeRequestState("ready");
+      if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
+      if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
+      if (countdownRef.current) window.clearInterval(countdownRef.current);
+      if (replacingExistingCode) {
+        setToast({ label: "تم استلام كود أحدث وتحديثه تلقائياً", at: Date.now() });
+      }
+    };
+
+    void refreshLatestCode();
+    const timer = window.setInterval(() => void refreshLatestCode(), verificationCodePollMs);
+
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [account?.id, automatedCodeEnabled, deviceView]);
 
   function requestDeviceChoice(device: DeviceView) {
     if (!automatedCodeEnabled || deviceChoiceLocked || (device === "mobile" && attemptUsed)) return;
@@ -3056,9 +3124,16 @@ function CustomerView({
     const latestCode = await readLatestVerificationCode(accountId);
     const currentCode = latestCode.code;
     const currentReceivedAt = latestCode.receivedAt;
+    const currentReceivedAtMs = currentReceivedAt ? new Date(currentReceivedAt).getTime() : 0;
+    const isRecentCode = Boolean(
+      currentReceivedAtMs &&
+        !Number.isNaN(currentReceivedAtMs) &&
+        Date.now() - currentReceivedAtMs <= verificationCodeLifetimeMs,
+    );
     const baseline = requestBaselineRef.current;
     const hasFreshCode =
       Boolean(currentCode) &&
+      isRecentCode &&
       (baseline.code !== currentCode || baseline.receivedAt !== currentReceivedAt);
 
     if (!latestCode.error && hasFreshCode) {
@@ -3075,6 +3150,7 @@ function CustomerView({
           : current,
       );
       setCodeRequestState("ready");
+      latestVerificationTimestampRef.current = currentReceivedAtMs;
       setToast({ label: "تم استلام كود جديد", at: Date.now() });
       if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
       if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
@@ -3394,16 +3470,17 @@ function CustomerView({
                         )}
                       </div>
                     </div>
-                  ) : deviceView === "mobile" && attemptUsed ? (
+                  ) : deviceView === "mobile" &&
+                    (attemptUsed || codeRequestState === "failed" || codeRequestState === "ready") ? (
                     <div className="rounded-[1.75rem] border border-[#E0D4F8] bg-white p-4 shadow-card">
                       <div className="flex items-center gap-4">
                         <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-[#F0E7FF] text-[#8B35F5]">
-                          <ShieldCheck className="h-7 w-7" />
+                          <RefreshCw className="h-7 w-7 animate-spin" />
                         </div>
                         <div className="min-w-0 flex-1">
-                          <p className="text-lg font-black">نفاذ رصيد طلب الأكواد لهذا الحساب</p>
+                          <p className="text-lg font-black">جاري انتظار وصول الرمز الجديد...</p>
                           <p className="mt-1 text-xs font-bold leading-6 text-zinc-500">
-                            تم استهلاك محاولة طلب الكود الوحيدة لهذا الحساب. تواصل مع الدعم الفني عبر الواتساب للمساعدة.
+                            يتم فحص أحدث كود في قاعدة البيانات تلقائياً كل بضع ثوانٍ، وسيظهر هنا فور وصوله.
                           </p>
                         </div>
                       </div>
