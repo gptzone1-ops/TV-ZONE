@@ -66,9 +66,6 @@ const adminAuthValue = `remembered:${adminPassword}`;
 const whatsappNumber = "966581688656";
 const disclaimerStorageKey = "disclaimer_accepted";
 const dayMs = 1000 * 60 * 60 * 24;
-const tvApprovalRecentWindowMs = 5 * 60 * 1000;
-const tvApprovalRevealMs = 2 * 60 * 1000;
-const tvApprovalPollMs = 3 * 1000;
 const duplicateEmailMessage = "عفواً، هذا البريد الإلكتروني مسجل مسبقاً ولا يمكن تكراره";
 const duplicateEmailSaveMessage = duplicateEmailMessage;
 const duplicateProfileMessage = (profileName: string) => `هذا الملف (${profileName}) مسجل مسبقاً لهذا الحساب`;
@@ -742,7 +739,6 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     const updates = {
       code_request_limit: normalizedLimit,
       code_requested_count: 0,
-      tv_approval_requested_at: null,
     };
 
     if (supabase) {
@@ -761,7 +757,6 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
               ...link,
               code_request_limit: normalizedLimit,
               code_requested_count: 0,
-              tv_approval_requested_at: null,
             }
           : link,
       ),
@@ -2700,8 +2695,6 @@ function CustomerView({
   const [agreeDisclaimer, setAgreeDisclaimer] = useState(false);
   const [codeRequestState, setCodeRequestState] = useState<"idle" | "loading" | "ready" | "failed">("idle");
   const [codeRequestSeconds, setCodeRequestSeconds] = useState(0);
-  const [tvRequestState, setTvRequestState] = useState<"idle" | "loading" | "ready" | "failed">("idle");
-  const [tvRequestSeconds, setTvRequestSeconds] = useState(0);
   const [nowTick, setNowTick] = useState(() => Date.now());
   const [deviceView, setDeviceView] = useState<DeviceView | null>(null);
   const [pendingDeviceView, setPendingDeviceView] = useState<DeviceView | null>(null);
@@ -2711,10 +2704,6 @@ function CustomerView({
   const pollTimerRef = useRef<number | null>(null);
   const timeoutRef = useRef<number | null>(null);
   const countdownRef = useRef<number | null>(null);
-  const tvTimeoutRef = useRef<number | null>(null);
-  const tvCountdownRef = useRef<number | null>(null);
-  const tvRequestStartedAtRef = useRef(0);
-  const tvRevealInFlightRef = useRef(false);
   const requestBaselineRef = useRef<{ code: string | null; receivedAt: string | null }>({ code: null, receivedAt: null });
 
   useEffect(() => {
@@ -2734,7 +2723,7 @@ function CustomerView({
       const { data, error } = await supabase
         .from("customer_links")
         .select(
-          "*,accounts(id,email,use_automated_code,verification_code,verification_code_received_at,service_type,account_type,expires_at,created_at),tv_approval_visible_at",
+          "*,accounts(id,email,use_automated_code,verification_code,verification_code_received_at,service_type,account_type,expires_at,created_at)",
         )
         .eq(queryColumn, identifier)
         .single();
@@ -2769,8 +2758,6 @@ function CustomerView({
       if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
       if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
       if (countdownRef.current) window.clearInterval(countdownRef.current);
-      if (tvTimeoutRef.current) window.clearTimeout(tvTimeoutRef.current);
-      if (tvCountdownRef.current) window.clearInterval(tvCountdownRef.current);
     };
   }, []);
 
@@ -2790,129 +2777,11 @@ function CustomerView({
   const codeExpiresAtMs = codeReceivedAtMs ? codeReceivedAtMs + 120_000 : null;
   const codeSecondsRemaining = codeExpiresAtMs ? Math.max(0, Math.ceil((codeExpiresAtMs - nowTick) / 1000)) : 0;
   const codeIsVisible = Boolean(account?.verification_code && codeExpiresAtMs && codeExpiresAtMs > nowTick);
-  const tvApprovalVisibleAtMs = link?.tv_approval_visible_at
-    ? new Date(link.tv_approval_visible_at).getTime()
-    : null;
-  const tvApprovalExpiresAtMs =
-    tvApprovalVisibleAtMs && !Number.isNaN(tvApprovalVisibleAtMs)
-      ? tvApprovalVisibleAtMs + tvApprovalRevealMs
-      : null;
-  const tvApprovalSecondsRemaining = tvApprovalExpiresAtMs
-    ? Math.max(0, Math.ceil((tvApprovalExpiresAtMs - nowTick) / 1000))
-    : 0;
-  const tvApprovalIsVisible = Boolean(
-    tvApprovalUrl &&
-      tvApprovalExpiresAtMs &&
-      tvApprovalExpiresAtMs > nowTick,
-  );
-  const tvApprovalHasExpired = Boolean(
-    tvApprovalUrl &&
-      tvApprovalExpiresAtMs &&
-      tvApprovalExpiresAtMs <= nowTick,
-  );
   const automatedCodeEnabled = account?.use_automated_code !== false;
   const codeRequestLimit = Math.max(0, link?.code_request_limit ?? 1);
   const codeRequestedCount = Math.max(0, link?.code_requested_count ?? 0);
   const hasCodeRequestCredit = codeRequestedCount < codeRequestLimit;
   const attemptUsed = !hasCodeRequestCredit;
-  const hasRecentTvApprovalUrl = (candidate?: Pick<CustomerLink, "tv_approval_url" | "updated_at"> | null) => {
-    const candidateUrl = String(candidate?.tv_approval_url || "").trim();
-    const receivedAtMs = candidate?.updated_at ? new Date(candidate.updated_at).getTime() : 0;
-    return Boolean(
-      candidateUrl &&
-        receivedAtMs &&
-        !Number.isNaN(receivedAtMs) &&
-        Date.now() - receivedAtMs <= tvApprovalRecentWindowMs,
-    );
-  };
-
-  const revealTvApprovalUrl = async (candidate: Partial<CustomerLink>) => {
-    if (!link?.id || tvRevealInFlightRef.current) return false;
-
-    const candidateUrl = String(candidate.tv_approval_url || "").trim();
-    if (!candidateUrl) return false;
-
-    const visibleAt = candidate.tv_approval_visible_at || new Date().toISOString();
-    const visibleAtMs = new Date(visibleAt).getTime();
-    const alreadyVisible = Boolean(
-      candidate.tv_approval_visible_at &&
-        visibleAtMs &&
-        !Number.isNaN(visibleAtMs) &&
-        visibleAtMs + tvApprovalRevealMs > Date.now(),
-    );
-
-    const currentRequestedCount = Math.max(0, Number(candidate.code_requested_count ?? codeRequestedCount));
-    const currentRequestLimit = Math.max(0, Number(candidate.code_request_limit ?? codeRequestLimit));
-    const candidateHasCredit = currentRequestedCount < currentRequestLimit;
-
-    if (!alreadyVisible && !candidateHasCredit) {
-      setTvRequestState("failed");
-      setTvRequestSeconds(0);
-      setToast({ label: "نفد رصيد طلب رابط الشاشة لهذا الحساب، يرجى التواصل مع الدعم", at: Date.now() });
-      return false;
-    }
-
-    tvRevealInFlightRef.current = true;
-    const nextRequestedCount = alreadyVisible ? currentRequestedCount : currentRequestedCount + 1;
-    const nextVisibleAt = alreadyVisible ? candidate.tv_approval_visible_at || visibleAt : visibleAt;
-
-    if (supabase && !alreadyVisible) {
-      const { data, error } = await supabase
-        .from("customer_links")
-        .update({
-          code_requested_count: nextRequestedCount,
-          tv_approval_visible_at: nextVisibleAt,
-        })
-        .eq("id", link.id)
-        .eq("code_requested_count", currentRequestedCount)
-        .select("code_requested_count,code_request_limit,tv_approval_url,tv_approval_requested_at,tv_approval_visible_at,updated_at")
-        .maybeSingle();
-
-      if (error || !data) {
-        console.error("Supabase TV approval reveal update error:", error);
-        tvRevealInFlightRef.current = false;
-        setTvRequestState("failed");
-        setTvRequestSeconds(0);
-        setToast({ label: "تعذر احتساب محاولة رابط الشاشة، حدّث الصفحة وحاول مجدداً", at: Date.now() });
-        return false;
-      }
-
-      setLink((current) =>
-        current
-          ? {
-              ...current,
-              code_requested_count: data.code_requested_count,
-              code_request_limit: data.code_request_limit,
-              tv_approval_url: data.tv_approval_url,
-              tv_approval_requested_at: data.tv_approval_requested_at,
-              tv_approval_visible_at: data.tv_approval_visible_at,
-              updated_at: data.updated_at,
-            }
-          : current,
-      );
-    } else {
-      setLink((current) =>
-        current
-          ? {
-              ...current,
-              code_requested_count: nextRequestedCount,
-              tv_approval_url: candidateUrl,
-              tv_approval_requested_at: candidate.tv_approval_requested_at ?? current.tv_approval_requested_at,
-              tv_approval_visible_at: nextVisibleAt,
-              updated_at: candidate.updated_at ?? current.updated_at,
-            }
-          : current,
-      );
-    }
-
-    setTvRequestState("ready");
-    setTvRequestSeconds(0);
-    if (tvTimeoutRef.current) window.clearTimeout(tvTimeoutRef.current);
-    if (tvCountdownRef.current) window.clearInterval(tvCountdownRef.current);
-    setToast({ label: "تم استلام رابط الدخول للشاشة", at: Date.now() });
-    tvRevealInFlightRef.current = false;
-    return true;
-  };
 
   useEffect(() => {
     if (automatedCodeEnabled) return;
@@ -2923,13 +2792,9 @@ function CustomerView({
     setAgreePreRequest(false);
     setCodeRequestState("idle");
     setCodeRequestSeconds(0);
-    setTvRequestState("idle");
-    setTvRequestSeconds(0);
     if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
     if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
     if (countdownRef.current) window.clearInterval(countdownRef.current);
-    if (tvTimeoutRef.current) window.clearTimeout(tvTimeoutRef.current);
-    if (tvCountdownRef.current) window.clearInterval(tvCountdownRef.current);
   }, [automatedCodeEnabled]);
 
   useEffect(() => {
@@ -2940,9 +2805,7 @@ function CustomerView({
     const refreshTvApprovalUrl = async () => {
       const { data, error } = await client
         .from("customer_links")
-        .select(
-          "tv_approval_url,tv_approval_requested_at,tv_approval_visible_at,updated_at,code_request_limit,code_requested_count",
-        )
+        .select("tv_approval_url")
         .eq("id", link.id)
         .maybeSingle();
 
@@ -2951,17 +2814,12 @@ function CustomerView({
         return;
       }
 
-      if (active && data) {
+      if (active && data?.tv_approval_url) {
         setLink((current) =>
           current
             ? {
                 ...current,
-                tv_approval_url: data.tv_approval_url || null,
-                tv_approval_requested_at: data.tv_approval_requested_at,
-                tv_approval_visible_at: data.tv_approval_visible_at,
-                updated_at: data.updated_at,
-                code_request_limit: data.code_request_limit,
-                code_requested_count: data.code_requested_count,
+                tv_approval_url: data.tv_approval_url,
               }
             : current,
         );
@@ -2969,7 +2827,7 @@ function CustomerView({
     };
 
     void refreshTvApprovalUrl();
-    const timer = window.setInterval(() => void refreshTvApprovalUrl(), 3000);
+    const timer = window.setInterval(() => void refreshTvApprovalUrl(), 2000);
     const channel = client
       .channel(`customer-tv-approval-${link.id}`)
       .on(
@@ -2982,29 +2840,12 @@ function CustomerView({
         },
         (payload) => {
           const nextUrl = String(payload.new.tv_approval_url || "").trim();
-          if (!active) return;
+          if (!active || !nextUrl) return;
           setLink((current) =>
             current
               ? {
                   ...current,
-                  tv_approval_url: nextUrl || null,
-                  tv_approval_requested_at: String(
-                    payload.new.tv_approval_requested_at ||
-                      current.tv_approval_requested_at ||
-                      "",
-                  ),
-                  tv_approval_visible_at: String(
-                    payload.new.tv_approval_visible_at ||
-                      current.tv_approval_visible_at ||
-                      "",
-                  ),
-                  updated_at: String(payload.new.updated_at || ""),
-                  code_request_limit: Number(
-                    payload.new.code_request_limit ?? current.code_request_limit ?? 1,
-                  ),
-                  code_requested_count: Number(
-                    payload.new.code_requested_count ?? current.code_requested_count ?? 0,
-                  ),
+                  tv_approval_url: nextUrl,
                 }
               : current,
           );
@@ -3020,13 +2861,13 @@ function CustomerView({
   }, [deviceView, link?.id]);
 
   function requestDeviceChoice(device: DeviceView) {
-    if (!automatedCodeEnabled || deviceChoiceLocked || attemptUsed) return;
+    if (!automatedCodeEnabled || deviceChoiceLocked || (device === "mobile" && attemptUsed)) return;
     setPendingDeviceView(device);
     setAgreeDeviceChoice(false);
   }
 
   async function confirmDeviceChoice() {
-    if (!pendingDeviceView || !link?.id || attemptUsed) return;
+    if (!pendingDeviceView || !link?.id || (pendingDeviceView === "mobile" && attemptUsed)) return;
     const selectedDevice = pendingDeviceView;
 
     if (supabase) {
@@ -3204,137 +3045,6 @@ function CustomerView({
     }, 15_000);
   }
 
-  async function startTvApprovalRequest() {
-    if (
-      !automatedCodeEnabled ||
-      !link?.id ||
-      !hasCodeRequestCredit ||
-      tvRequestState === "loading"
-    ) {
-      return;
-    }
-
-    setTvRequestState("loading");
-    setTvRequestSeconds(120);
-
-    if (tvTimeoutRef.current) window.clearTimeout(tvTimeoutRef.current);
-    if (tvCountdownRef.current) window.clearInterval(tvCountdownRef.current);
-
-    if (supabase) {
-      const { data: currentTvLink, error: currentTvLinkError } = await supabase
-        .from("customer_links")
-        .select("code_requested_count,code_request_limit,tv_approval_requested_at,tv_approval_url,tv_approval_visible_at,updated_at")
-        .eq("id", link.id)
-        .maybeSingle();
-
-      if (currentTvLinkError) {
-        console.error("Supabase TV approval recent URL check error:", currentTvLinkError);
-        setTvRequestState("failed");
-        setTvRequestSeconds(0);
-        setToast({ label: "تعذر فحص رابط الشاشة، حاول مرة أخرى", at: Date.now() });
-        return;
-      }
-
-      if (currentTvLink?.tv_approval_url && hasRecentTvApprovalUrl(currentTvLink)) {
-        await revealTvApprovalUrl(currentTvLink);
-        return;
-      }
-
-      const requestedAt = new Date().toISOString();
-      const { data, error } = await supabase
-        .from("customer_links")
-        .update({
-          tv_approval_requested_at: requestedAt,
-          tv_approval_url: null,
-          tv_approval_visible_at: null,
-          updated_at: requestedAt,
-        })
-        .eq("id", link.id)
-        .select("code_requested_count,code_request_limit,tv_approval_requested_at,tv_approval_url,tv_approval_visible_at,updated_at")
-        .maybeSingle();
-
-      if (error || !data) {
-        console.error("Supabase TV approval request update error:", error);
-        setTvRequestState("failed");
-        setTvRequestSeconds(0);
-        setToast({ label: "تعذر طلب رابط الدخول للشاشة، حاول مرة أخرى", at: Date.now() });
-        return;
-      }
-
-      setLink((current) =>
-        current
-          ? {
-              ...current,
-              code_requested_count: data.code_requested_count,
-              code_request_limit: data.code_request_limit,
-              tv_approval_requested_at: data.tv_approval_requested_at,
-              tv_approval_url: data.tv_approval_url,
-              tv_approval_visible_at: data.tv_approval_visible_at,
-              updated_at: data.updated_at,
-            }
-          : current,
-      );
-    } else {
-      const requestedAt = new Date().toISOString();
-      setLink((current) =>
-        current
-          ? {
-              ...current,
-              tv_approval_requested_at: new Date().toISOString(),
-              tv_approval_url: null,
-              tv_approval_visible_at: null,
-              updated_at: requestedAt,
-            }
-          : current,
-      );
-    }
-
-    tvRequestStartedAtRef.current = Date.now();
-
-    tvCountdownRef.current = window.setInterval(() => {
-      setTvRequestSeconds((current) => {
-        if (current <= 1) {
-          if (tvCountdownRef.current) window.clearInterval(tvCountdownRef.current);
-          return 0;
-        }
-        return current - 1;
-      });
-    }, 1000);
-
-    const pollTvApprovalUrl = async () => {
-      if (!supabase || !link?.id) return;
-      const { data, error } = await supabase
-        .from("customer_links")
-        .select("code_requested_count,code_request_limit,tv_approval_requested_at,tv_approval_url,tv_approval_visible_at,updated_at")
-        .eq("id", link.id)
-        .maybeSingle();
-
-      if (error) {
-        console.error("Supabase TV approval polling error:", error);
-        return;
-      }
-
-      if (data?.tv_approval_url && hasRecentTvApprovalUrl(data)) {
-        await revealTvApprovalUrl(data);
-      }
-    };
-
-    if (tvTimeoutRef.current) window.clearTimeout(tvTimeoutRef.current);
-    tvTimeoutRef.current = window.setInterval(() => {
-      if (Date.now() - tvRequestStartedAtRef.current >= tvApprovalRevealMs) {
-        if (tvTimeoutRef.current) window.clearInterval(tvTimeoutRef.current);
-        if (tvCountdownRef.current) window.clearInterval(tvCountdownRef.current);
-        setTvRequestState((current) => (current === "ready" ? current : "failed"));
-        setTvRequestSeconds(0);
-        return;
-      }
-
-      void pollTvApprovalUrl();
-    }, tvApprovalPollMs);
-
-    void pollTvApprovalUrl();
-  }
-
   return (
     <Shell toast={toast}>
       <div className="min-h-screen bg-gradient-to-b from-[#F3F4F6] via-[#F9FAFB] to-white px-4 py-6 md:py-10" dir="rtl">
@@ -3458,7 +3168,7 @@ function CustomerView({
                       <button
                         type="button"
                         onClick={() => requestDeviceChoice("screen")}
-                        disabled={deviceChoiceLocked || attemptUsed}
+                        disabled={deviceChoiceLocked}
                         className={cn(
                           "flex min-h-12 items-center justify-center gap-2 rounded-2xl px-3 text-sm font-black transition disabled:cursor-not-allowed",
                           deviceView === "screen"
@@ -3472,7 +3182,7 @@ function CustomerView({
                     </div>
                     {attemptUsed && !deviceChoiceLocked ? (
                       <p className="mt-3 rounded-2xl bg-white/80 px-4 py-3 text-xs font-black text-rose-600">
-                        تم استهلاك رصيد الأكواد ولا يمكن اختيار جهاز جديد.
+                        تم استهلاك رصيد الأكواد للجوال، ويمكنك اختيار شاشة / سوني دون خصم رصيد.
                       </p>
                     ) : deviceChoiceLocked ? (
                       <p className="mt-3 rounded-2xl bg-white/80 px-4 py-3 text-xs font-black text-[#7C2CE8]">
@@ -3510,7 +3220,7 @@ function CustomerView({
                     </div>
                   ) : !deviceView ? null : deviceView === "screen" ? (
                     <div className="rounded-[1.75rem] border border-[#E0D4F8] bg-gradient-to-l from-white to-[#F7F2FF] p-4 shadow-card">
-                      {tvApprovalIsVisible ? (
+                      {tvApprovalUrl ? (
                         <a
                           href={tvApprovalUrl}
                           target="_blank"
@@ -3520,39 +3230,11 @@ function CustomerView({
                           <ExternalLink className="h-5 w-5" />
                           اضغط هنا لتسجيل الدخول المباشر للشاشة / سوني
                         </a>
-                      ) : tvRequestState === "loading" ? (
+                      ) : (
                         <div className="mb-4 flex items-center justify-center gap-2 rounded-2xl border border-[#DCCBFA] bg-white px-4 py-3 text-center text-xs font-black text-[#7C2CE8]">
                           <RefreshCw className="h-4 w-4 animate-spin" />
-                          جاري انتظار رابط الموافقة المباشر... {tvRequestSeconds}s
+                          جاري انتظار رابط الموافقة المباشر...
                         </div>
-                      ) : tvApprovalHasExpired ? (
-                        <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-center">
-                          <p className="text-sm font-black text-amber-800">
-                            انتهت صلاحية الرابط، يرجى طلب رابط جديد عند الحاجة
-                          </p>
-                          <button
-                            type="button"
-                            onClick={() => void startTvApprovalRequest()}
-                            disabled={!hasCodeRequestCredit}
-                            className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-2xl bg-[#8B35F5] text-sm font-black text-white transition hover:bg-[#7626DD] disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            <RefreshCw className="h-4 w-4" />
-                            طلب رابط جديد
-                          </button>
-                        </div>
-                      ) : !hasCodeRequestCredit ? (
-                        <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-center text-sm font-black text-rose-700">
-                          نفد رصيد طلب رابط الشاشة لهذا الحساب، يرجى التواصل مع الدعم.
-                        </div>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => void startTvApprovalRequest()}
-                          className="mb-4 flex min-h-14 w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-l from-[#E50914] to-[#8B35F5] px-4 text-center text-sm font-black text-white shadow-[0_14px_34px_rgba(139,53,245,0.28)] transition hover:-translate-y-0.5"
-                        >
-                          <ExternalLink className="h-5 w-5" />
-                          جلب رابط الدخول للشاشة / سوني
-                        </button>
                       )}
                       <div className="flex items-center gap-4">
                         <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-[#F0E7FF] text-[#8B35F5]">
