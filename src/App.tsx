@@ -2535,7 +2535,7 @@ function CustomerView({
     const refreshTvApprovalUrl = async () => {
       const { data, error } = await client
         .from("customer_links")
-        .select("tv_approval_url")
+        .select("tv_approval_url,updated_at")
         .eq("id", link.id)
         .maybeSingle();
 
@@ -2546,17 +2546,49 @@ function CustomerView({
 
       if (active && data?.tv_approval_url) {
         setLink((current) =>
-          current ? { ...current, tv_approval_url: data.tv_approval_url } : current,
+          current
+            ? {
+                ...current,
+                tv_approval_url: data.tv_approval_url,
+                updated_at: data.updated_at,
+              }
+            : current,
         );
       }
     };
 
     void refreshTvApprovalUrl();
-    const timer = window.setInterval(() => void refreshTvApprovalUrl(), 2500);
+    const timer = window.setInterval(() => void refreshTvApprovalUrl(), 2000);
+    const channel = client
+      .channel(`customer-tv-approval-${link.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "customer_links",
+          filter: `id=eq.${link.id}`,
+        },
+        (payload) => {
+          const nextUrl = String(payload.new.tv_approval_url || "").trim();
+          if (!active || !nextUrl) return;
+          setLink((current) =>
+            current
+              ? {
+                  ...current,
+                  tv_approval_url: nextUrl,
+                  updated_at: String(payload.new.updated_at || ""),
+                }
+              : current,
+          );
+        },
+      )
+      .subscribe();
 
     return () => {
       active = false;
       window.clearInterval(timer);
+      void client.removeChannel(channel);
     };
   }, [deviceView, link?.id]);
 

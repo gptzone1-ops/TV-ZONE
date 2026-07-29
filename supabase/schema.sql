@@ -24,6 +24,7 @@ create table if not exists public.customer_links (
   profile_label text not null,
   profile_code text not null,
   tv_approval_url text,
+  updated_at timestamptz not null default now(),
   created_at timestamptz not null default now()
 );
 
@@ -77,6 +78,9 @@ alter table public.customer_links
 
 alter table public.customer_links
   add column if not exists tv_approval_url text;
+
+alter table public.customer_links
+  add column if not exists updated_at timestamptz not null default now();
 
 alter table public.accounts
   add column if not exists service_type text not null default 'netflix';

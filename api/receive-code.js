@@ -79,21 +79,51 @@ export default async function handler(req, res) {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  const { data: account, error: findError } = await supabase
-    .from("accounts")
-    .select("id,email")
-    .ilike("email", email)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  let matchingLinks = [];
+  const { data: relatedLinks, error: relatedLinksError } = await supabase
+    .from("customer_links")
+    .select("id,account_id,accounts!inner(id,email)")
+    .ilike("accounts.email", email);
 
-  if (findError) {
-    return send(res, 500, { success: false, error: "account_lookup_failed" });
+  if (!relatedLinksError && relatedLinks?.length) {
+    matchingLinks = relatedLinks;
+  } else {
+    if (relatedLinksError) {
+      console.error("Customer link email lookup failed, using account fallback:", relatedLinksError);
+    }
+
+    const { data: matchingAccounts, error: accountLookupError } = await supabase
+      .from("accounts")
+      .select("id,email")
+      .ilike("email", email);
+
+    if (accountLookupError) {
+      console.error("Account email fallback lookup failed:", accountLookupError);
+      return send(res, 500, { success: false, error: "customer_link_lookup_failed" });
+    }
+
+    const accountIds = (matchingAccounts || []).map((account) => account.id);
+    if (accountIds.length) {
+      const { data: fallbackLinks, error: fallbackLinksError } = await supabase
+        .from("customer_links")
+        .select("id,account_id")
+        .in("account_id", accountIds);
+
+      if (fallbackLinksError) {
+        console.error("Customer link fallback lookup failed:", fallbackLinksError);
+        return send(res, 500, { success: false, error: "customer_link_lookup_failed" });
+      }
+
+      matchingLinks = fallbackLinks || [];
+    }
   }
 
-  if (!account) {
-    return send(res, 404, { success: false, error: "account_not_found" });
+  if (!matchingLinks.length) {
+    return send(res, 404, { success: false, error: "customer_link_not_found" });
   }
+
+  const accountIds = [...new Set(matchingLinks.map((link) => link.account_id).filter(Boolean))];
+  const linkIds = matchingLinks.map((link) => link.id);
 
   if (code) {
     const { error: updateError } = await supabase
@@ -102,20 +132,26 @@ export default async function handler(req, res) {
         verification_code: code,
         verification_code_received_at: createdAt.toISOString(),
       })
-      .eq("id", account.id);
+      .in("id", accountIds);
 
     if (updateError) {
+      console.error("Verification code save failed:", updateError);
       return send(res, 500, { success: false, error: "code_save_failed" });
     }
   }
 
   if (tvApprovalUrl) {
+    const updatedAt = new Date().toISOString();
     const { error: tvLinkSaveError } = await supabase
       .from("customer_links")
-      .update({ tv_approval_url: tvApprovalUrl })
-      .eq("account_id", account.id);
+      .update({
+        tv_approval_url: tvApprovalUrl,
+        updated_at: updatedAt,
+      })
+      .in("id", linkIds);
 
     if (tvLinkSaveError) {
+      console.error("TV approval URL save failed:", tvLinkSaveError);
       return send(res, 500, { success: false, error: "tv_approval_url_save_failed" });
     }
   }
@@ -124,5 +160,6 @@ export default async function handler(req, res) {
     success: true,
     code_saved: Boolean(code),
     tv_approval_url_saved: Boolean(tvApprovalUrl),
+    matched_links: matchingLinks.length,
   });
 }
