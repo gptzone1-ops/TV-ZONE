@@ -17,6 +17,7 @@ create table if not exists public.accounts (
 create table if not exists public.customer_links (
   id uuid primary key default gen_random_uuid(),
   account_id uuid not null references public.accounts(id) on delete cascade,
+  email text,
   uuid uuid not null unique default gen_random_uuid(),
   short_id text unique,
   service_type text not null default 'netflix' check (service_type in ('netflix', 'shahid')),
@@ -30,6 +31,15 @@ create table if not exists public.customer_links (
 
 alter table public.customer_links
   add column if not exists short_id text;
+
+alter table public.customer_links
+  add column if not exists email text;
+
+update public.customer_links as links
+set email = accounts.email
+from public.accounts as accounts
+where accounts.id = links.account_id
+  and (links.email is null or btrim(links.email) = '');
 
 create sequence if not exists public.customer_links_link_number_seq start with 100;
 

@@ -18,6 +18,7 @@ export type NetflixAccount = {
 export type CustomerLink = {
   id: string;
   account_id: string;
+  email?: string | null;
   link_number?: number | null;
   code_request_limit?: number | null;
   code_requested_count?: number | null;

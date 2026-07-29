@@ -80,41 +80,54 @@ export default async function handler(req, res) {
   });
 
   let matchingLinks = [];
-  const { data: relatedLinks, error: relatedLinksError } = await supabase
+  const { data: directLinks, error: directLinksError } = await supabase
     .from("customer_links")
-    .select("id,account_id,accounts!inner(id,email)")
-    .ilike("accounts.email", email);
+    .select("id,account_id,email")
+    .ilike("email", email);
 
-  if (!relatedLinksError && relatedLinks?.length) {
-    matchingLinks = relatedLinks;
+  if (!directLinksError && directLinks?.length) {
+    matchingLinks = directLinks;
   } else {
-    if (relatedLinksError) {
-      console.error("Customer link email lookup failed, using account fallback:", relatedLinksError);
+    if (directLinksError) {
+      console.error("Direct customer link email lookup failed, using relation fallback:", directLinksError);
     }
 
-    const { data: matchingAccounts, error: accountLookupError } = await supabase
-      .from("accounts")
-      .select("id,email")
-      .ilike("email", email);
+    const { data: relatedLinks, error: relatedLinksError } = await supabase
+      .from("customer_links")
+      .select("id,account_id,accounts!inner(id,email)")
+      .ilike("accounts.email", email);
 
-    if (accountLookupError) {
-      console.error("Account email fallback lookup failed:", accountLookupError);
-      return send(res, 500, { success: false, error: "customer_link_lookup_failed" });
-    }
+    if (!relatedLinksError && relatedLinks?.length) {
+      matchingLinks = relatedLinks;
+    } else {
+      if (relatedLinksError) {
+        console.error("Customer link relation lookup failed, using account fallback:", relatedLinksError);
+      }
 
-    const accountIds = (matchingAccounts || []).map((account) => account.id);
-    if (accountIds.length) {
-      const { data: fallbackLinks, error: fallbackLinksError } = await supabase
-        .from("customer_links")
-        .select("id,account_id")
-        .in("account_id", accountIds);
+      const { data: matchingAccounts, error: accountLookupError } = await supabase
+        .from("accounts")
+        .select("id,email")
+        .ilike("email", email);
 
-      if (fallbackLinksError) {
-        console.error("Customer link fallback lookup failed:", fallbackLinksError);
+      if (accountLookupError) {
+        console.error("Account email fallback lookup failed:", accountLookupError);
         return send(res, 500, { success: false, error: "customer_link_lookup_failed" });
       }
 
-      matchingLinks = fallbackLinks || [];
+      const accountIds = (matchingAccounts || []).map((account) => account.id);
+      if (accountIds.length) {
+        const { data: fallbackLinks, error: fallbackLinksError } = await supabase
+          .from("customer_links")
+          .select("id,account_id")
+          .in("account_id", accountIds);
+
+        if (fallbackLinksError) {
+          console.error("Customer link fallback lookup failed:", fallbackLinksError);
+          return send(res, 500, { success: false, error: "customer_link_lookup_failed" });
+        }
+
+        matchingLinks = fallbackLinks || [];
+      }
     }
   }
 

@@ -355,6 +355,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       const createdLinks = slots.map((slot) => ({
         id: crypto.randomUUID(),
         account_id: account.id,
+        email: account.email,
         created_at: new Date().toISOString(),
         ...slot,
       }));
@@ -382,6 +383,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     const { error: linksError } = await supabase.from("customer_links").insert(
       slots.map((slot) => ({
         account_id: account.id,
+        email: form.email,
         ...slot,
       })),
     );

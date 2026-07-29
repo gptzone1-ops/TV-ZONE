@@ -6,6 +6,15 @@ alter table public.customer_links
   add column if not exists link_number bigint;
 
 alter table public.customer_links
+  add column if not exists email text;
+
+update public.customer_links as links
+set email = accounts.email
+from public.accounts as accounts
+where accounts.id = links.account_id
+  and (links.email is null or btrim(links.email) = '');
+
+alter table public.customer_links
   alter column link_number set default nextval('public.customer_links_link_number_seq');
 
 update public.customer_links
