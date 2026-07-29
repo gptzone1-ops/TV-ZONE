@@ -1,11 +1,19 @@
 import type { ServiceType } from "../types";
 
-export const PROFILE_CODES: Record<string, string> = {
+export const LEGACY_PROFILE_CODES: Record<string, string> = {
   A: "2001",
   B: "2002",
   C: "2003",
   D: "2004",
   E: "2005",
+};
+
+export const PROFILE_CODES: Record<string, string> = {
+  A: "8279",
+  B: "3971",
+  C: "9213",
+  D: "9158",
+  E: "0914",
 };
 
 export const PROFILE_NAMES = Object.keys(PROFILE_CODES);

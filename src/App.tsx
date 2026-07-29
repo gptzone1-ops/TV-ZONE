@@ -34,7 +34,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { PROFILE_CODES, accountTypeLabel, buildProfileSlots } from "./lib/profiles";
+import { LEGACY_PROFILE_CODES, PROFILE_CODES, accountTypeLabel, buildProfileSlots } from "./lib/profiles";
 import { hasSupabaseConfig, supabase } from "./lib/supabase";
 import type { AccountType, CustomerLink, NetflixAccount, ServiceType } from "./types";
 
@@ -151,8 +151,11 @@ function getCustomerUrl(link: CustomerLink) {
 }
 
 function getProfilePin(link: CustomerLink) {
+  const storedPin = `${link.profile_code ?? ""}`.trim();
+  if (NEW_PROFILE_PINS.has(storedPin)) return storedPin;
+
   const profileKey = `${link.profile_label || link.profile_name || ""}`.toUpperCase().match(/[A-E]/)?.[0];
-  return profileKey ? PROFILE_CODES[profileKey] : link.profile_code;
+  return profileKey ? LEGACY_PROFILE_CODES[profileKey] : "";
 }
 
 async function copyText(text: string, setToast: (toast: Toast) => void) {
@@ -169,6 +172,8 @@ type VerificationCodeResult = {
   receivedAt: string | null;
   error: unknown;
 };
+
+const NEW_PROFILE_PINS = new Set(Object.values(PROFILE_CODES));
 
 async function readLatestVerificationCode(accountId: string): Promise<VerificationCodeResult> {
   if (!supabase) {
