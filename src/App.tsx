@@ -57,7 +57,7 @@ type ServiceTheme = {
   hoverBg: string;
 };
 
-const defaultCustomerVideoUrl = "https://www.youtube.com/embed/-Ho_WqBCar0?playsinline=1&rel=0&modestbranding=1";
+const defaultCustomerVideoUrl = "https://www.youtube.com/embed/ALEeqFXBWjQ?playsinline=1&rel=0&modestbranding=1";
 const videoUrl = import.meta.env.VITE_CUSTOMER_VIDEO_URL || defaultCustomerVideoUrl;
 const adminPassword = import.meta.env.VITE_ADMIN_PASSWORD || "Gpt123Gpt@@";
 const adminEmail = import.meta.env.VITE_ADMIN_EMAIL || "admin@zonestore.sa";
