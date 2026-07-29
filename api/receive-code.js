@@ -13,6 +13,8 @@ const jsonHeaders = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
 };
 
+const netflixTvLinkPattern = /https?:\/\/(?:www\.)?netflix\.com\/ilum\?code=[\w-]+/i;
+
 function send(res, status, body) {
   Object.entries(jsonHeaders).forEach(([key, value]) => res.setHeader(key, value));
   return res.status(status).json(body);
@@ -47,14 +49,26 @@ export default async function handler(req, res) {
   const body = readBody(req.body);
   const email = String(body.email || "").trim().toLowerCase();
   const code = String(body.code || "").trim();
+  const rawEmail = String(body.raw_email || body.rawEmail || "");
+  const explicitTvApprovalUrl = String(body.tv_approval_url || "").trim();
+  const extractedTvApprovalUrl = rawEmail.match(netflixTvLinkPattern)?.[0] || "";
+  const tvApprovalUrl = explicitTvApprovalUrl || extractedTvApprovalUrl;
   const createdAt = body.created_at ? new Date(body.created_at) : new Date();
 
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return send(res, 400, { success: false, error: "invalid_email" });
   }
 
-  if (!/^\d{4}$/.test(code)) {
+  if (code && !/^\d{4}$/.test(code)) {
     return send(res, 400, { success: false, error: "invalid_code" });
+  }
+
+  if (tvApprovalUrl && !netflixTvLinkPattern.test(tvApprovalUrl)) {
+    return send(res, 400, { success: false, error: "invalid_tv_approval_url" });
+  }
+
+  if (!code && !tvApprovalUrl) {
+    return send(res, 400, { success: false, error: "missing_code_or_tv_approval_url" });
   }
 
   if (Number.isNaN(createdAt.getTime())) {
@@ -81,17 +95,34 @@ export default async function handler(req, res) {
     return send(res, 404, { success: false, error: "account_not_found" });
   }
 
-  const { error: updateError } = await supabase
-    .from("accounts")
-    .update({
-      verification_code: code,
-      verification_code_received_at: createdAt.toISOString(),
-    })
-    .eq("id", account.id);
+  if (code) {
+    const { error: updateError } = await supabase
+      .from("accounts")
+      .update({
+        verification_code: code,
+        verification_code_received_at: createdAt.toISOString(),
+      })
+      .eq("id", account.id);
 
-  if (updateError) {
-    return send(res, 500, { success: false, error: "code_save_failed" });
+    if (updateError) {
+      return send(res, 500, { success: false, error: "code_save_failed" });
+    }
   }
 
-  return send(res, 200, { success: true });
+  if (tvApprovalUrl) {
+    const { error: tvLinkSaveError } = await supabase
+      .from("customer_links")
+      .update({ tv_approval_url: tvApprovalUrl })
+      .eq("account_id", account.id);
+
+    if (tvLinkSaveError) {
+      return send(res, 500, { success: false, error: "tv_approval_url_save_failed" });
+    }
+  }
+
+  return send(res, 200, {
+    success: true,
+    code_saved: Boolean(code),
+    tv_approval_url_saved: Boolean(tvApprovalUrl),
+  });
 }

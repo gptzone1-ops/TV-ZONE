@@ -22,6 +22,7 @@ export type CustomerLink = {
   code_request_limit?: number | null;
   code_requested_count?: number | null;
   selected_device?: "mobile" | "screen" | null;
+  tv_approval_url?: string | null;
   uuid: string;
   short_id?: string | null;
   profile_name: string;

@@ -1028,9 +1028,21 @@ function Dashboard({
                 type="button"
                 onClick={() => setEditingCustomerBalance(customerSearchResult.link)}
                 className="h-13 rounded-2xl bg-[#8B35F5] px-6 text-sm font-black text-white shadow-[0_12px_28px_rgba(139,53,245,0.24)] transition hover:-translate-y-0.5 hover:bg-[#7626DD]"
-              >
-                تعديل الرصيد
-              </button>
+                >
+                  تعديل الرصيد
+                </button>
+                {customerSearchResult.link.tv_approval_url && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void copyTextSilent(customerSearchResult.link.tv_approval_url || "")
+                    }
+                    className="flex h-11 items-center justify-center gap-2 rounded-2xl border border-[#DCCBFA] bg-white px-4 text-xs font-black text-[#7C2CE8] transition hover:bg-[#F8F4FF]"
+                  >
+                    <Link2 className="h-4 w-4" />
+                    نسخ رابط الموافقة
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={async () => {
@@ -2168,6 +2180,16 @@ function AccountDetail({
                       <Copy className="h-4 w-4" />
                       نسخ الرابط
                     </button>
+                    {link.tv_approval_url && (
+                      <button
+                        type="button"
+                        onClick={() => copyText(link.tv_approval_url || "", setToast)}
+                        className="mt-2 flex h-11 w-full items-center justify-center gap-2 rounded-2xl border border-[#DCCBFA] bg-white text-sm font-black text-[#7C2CE8] transition hover:border-[#8B35F5] hover:bg-[#F8F4FF]"
+                      >
+                        <Link2 className="h-4 w-4" />
+                        نسخ رابط الموافقة
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => {
@@ -2432,7 +2454,7 @@ function CustomerView({
       const { data, error } = await supabase
         .from("customer_links")
         .select(
-          "id,account_id,uuid,short_id,link_number,code_request_limit,code_requested_count,selected_device,profile_name,profile_label,profile_code,service_type,created_at,accounts(id,email,use_automated_code,verification_code,verification_code_received_at,service_type,account_type,expires_at,created_at)",
+          "*,accounts(id,email,use_automated_code,verification_code,verification_code_received_at,service_type,account_type,expires_at,created_at)",
         )
         .eq(queryColumn, identifier)
         .single();
@@ -2504,6 +2526,39 @@ function CustomerView({
     if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
     if (countdownRef.current) window.clearInterval(countdownRef.current);
   }, [automatedCodeEnabled]);
+
+  useEffect(() => {
+    if (!supabase || !link?.id || deviceView !== "screen") return;
+    const client = supabase;
+    let active = true;
+
+    const refreshTvApprovalUrl = async () => {
+      const { data, error } = await client
+        .from("customer_links")
+        .select("tv_approval_url")
+        .eq("id", link.id)
+        .maybeSingle();
+
+      if (error) {
+        console.error("Supabase TV approval URL refresh error:", error);
+        return;
+      }
+
+      if (active && data?.tv_approval_url) {
+        setLink((current) =>
+          current ? { ...current, tv_approval_url: data.tv_approval_url } : current,
+        );
+      }
+    };
+
+    void refreshTvApprovalUrl();
+    const timer = window.setInterval(() => void refreshTvApprovalUrl(), 2500);
+
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [deviceView, link?.id]);
 
   function requestDeviceChoice(device: DeviceView) {
     if (!automatedCodeEnabled || deviceChoiceLocked || attemptUsed) return;
@@ -2865,6 +2920,22 @@ function CustomerView({
                     </div>
                   ) : !deviceView ? null : deviceView === "screen" ? (
                     <div className="rounded-[1.75rem] border border-[#E0D4F8] bg-gradient-to-l from-white to-[#F7F2FF] p-4 shadow-card">
+                      {link.tv_approval_url ? (
+                        <a
+                          href={link.tv_approval_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="mb-4 flex min-h-14 w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-l from-[#E50914] to-[#8B35F5] px-4 text-center text-sm font-black text-white shadow-[0_14px_34px_rgba(139,53,245,0.28)] transition hover:-translate-y-0.5 hover:shadow-[0_18px_38px_rgba(229,9,20,0.24)]"
+                        >
+                          <ExternalLink className="h-5 w-5" />
+                          اضغط هنا لتسجيل الدخول المباشر للشاشة / سوني
+                        </a>
+                      ) : (
+                        <div className="mb-4 flex items-center justify-center gap-2 rounded-2xl border border-[#DCCBFA] bg-white px-4 py-3 text-center text-xs font-black text-[#7C2CE8]">
+                          <RefreshCw className="h-4 w-4 animate-spin" />
+                          جاري انتظار رابط الموافقة المباشر...
+                        </div>
+                      )}
                       <div className="flex items-center gap-4">
                         <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-[#F0E7FF] text-[#8B35F5]">
                           <WhatsAppLogo className="h-7 w-7" />
