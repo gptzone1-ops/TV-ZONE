@@ -2794,6 +2794,12 @@ function CustomerView({
   const [codeRequestState, setCodeRequestState] = useState<"idle" | "loading" | "ready" | "failed" | "expired">("idle");
   const [codeRequestSeconds, setCodeRequestSeconds] = useState(0);
   const [codeDisplayExpiresAt, setCodeDisplayExpiresAt] = useState<number | null>(null);
+  const [tvRequestState, setTvRequestState] = useState<"idle" | "loading" | "ready" | "failed" | "expired">("idle");
+  const [tvRequestSeconds, setTvRequestSeconds] = useState(0);
+  const [tvDisplayExpiresAt, setTvDisplayExpiresAt] = useState<number | null>(null);
+  const [visibleTvApprovalUrl, setVisibleTvApprovalUrl] = useState<string | null>(null);
+  const [showTvRequestModal, setShowTvRequestModal] = useState(false);
+  const [agreeTvReady, setAgreeTvReady] = useState(false);
   const [nowTick, setNowTick] = useState(() => Date.now());
   const [deviceView, setDeviceView] = useState<DeviceView | null>(null);
   const [pendingDeviceView, setPendingDeviceView] = useState<DeviceView | null>(null);
@@ -2805,6 +2811,11 @@ function CustomerView({
   const countdownRef = useRef<number | null>(null);
   const codeSearchActiveRef = useRef(false);
   const requestBaselineRef = useRef<{ code: string | null; receivedAt: string | null }>({ code: null, receivedAt: null });
+  const tvPollTimerRef = useRef<number | null>(null);
+  const tvTimeoutRef = useRef<number | null>(null);
+  const tvCountdownRef = useRef<number | null>(null);
+  const tvSearchActiveRef = useRef(false);
+  const tvBaselineRef = useRef<{ url: string | null; receivedAt: string | null }>({ url: null, receivedAt: null });
 
   useEffect(() => {
     async function loadCustomer() {
@@ -2859,13 +2870,18 @@ function CustomerView({
       if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
       if (countdownRef.current) window.clearInterval(countdownRef.current);
       codeSearchActiveRef.current = false;
+      if (tvPollTimerRef.current) window.clearInterval(tvPollTimerRef.current);
+      if (tvTimeoutRef.current) window.clearTimeout(tvTimeoutRef.current);
+      if (tvCountdownRef.current) window.clearInterval(tvCountdownRef.current);
+      tvSearchActiveRef.current = false;
     };
   }, []);
 
   const account = link?.accounts;
   const service = serviceOf(account);
   const theme = serviceThemes[service];
-  const tvApprovalUrl = String(link?.tv_approval_url || "").trim();
+  const storedTvApprovalUrl = String(link?.tv_approval_url || "").trim();
+  const tvApprovalUrl = visibleTvApprovalUrl;
   const supportWhatsAppUrl = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(
     `مرحباً اريد الحصول على الكود المخصص للحساب: ${account?.email || ""}`,
   )}`;
@@ -2883,11 +2899,71 @@ function CustomerView({
       codeDisplayExpiresAt &&
       codeDisplayExpiresAt > nowTick,
   );
+  const tvSecondsRemaining = tvDisplayExpiresAt
+    ? Math.max(0, Math.ceil((tvDisplayExpiresAt - nowTick) / 1000))
+    : 0;
+  const tvApprovalIsVisible = Boolean(
+    tvRequestState === "ready" &&
+      tvApprovalUrl &&
+      tvDisplayExpiresAt &&
+      tvDisplayExpiresAt > nowTick,
+  );
   const automatedCodeEnabled = account?.use_automated_code !== false;
   const codeRequestLimit = Math.max(0, link?.code_request_limit ?? 1);
   const codeRequestedCount = Math.max(0, link?.code_requested_count ?? 0);
   const hasCodeRequestCredit = codeRequestedCount < codeRequestLimit;
   const attemptUsed = !hasCodeRequestCredit;
+  const tvRequestLocked =
+    attemptUsed ||
+    (tvRequestState === "expired" && codeRequestedCount > 0);
+
+  useEffect(() => {
+    if (!link?.id || !storedTvApprovalUrl) {
+      setVisibleTvApprovalUrl(null);
+      setTvDisplayExpiresAt(null);
+      return;
+    }
+
+    if (
+      link.selected_device !== "screen" ||
+      codeRequestedCount <= 0 ||
+      tvSearchActiveRef.current
+    ) {
+      setVisibleTvApprovalUrl(null);
+      setTvDisplayExpiresAt(null);
+      return;
+    }
+
+    // receive-code updates updated_at exactly when a TV approval link arrives.
+    const receivedAt = link.updated_at
+      ? new Date(link.updated_at).getTime()
+      : new Date(link.created_at).getTime();
+    const expiresAt = receivedAt + verificationCodeLifetimeMs;
+    const isValid =
+      !Number.isNaN(receivedAt) &&
+      receivedAt > 0 &&
+      expiresAt > Date.now();
+
+    if (isValid) {
+      setVisibleTvApprovalUrl(storedTvApprovalUrl);
+      setTvDisplayExpiresAt(expiresAt);
+      setTvRequestState("ready");
+      return;
+    }
+
+    setVisibleTvApprovalUrl(null);
+    setTvDisplayExpiresAt(null);
+    if (link.selected_device === "screen") {
+      setTvRequestState("expired");
+    }
+  }, [
+    link?.created_at,
+    link?.id,
+    link?.code_requested_count,
+    link?.selected_device,
+    link?.updated_at,
+    storedTvApprovalUrl,
+  ]);
 
   useEffect(() => {
     if (automatedCodeEnabled) return;
@@ -2900,73 +2976,20 @@ function CustomerView({
     setCodeRequestSeconds(0);
     setCodeDisplayExpiresAt(null);
     codeSearchActiveRef.current = false;
+    setTvRequestState("idle");
+    setTvRequestSeconds(0);
+    setTvDisplayExpiresAt(null);
+    setVisibleTvApprovalUrl(null);
+    setShowTvRequestModal(false);
+    setAgreeTvReady(false);
+    tvSearchActiveRef.current = false;
     if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
     if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
     if (countdownRef.current) window.clearInterval(countdownRef.current);
+    if (tvPollTimerRef.current) window.clearInterval(tvPollTimerRef.current);
+    if (tvTimeoutRef.current) window.clearTimeout(tvTimeoutRef.current);
+    if (tvCountdownRef.current) window.clearInterval(tvCountdownRef.current);
   }, [automatedCodeEnabled]);
-
-  useEffect(() => {
-    if (!supabase || !link?.id || deviceView !== "screen") return;
-    const client = supabase;
-    let active = true;
-
-    const refreshTvApprovalUrl = async () => {
-      const { data, error } = await client
-        .from("customer_links")
-        .select("tv_approval_url")
-        .eq("id", link.id)
-        .maybeSingle();
-
-      if (error) {
-        console.error("Supabase TV approval URL refresh error:", error);
-        return;
-      }
-
-      if (active && data?.tv_approval_url) {
-        setLink((current) =>
-          current
-            ? {
-                ...current,
-                tv_approval_url: data.tv_approval_url,
-              }
-            : current,
-        );
-      }
-    };
-
-    void refreshTvApprovalUrl();
-    const timer = window.setInterval(() => void refreshTvApprovalUrl(), 2000);
-    const channel = client
-      .channel(`customer-tv-approval-${link.id}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "customer_links",
-          filter: `id=eq.${link.id}`,
-        },
-        (payload) => {
-          const nextUrl = String(payload.new.tv_approval_url || "").trim();
-          if (!active || !nextUrl) return;
-          setLink((current) =>
-            current
-              ? {
-                  ...current,
-                  tv_approval_url: nextUrl,
-                }
-              : current,
-          );
-        },
-      )
-      .subscribe();
-
-    return () => {
-      active = false;
-      window.clearInterval(timer);
-      void client.removeChannel(channel);
-    };
-  }, [deviceView, link?.id]);
 
   useEffect(() => {
     if (
@@ -2979,14 +3002,28 @@ function CustomerView({
     }
   }, [codeDisplayExpiresAt, codeRequestState, nowTick]);
 
+  useEffect(() => {
+    if (
+      tvRequestState === "ready" &&
+      tvDisplayExpiresAt &&
+      tvDisplayExpiresAt <= nowTick
+    ) {
+      setTvRequestState("expired");
+      setTvDisplayExpiresAt(null);
+      setVisibleTvApprovalUrl(null);
+      setShowTvRequestModal(false);
+      setAgreeTvReady(false);
+    }
+  }, [nowTick, tvDisplayExpiresAt, tvRequestState]);
+
   function requestDeviceChoice(device: DeviceView) {
-    if (!automatedCodeEnabled || deviceChoiceLocked || (device === "mobile" && attemptUsed)) return;
+    if (!automatedCodeEnabled || deviceChoiceLocked || attemptUsed) return;
     setPendingDeviceView(device);
     setAgreeDeviceChoice(false);
   }
 
   async function confirmDeviceChoice() {
-    if (!pendingDeviceView || !link?.id || (pendingDeviceView === "mobile" && attemptUsed)) return;
+    if (!pendingDeviceView || !link?.id || attemptUsed) return;
     const selectedDevice = pendingDeviceView;
 
     if (supabase) {
@@ -3032,6 +3069,197 @@ function CustomerView({
   function cancelDeviceChoice() {
     setPendingDeviceView(null);
     setAgreeDeviceChoice(false);
+  }
+
+  function clearTvSearchTimers() {
+    if (tvPollTimerRef.current) window.clearInterval(tvPollTimerRef.current);
+    if (tvTimeoutRef.current) window.clearTimeout(tvTimeoutRef.current);
+    if (tvCountdownRef.current) window.clearInterval(tvCountdownRef.current);
+    tvPollTimerRef.current = null;
+    tvTimeoutRef.current = null;
+    tvCountdownRef.current = null;
+  }
+
+  function showTvApprovalLink(candidate: Pick<CustomerLink, "tv_approval_url" | "updated_at">, message: string) {
+    const nextUrl = String(candidate.tv_approval_url || "").trim();
+    if (!nextUrl) return false;
+    const receivedAt = candidate.updated_at
+      ? new Date(candidate.updated_at).getTime()
+      : Number.NaN;
+    const expiresAt = receivedAt + verificationCodeLifetimeMs;
+
+    if (Number.isNaN(receivedAt) || expiresAt <= Date.now()) {
+      setVisibleTvApprovalUrl(null);
+      setTvDisplayExpiresAt(null);
+      setTvRequestState("expired");
+      return false;
+    }
+
+    setLink((current) =>
+      current
+        ? {
+            ...current,
+            tv_approval_url: nextUrl,
+            updated_at: candidate.updated_at || current.updated_at,
+          }
+        : current,
+    );
+    tvSearchActiveRef.current = false;
+    clearTvSearchTimers();
+    setTvRequestSeconds(0);
+    setVisibleTvApprovalUrl(nextUrl);
+    setTvDisplayExpiresAt(expiresAt);
+    setTvRequestState("ready");
+    setToast({ label: message, at: Date.now() });
+    return true;
+  }
+
+  async function pollTvApprovalLink() {
+    if (!tvSearchActiveRef.current || !supabase || !link?.id) return;
+
+    const { data, error } = await supabase
+      .from("customer_links")
+      .select("tv_approval_url,updated_at")
+      .eq("id", link.id)
+      .maybeSingle();
+
+    if (!tvSearchActiveRef.current) return;
+    if (error) {
+      console.error("Supabase TV approval polling error:", error);
+      return;
+    }
+
+    const nextUrl = String(data?.tv_approval_url || "").trim();
+    const nextTime = data?.updated_at ? new Date(data.updated_at).getTime() : 0;
+    const baselineTime = tvBaselineRef.current.receivedAt
+      ? new Date(tvBaselineRef.current.receivedAt).getTime()
+      : 0;
+    const isNewerLink =
+      Boolean(nextUrl) &&
+      !Number.isNaN(nextTime) &&
+      nextTime > baselineTime;
+
+    if (isNewerLink && data) {
+      showTvApprovalLink(data, "تم استلام رابط موافقة جديد");
+    }
+  }
+
+  async function finishTvApprovalSearch() {
+    if (!tvSearchActiveRef.current) return;
+    tvSearchActiveRef.current = false;
+    clearTvSearchTimers();
+    setTvRequestSeconds(0);
+
+    if (!supabase || !link?.id) {
+      setVisibleTvApprovalUrl(null);
+      setTvDisplayExpiresAt(null);
+      setTvRequestState("failed");
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("customer_links")
+      .select("tv_approval_url,updated_at")
+      .eq("id", link.id)
+      .maybeSingle();
+
+    if (error) {
+      console.error("Supabase TV approval fallback error:", error);
+    }
+
+    const latestTime = data?.updated_at ? new Date(data.updated_at).getTime() : 0;
+    const linkAge = latestTime ? Date.now() - latestTime : Number.POSITIVE_INFINITY;
+    const isWithinFallbackWindow =
+      Boolean(data?.tv_approval_url) &&
+      !error &&
+      !Number.isNaN(latestTime) &&
+      linkAge >= 0 &&
+      linkAge <= verificationCodeLifetimeMs;
+
+    if (isWithinFallbackWindow && data) {
+      showTvApprovalLink(data, "تم عرض رابط الموافقة الحديث");
+      return;
+    }
+
+    setVisibleTvApprovalUrl(null);
+    setTvDisplayExpiresAt(null);
+    setTvRequestState("failed");
+  }
+
+  async function startTvApprovalSearch() {
+    if (
+      !automatedCodeEnabled ||
+      !link?.id ||
+      !hasCodeRequestCredit ||
+      tvRequestLocked ||
+      tvRequestState === "loading"
+    ) return;
+
+    const nextRequestedCount = codeRequestedCount + 1;
+    let baselineUrl = String(link.tv_approval_url || "").trim() || null;
+    let baselineReceivedAt = link.updated_at || null;
+
+    if (supabase) {
+      const { data, error } = await supabase
+        .from("customer_links")
+        .update({ code_requested_count: nextRequestedCount })
+        .eq("id", link.id)
+        .eq("code_requested_count", codeRequestedCount)
+        .select("code_requested_count,code_request_limit,tv_approval_url,updated_at")
+        .maybeSingle();
+
+      if (error || !data) {
+        console.error("Supabase TV approval attempt update error:", error);
+        setVisibleTvApprovalUrl(null);
+        setTvRequestState("failed");
+        setShowTvRequestModal(false);
+        setAgreeTvReady(false);
+        setToast({ label: "تعذر احتساب محاولة رابط الشاشة، حدّث الصفحة وحاول مجدداً", at: Date.now() });
+        return;
+      }
+
+      baselineUrl = String(data.tv_approval_url || "").trim() || null;
+      baselineReceivedAt = data.updated_at || null;
+      setLink((current) =>
+        current
+          ? {
+              ...current,
+              code_requested_count: data.code_requested_count,
+              code_request_limit: data.code_request_limit,
+              tv_approval_url: data.tv_approval_url,
+              updated_at: data.updated_at,
+            }
+          : current,
+      );
+    } else {
+      setLink((current) =>
+        current ? { ...current, code_requested_count: nextRequestedCount } : current,
+      );
+    }
+
+    tvBaselineRef.current = { url: baselineUrl, receivedAt: baselineReceivedAt };
+    clearTvSearchTimers();
+    tvSearchActiveRef.current = true;
+    setShowTvRequestModal(false);
+    setAgreeTvReady(false);
+    setVisibleTvApprovalUrl(null);
+    setTvDisplayExpiresAt(null);
+    setTvRequestState("loading");
+    setTvRequestSeconds(15);
+
+    tvCountdownRef.current = window.setInterval(() => {
+      setTvRequestSeconds((current) => {
+        if (current <= 1) {
+          if (tvCountdownRef.current) window.clearInterval(tvCountdownRef.current);
+          return 0;
+        }
+        return current - 1;
+      });
+    }, 1000);
+
+    void pollTvApprovalLink();
+    tvPollTimerRef.current = window.setInterval(() => void pollTvApprovalLink(), 2000);
+    tvTimeoutRef.current = window.setTimeout(() => void finishTvApprovalSearch(), 15_000);
   }
 
   function openPreRequestModal() {
@@ -3313,7 +3541,7 @@ function CustomerView({
                       <button
                         type="button"
                         onClick={() => requestDeviceChoice("screen")}
-                        disabled={deviceChoiceLocked}
+                        disabled={deviceChoiceLocked || attemptUsed}
                         className={cn(
                           "flex min-h-12 items-center justify-center gap-2 rounded-2xl px-3 text-sm font-black transition disabled:cursor-not-allowed",
                           deviceView === "screen"
@@ -3327,7 +3555,7 @@ function CustomerView({
                     </div>
                     {attemptUsed && !deviceChoiceLocked ? (
                       <p className="mt-3 rounded-2xl bg-white/80 px-4 py-3 text-xs font-black text-rose-600">
-                        تم استهلاك رصيد الأكواد للجوال، ويمكنك اختيار شاشة / سوني دون خصم رصيد.
+                        تم استهلاك الرصيد ولا يمكن طلب كود أو رابط شاشة جديد حتى يجدد المشرف المحاولات.
                       </p>
                     ) : deviceChoiceLocked ? (
                       <p className="mt-3 rounded-2xl bg-white/80 px-4 py-3 text-xs font-black text-[#7C2CE8]">
@@ -3365,7 +3593,26 @@ function CustomerView({
                     </div>
                   ) : !deviceView ? null : deviceView === "screen" ? (
                     <div className="rounded-[1.75rem] border border-[#E0D4F8] bg-gradient-to-l from-white to-[#F7F2FF] p-4 shadow-card">
-                      {tvApprovalUrl ? (
+                      {tvRequestState === "loading" ? (
+                        <div className="mb-4 rounded-2xl border border-[#DCCBFA] bg-white p-4">
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-black text-zinc-700">جاري البحث عن رابط موافقة حديث...</p>
+                              <p className="mt-1 text-xs font-bold text-zinc-500">يتم فحص الحساب كل ثانيتين لمدة 15 ثانية</p>
+                            </div>
+                            <div className="rounded-full bg-[#F5EEFF] px-4 py-2 text-sm font-black text-[#7C2CE8]">
+                              {tvRequestSeconds}s
+                            </div>
+                          </div>
+                          <div className="mt-4 h-2 overflow-hidden rounded-full bg-[#EDE3FF]">
+                            <div
+                              className="h-full rounded-full bg-[#8B35F5] transition-all"
+                              style={{ width: `${(Math.max(15 - tvRequestSeconds, 0) / 15) * 100}%` }}
+                            />
+                          </div>
+                        </div>
+                      ) : tvApprovalIsVisible ? (
+                        <>
                         <a
                           href={tvApprovalUrl}
                           target="_blank"
@@ -3375,11 +3622,34 @@ function CustomerView({
                           <ExternalLink className="h-5 w-5" />
                           اضغط هنا لتسجيل الدخول المباشر للشاشة / سوني
                         </a>
-                      ) : (
-                        <div className="mb-4 flex items-center justify-center gap-2 rounded-2xl border border-[#DCCBFA] bg-white px-4 py-3 text-center text-xs font-black text-[#7C2CE8]">
-                          <RefreshCw className="h-4 w-4 animate-spin" />
-                          جاري انتظار رابط الموافقة المباشر...
+                          <p className="mb-4 rounded-2xl bg-[#F5EEFF] px-4 py-3 text-center text-sm font-black text-[#7C2CE8]">
+                            ينتهي الرابط خلال: {formatCountdown(tvSecondsRemaining)}
+                          </p>
+                        </>
+                      ) : tvRequestState === "failed" ? (
+                        <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-4 text-center">
+                          <p className="text-sm font-black leading-7 text-rose-700">
+                            لم يتم العثور على رابط موافقة حديث، يرجى التواصل مع الدعم الفني
+                          </p>
                         </div>
+                      ) : tvRequestLocked ? (
+                        <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-4 text-center">
+                          <p className="text-sm font-black leading-7 text-rose-700">
+                            انتهت صلاحية الرابط، ولا يمكنك طلب رابط جديد لهذه الجلسة
+                          </p>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowTvRequestModal(true);
+                            setAgreeTvReady(false);
+                          }}
+                          className="mb-4 flex min-h-14 w-full items-center justify-center gap-2 rounded-2xl bg-[#8B35F5] px-4 text-center text-sm font-black text-white shadow-[0_14px_32px_rgba(139,53,245,0.24)] transition hover:bg-[#7626DD]"
+                        >
+                          <MonitorPlay className="h-5 w-5" />
+                          جلب رابط الدخول للشاشة / سوني
+                        </button>
                       )}
                       <div className="flex items-center gap-4">
                         <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-[#F0E7FF] text-[#8B35F5]">
@@ -3388,7 +3658,7 @@ function CustomerView({
                         <div className="min-w-0 flex-1">
                           <p className="text-lg font-black">شاشة / سوني</p>
                           <p className="mt-1 text-xs font-bold leading-6 text-zinc-500">
-                            لهذا النوع من الأجهزة، تواصل مع الدعم للحصول على الكود ومساعدتك في الدخول.
+                            افتح تطبيق نتفليكس على الشاشة أولاً، ثم اطلب رابط الموافقة المباشر من هنا.
                           </p>
                         </div>
                       </div>
@@ -3399,7 +3669,7 @@ function CustomerView({
                         className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#8B35F5] text-sm font-black text-white shadow-[0_14px_32px_rgba(139,53,245,0.24)] transition hover:bg-[#7626DD]"
                       >
                         <WhatsAppLogo className="h-5 w-5" />
-                        تواصل مع الدعم للحصول على الكود
+                        تواصل مع الدعم الفني عبر الواتساب
                       </a>
                     </div>
                   ) : codeRequestState === "loading" ? (
@@ -3627,6 +3897,20 @@ function CustomerView({
             />
           )}
 
+          {automatedCodeEnabled && showTvRequestModal && (
+            <DeviceChoiceModal
+              deviceLabel="شاشة / سوني"
+              isScreen
+              checked={agreeTvReady}
+              onToggle={setAgreeTvReady}
+              onCancel={() => {
+                setShowTvRequestModal(false);
+                setAgreeTvReady(false);
+              }}
+              onContinue={() => void startTvApprovalSearch()}
+            />
+          )}
+
           {automatedCodeEnabled && deviceView === "screen" && (
             <a
               href={supportWhatsAppUrl}
@@ -3690,12 +3974,14 @@ function WhatsAppLogo({ className }: { className?: string }) {
 
 function DeviceChoiceModal({
   deviceLabel,
+  isScreen = false,
   checked,
   onToggle,
   onCancel,
   onContinue,
 }: {
   deviceLabel: string;
+  isScreen?: boolean;
   checked: boolean;
   onToggle: (checked: boolean) => void;
   onCancel: () => void;
@@ -3708,9 +3994,13 @@ function DeviceChoiceModal({
           <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#F0E7FF] text-[#8B35F5]">
             <ShieldCheck className="h-7 w-7" />
           </div>
-          <h2 className="text-3xl font-black md:text-4xl">تأكيد نوع الجهاز</h2>
+          <h2 className="text-3xl font-black md:text-4xl">
+            {isScreen ? "تأكيد جاهزية الشاشة" : "تأكيد نوع الجهاز"}
+          </h2>
           <p className="mt-4 text-sm font-bold leading-7 text-zinc-700">
-            هل أنت متأكد من اختيار جهاز ({deviceLabel})؟ تنبيه: لا يمكنك تغيير نوع الجهاز بعد التأكيد.
+            {isScreen
+              ? "هل قمت بفتح تطبيق نتفليكس على الشاشة/السوني وتوقفت عند شاشة طلب الرابط؟"
+              : `هل أنت متأكد من اختيار جهاز (${deviceLabel})؟ تنبيه: لا يمكنك تغيير نوع الجهاز بعد التأكيد.`}
           </p>
         </div>
 
@@ -3722,7 +4012,9 @@ function DeviceChoiceModal({
             className="mt-1 h-5 w-5 rounded border-[#CDBAF2] text-[#8B35F5] focus:ring-[#8B35F5]"
           />
           <span className="text-sm font-black leading-7 text-zinc-800 md:text-base">
-            أقر بأنني اخترت الجهاز الصحيح ولن أتمكن من تغيير خياري لاحقاً.
+            {isScreen
+              ? "نعم، أنا جاهز الآن"
+              : "أقر بأنني اخترت الجهاز الصحيح ولن أتمكن من تغيير خياري لاحقاً."}
           </span>
         </label>
 
@@ -3733,7 +4025,7 @@ function DeviceChoiceModal({
             disabled={!checked}
             className="h-13 rounded-2xl bg-[#8B35F5] px-5 text-sm font-black text-white shadow-[0_14px_32px_rgba(139,53,245,0.24)] transition hover:bg-[#7626DD] disabled:cursor-not-allowed disabled:opacity-40"
           >
-            متابعة
+            {isScreen ? "متابعة وطلب الرابط" : "متابعة"}
           </button>
           <button
             type="button"
