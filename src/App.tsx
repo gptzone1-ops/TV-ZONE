@@ -68,7 +68,7 @@ const whatsappNumber = "966581688656";
 const disclaimerStorageKey = "disclaimer_accepted";
 const dayMs = 1000 * 60 * 60 * 24;
 const verificationCodeLifetimeMs = 120 * 1000;
-const verificationCodeFallbackWindowMs = 5 * 60 * 1000;
+const verificationCodeFallbackWindowMs = 15 * 60 * 1000;
 const duplicateEmailMessage = "عفواً، هذا البريد الإلكتروني مسجل مسبقاً ولا يمكن تكراره";
 const duplicateEmailSaveMessage = duplicateEmailMessage;
 const duplicateProfileMessage = (profileName: string) => `هذا الملف (${profileName}) مسجل مسبقاً لهذا الحساب`;
@@ -3080,13 +3080,19 @@ function CustomerView({
     tvCountdownRef.current = null;
   }
 
-  function showTvApprovalLink(candidate: Pick<CustomerLink, "tv_approval_url" | "updated_at">, message: string) {
+  function showTvApprovalLink(
+    candidate: Pick<CustomerLink, "tv_approval_url" | "updated_at">,
+    message: string,
+    restartDisplayLifetime = false,
+  ) {
     const nextUrl = String(candidate.tv_approval_url || "").trim();
     if (!nextUrl) return false;
     const receivedAt = candidate.updated_at
       ? new Date(candidate.updated_at).getTime()
       : Number.NaN;
-    const expiresAt = receivedAt + verificationCodeLifetimeMs;
+    const expiresAt = restartDisplayLifetime
+      ? Date.now() + verificationCodeLifetimeMs
+      : receivedAt + verificationCodeLifetimeMs;
 
     if (Number.isNaN(receivedAt) || expiresAt <= Date.now()) {
       setVisibleTvApprovalUrl(null);
@@ -3095,15 +3101,17 @@ function CustomerView({
       return false;
     }
 
-    setLink((current) =>
-      current
-        ? {
-            ...current,
-            tv_approval_url: nextUrl,
-            updated_at: candidate.updated_at || current.updated_at,
-          }
-        : current,
-    );
+    if (!restartDisplayLifetime) {
+      setLink((current) =>
+        current
+          ? {
+              ...current,
+              tv_approval_url: nextUrl,
+              updated_at: candidate.updated_at || current.updated_at,
+            }
+          : current,
+      );
+    }
     tvSearchActiveRef.current = false;
     clearTvSearchTimers();
     setTvRequestSeconds(0);
@@ -3174,10 +3182,10 @@ function CustomerView({
       !error &&
       !Number.isNaN(latestTime) &&
       linkAge >= 0 &&
-      linkAge <= verificationCodeLifetimeMs;
+      linkAge <= verificationCodeFallbackWindowMs;
 
     if (isWithinFallbackWindow && data) {
-      showTvApprovalLink(data, "تم عرض رابط الموافقة الحديث");
+      showTvApprovalLink(data, "تم عرض أحدث رابط متاح خلال آخر 15 دقيقة", true);
       return;
     }
 
@@ -3376,7 +3384,7 @@ function CustomerView({
       codeAge <= verificationCodeFallbackWindowMs;
 
     if (isWithinFallbackWindow) {
-      showVerificationCode(latestCode, "تم عرض أحدث كود متاح خلال آخر 5 دقائق");
+      showVerificationCode(latestCode, "تم عرض أحدث كود متاح خلال آخر 15 دقيقة");
       return;
     }
 
@@ -3629,7 +3637,7 @@ function CustomerView({
                       ) : tvRequestState === "failed" ? (
                         <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-4 text-center">
                           <p className="text-sm font-black leading-7 text-rose-700">
-                            لم يتم العثور على رابط موافقة حديث، يرجى التواصل مع الدعم الفني
+                            لم يتم العثور على رمز جديد حديث، يرجى التواصل مع الدعم الفني
                           </p>
                         </div>
                       ) : tvRequestLocked ? (
@@ -3733,7 +3741,7 @@ function CustomerView({
                         <div className="min-w-0 flex-1">
                           <p className="text-lg font-black">لم يتم العثور على رمز جديد حديث، يرجى التواصل مع الدعم الفني</p>
                           <p className="mt-1 text-xs font-bold leading-6 text-zinc-500">
-                            انتهت مهلة البحث ولا يوجد كود مستلم خلال آخر 5 دقائق.
+                            انتهت مهلة البحث ولا يوجد كود مستلم خلال آخر 15 دقيقة.
                           </p>
                         </div>
                       </div>
