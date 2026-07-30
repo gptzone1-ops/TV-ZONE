@@ -2811,8 +2811,6 @@ function CustomerView({
   const countdownRef = useRef<number | null>(null);
   const codeSearchActiveRef = useRef(false);
   const requestBaselineRef = useRef<{ code: string | null; receivedAt: string | null }>({ code: null, receivedAt: null });
-  const tvPollTimerRef = useRef<number | null>(null);
-  const tvTimeoutRef = useRef<number | null>(null);
   const tvCountdownRef = useRef<number | null>(null);
   const tvSearchActiveRef = useRef(false);
 
@@ -2869,8 +2867,6 @@ function CustomerView({
       if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
       if (countdownRef.current) window.clearInterval(countdownRef.current);
       codeSearchActiveRef.current = false;
-      if (tvPollTimerRef.current) window.clearInterval(tvPollTimerRef.current);
-      if (tvTimeoutRef.current) window.clearTimeout(tvTimeoutRef.current);
       if (tvCountdownRef.current) window.clearInterval(tvCountdownRef.current);
       tvSearchActiveRef.current = false;
     };
@@ -2985,8 +2981,6 @@ function CustomerView({
     if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
     if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
     if (countdownRef.current) window.clearInterval(countdownRef.current);
-    if (tvPollTimerRef.current) window.clearInterval(tvPollTimerRef.current);
-    if (tvTimeoutRef.current) window.clearTimeout(tvTimeoutRef.current);
     if (tvCountdownRef.current) window.clearInterval(tvCountdownRef.current);
   }, [automatedCodeEnabled]);
 
@@ -3071,11 +3065,7 @@ function CustomerView({
   }
 
   function clearTvSearchTimers() {
-    if (tvPollTimerRef.current) window.clearInterval(tvPollTimerRef.current);
-    if (tvTimeoutRef.current) window.clearTimeout(tvTimeoutRef.current);
     if (tvCountdownRef.current) window.clearInterval(tvCountdownRef.current);
-    tvPollTimerRef.current = null;
-    tvTimeoutRef.current = null;
     tvCountdownRef.current = null;
   }
 
@@ -3121,106 +3111,57 @@ function CustomerView({
     return true;
   }
 
-  async function pollTvApprovalLink() {
-    if (!tvSearchActiveRef.current || !supabase || !link?.id) return;
-
-    let shouldStopSearching = false;
-
-    try {
-      const { data, error } = await supabase
-        .from("customer_links")
-        .select("tv_approval_url,updated_at,created_at")
-        .eq("id", link.id)
-        .maybeSingle();
-
-      if (!tvSearchActiveRef.current) return;
-      if (error) throw error;
-
-      const approvalUrl = String(data?.tv_approval_url || "").trim();
-      const receivedAt = data?.updated_at || data?.created_at || null;
-      const receivedAtMs = receivedAt ? new Date(receivedAt).getTime() : Number.NaN;
-      const linkAge = Number.isNaN(receivedAtMs)
-        ? Number.POSITIVE_INFINITY
-        : Date.now() - receivedAtMs;
-      const isRecentLink =
-        Boolean(approvalUrl) &&
-        linkAge >= 0 &&
-        linkAge <= verificationCodeFallbackWindowMs;
-
-      if (isRecentLink && receivedAt) {
-        shouldStopSearching = showTvApprovalLink(
-          { tv_approval_url: approvalUrl, updated_at: receivedAt },
-          "تم العثور على رابط موافقة حديث",
-          true,
-        );
-      }
-    } catch (error) {
-      console.error("Supabase TV approval polling error:", error);
-      shouldStopSearching = true;
-      setVisibleTvApprovalUrl(null);
-      setTvDisplayExpiresAt(null);
-      setTvRequestState("failed");
-    } finally {
-      if (shouldStopSearching) {
-        tvSearchActiveRef.current = false;
-        clearTvSearchTimers();
-        setTvRequestSeconds(0);
-      }
-    }
-  }
-
-  async function finishTvApprovalSearch() {
-    if (!tvSearchActiveRef.current) return;
-    tvSearchActiveRef.current = false;
+  async function fetchTvApprovalUrl() {
+    let foundLink = false;
 
     try {
       if (!supabase || !link?.id) {
-        setVisibleTvApprovalUrl(null);
-        setTvDisplayExpiresAt(null);
-        setTvRequestState("failed");
-        return;
+        throw new Error("TV approval search is missing Supabase or customer link data.");
       }
 
-      const { data, error } = await supabase
-        .from("customer_links")
-        .select("tv_approval_url,updated_at,created_at")
-        .eq("id", link.id)
-        .maybeSingle();
+      const searchDeadline = Date.now() + 15_000;
 
-      if (error) throw error;
+      while (tvSearchActiveRef.current && Date.now() <= searchDeadline) {
+        const { data, error } = await supabase
+          .from("customer_links")
+          .select("tv_approval_url,updated_at,created_at")
+          .eq("id", link.id)
+          .maybeSingle();
 
-      const fallbackUrl = String(data?.tv_approval_url || "").trim();
-      const receivedAt = data?.updated_at || data?.created_at || null;
-      const latestTime = receivedAt ? new Date(receivedAt).getTime() : Number.NaN;
-      const linkAge = Number.isNaN(latestTime)
-        ? Number.POSITIVE_INFINITY
-        : Date.now() - latestTime;
-      const isWithinFallbackWindow =
-        Boolean(fallbackUrl) &&
-        linkAge >= 0 &&
-        linkAge <= verificationCodeFallbackWindowMs;
+        if (error) throw error;
+        if (!tvSearchActiveRef.current) return;
 
-      if (isWithinFallbackWindow && receivedAt) {
-        showTvApprovalLink(
-          { tv_approval_url: fallbackUrl, updated_at: receivedAt },
-          "تم عرض أحدث رابط متاح خلال آخر 15 دقيقة",
-          true,
-        );
-        return;
+        const rawUrl = data?.tv_approval_url || null;
+        const approvalUrl = typeof rawUrl === "string" ? rawUrl.trim() : "";
+        const receivedAt = data?.updated_at || data?.created_at || new Date().toISOString();
+
+        if (approvalUrl) {
+          foundLink = showTvApprovalLink(
+            { tv_approval_url: approvalUrl, updated_at: receivedAt },
+            "تم العثور على رابط موافقة الشاشة",
+            true,
+          );
+          if (foundLink) return;
+        }
+
+        const remainingMs = searchDeadline - Date.now();
+        if (remainingMs <= 0) break;
+        await new Promise<void>((resolve) => {
+          window.setTimeout(resolve, Math.min(2_000, remainingMs));
+        });
       }
-
-      setVisibleTvApprovalUrl(null);
-      setTvDisplayExpiresAt(null);
-      setTvRequestState("failed");
     } catch (error) {
-      console.error("Supabase TV approval fallback error:", error);
-      setVisibleTvApprovalUrl(null);
-      setTvDisplayExpiresAt(null);
-      setTvRequestState("failed");
+      console.error("Supabase TV approval search error:", error);
     } finally {
       tvSearchActiveRef.current = false;
       clearTvSearchTimers();
       setTvRequestSeconds(0);
+
+      if (!foundLink) {
+        setVisibleTvApprovalUrl(null);
+        setTvDisplayExpiresAt(null);
+        setTvRequestState("failed");
+      }
     }
   }
 
@@ -3290,9 +3231,7 @@ function CustomerView({
       });
     }, 1000);
 
-    void pollTvApprovalLink();
-    tvPollTimerRef.current = window.setInterval(() => void pollTvApprovalLink(), 2000);
-    tvTimeoutRef.current = window.setTimeout(() => void finishTvApprovalSearch(), 15_000);
+    void fetchTvApprovalUrl();
   }
 
   function openPreRequestModal() {
