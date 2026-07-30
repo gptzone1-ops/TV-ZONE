@@ -3569,6 +3569,23 @@ function CustomerView({
                     </div>
                   ) : !deviceView ? null : deviceView === "screen" ? (
                     <div className="rounded-[1.75rem] border border-[#E0D4F8] bg-gradient-to-l from-white to-[#F7F2FF] p-4 shadow-card">
+                      <div className="mb-4 rounded-[1.5rem] border border-red-100 bg-white p-4 shadow-card">
+                        <h3 className="text-center text-base font-black leading-7 text-zinc-900 md:text-lg">
+                          🎥 شرح طريقة التفعيل والدخول على الشاشة / السوني
+                        </h3>
+                        <div className="mx-auto mt-4 aspect-[9/16] w-full max-w-[320px] overflow-hidden rounded-[1.35rem] bg-black shadow-[0_14px_34px_rgba(0,0,0,0.16)]">
+                          <iframe
+                            src="https://www.youtube.com/embed/i1_gY9XJawg?playsinline=1&rel=0&modestbranding=1"
+                            title="شرح طريقة التفعيل والدخول على الشاشة والسوني"
+                            className="h-full w-full border-0"
+                            loading="lazy"
+                            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                            referrerPolicy="strict-origin-when-cross-origin"
+                            allowFullScreen
+                          />
+                        </div>
+                      </div>
+
                       {tvRequestState === "ready" && visibleTvApprovalUrl ? (
                         <div className="mb-4">
                           <a
