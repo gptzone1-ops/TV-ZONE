@@ -267,6 +267,32 @@ type VerificationCodeResult = {
   error: unknown;
 };
 
+type TvApprovalQueryRow = {
+  tv_approval_url?: unknown;
+  updated_at?: unknown;
+  created_at?: unknown;
+};
+
+function normalizeTvApprovalRow(data: unknown): TvApprovalQueryRow | null {
+  const candidate = Array.isArray(data) ? data[0] : data;
+  return candidate && typeof candidate === "object"
+    ? (candidate as TvApprovalQueryRow)
+    : null;
+}
+
+function safeTvApprovalReceivedAt(row: TvApprovalQueryRow | null) {
+  const value =
+    typeof row?.updated_at === "string"
+      ? row.updated_at
+      : typeof row?.created_at === "string"
+        ? row.created_at
+        : "";
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp)
+    ? new Date(timestamp).toISOString()
+    : new Date().toISOString();
+}
+
 const NEW_PROFILE_PINS = new Set(Object.values(PROFILE_CODES));
 
 async function readLatestVerificationCode(accountId: string): Promise<VerificationCodeResult> {
@@ -364,7 +390,7 @@ class TvApprovalErrorBoundary extends Component<
       <div className="rounded-[1.75rem] border border-rose-200 bg-white p-5 text-center shadow-card">
         <CircleX className="mx-auto h-9 w-9 text-rose-600" />
         <p className="mt-3 text-base font-black text-zinc-900">
-          حدث خطأ غير متوقع، يرجى التحديث أو التواصل مع الدعم
+          حدث خطأ أثناء جلب الرابط، يرجى التحديث أو التواصل مع الدعم
         </p>
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
           <button
@@ -406,8 +432,26 @@ export default function App() {
 
   const shortMatch = route.match(/^\/v\/([^/]+)$/);
   const viewMatch = route.match(/^\/view\/([^/]+)$/);
-  if (shortMatch) return <CustomerView identifier={shortMatch[1]} lookup="short" navigate={navigate} />;
-  if (viewMatch) return <CustomerView identifier={viewMatch[1]} lookup="uuid" navigate={navigate} />;
+  if (shortMatch) {
+    return (
+      <TvApprovalErrorBoundary
+        key={`short-${shortMatch[1]}`}
+        supportUrl={`https://wa.me/${whatsappNumber}`}
+      >
+        <CustomerView identifier={shortMatch[1]} lookup="short" navigate={navigate} />
+      </TvApprovalErrorBoundary>
+    );
+  }
+  if (viewMatch) {
+    return (
+      <TvApprovalErrorBoundary
+        key={`uuid-${viewMatch[1]}`}
+        supportUrl={`https://wa.me/${whatsappNumber}`}
+      >
+        <CustomerView identifier={viewMatch[1]} lookup="uuid" navigate={navigate} />
+      </TvApprovalErrorBoundary>
+    );
+  }
   return <AdminApp navigate={navigate} />;
 }
 
@@ -3217,26 +3261,37 @@ function CustomerView({
       const searchDeadline = Date.now() + 15_000;
 
       while (tvSearchActiveRef.current && Date.now() <= searchDeadline) {
-        const { data, error } = await supabase
-          .from("customer_links")
-          .select("tv_approval_url,updated_at,created_at")
-          .eq("id", link.id)
-          .maybeSingle();
+        try {
+          const { data, error } = await supabase
+            .from("customer_links")
+            .select("tv_approval_url,updated_at,created_at")
+            .eq("id", link.id)
+            .limit(1);
 
-        if (error) throw error;
-        if (!tvSearchActiveRef.current) return;
+          if (error) throw error;
+          if (!tvSearchActiveRef.current) return;
 
-        const rawUrl = data?.tv_approval_url || null;
-        const approvalUrl = typeof rawUrl === "string" ? rawUrl.trim() : "";
-        const receivedAt = data?.updated_at || data?.created_at || new Date().toISOString();
+          const resultRow = normalizeTvApprovalRow(data);
+          const rawUrl =
+            typeof resultRow?.tv_approval_url === "string"
+              ? resultRow.tv_approval_url
+              : null;
+          const approvalUrl = rawUrl?.trim() || "";
+          const receivedAt = safeTvApprovalReceivedAt(resultRow);
 
-        if (approvalUrl) {
-          foundLink = showTvApprovalLink(
-            { tv_approval_url: approvalUrl, updated_at: receivedAt },
-            "تم العثور على رابط موافقة الشاشة",
-            true,
-          );
-          if (foundLink) return;
+          if (approvalUrl) {
+            foundLink = showTvApprovalLink(
+              { tv_approval_url: approvalUrl, updated_at: receivedAt },
+              "تم العثور على رابط موافقة الشاشة",
+              true,
+            );
+            if (foundLink) return;
+          }
+        } catch (pollError) {
+          console.error("Supabase TV approval polling tick error:", pollError);
+          tvSearchActiveRef.current = false;
+          clearTvSearchTimers();
+          break;
         }
 
         const remainingMs = searchDeadline - Date.now();
