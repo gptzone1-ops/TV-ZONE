@@ -34,7 +34,16 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Component,
+  FormEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ErrorInfo,
+  type ReactNode,
+} from "react";
 import { LEGACY_PROFILE_CODES, PROFILE_CODES, accountTypeLabel, buildProfileSlots, generateShortId } from "./lib/profiles";
 import { hasSupabaseConfig, supabase } from "./lib/supabase";
 import type { AccountType, CustomerLink, NetflixAccount, ServiceType } from "./types";
@@ -203,13 +212,53 @@ function getProfilePin(link: CustomerLink) {
   return profileKey ? LEGACY_PROFILE_CODES[profileKey] : "";
 }
 
+async function writeTextMobileSafe(text: string) {
+  try {
+    if (
+      typeof navigator !== "undefined" &&
+      navigator.clipboard &&
+      typeof navigator.clipboard.writeText === "function"
+    ) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (error) {
+    console.error("Clipboard API failed, using mobile fallback:", error);
+  }
+
+  try {
+    if (typeof document === "undefined" || !document.body) return false;
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.readOnly = true;
+    textarea.style.position = "fixed";
+    textarea.style.top = "0";
+    textarea.style.left = "-9999px";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    textarea.setSelectionRange(0, textarea.value.length);
+    const copied = document.execCommand("copy");
+    textarea.remove();
+    return copied;
+  } catch (error) {
+    console.error("Mobile clipboard fallback failed:", error);
+    return false;
+  }
+}
+
 async function copyText(text: string, setToast: (toast: Toast) => void) {
-  await navigator.clipboard.writeText(text);
-  setToast({ label: "تم النسخ بنجاح", at: Date.now() });
+  const copied = await writeTextMobileSafe(text);
+  setToast({
+    label: copied ? "تم النسخ بنجاح" : "تعذر النسخ، اضغط مطولاً لنسخ النص",
+    at: Date.now(),
+    tone: copied ? "success" : "error",
+  });
 }
 
 async function copyTextSilent(text: string) {
-  await navigator.clipboard.writeText(text);
+  await writeTextMobileSafe(text);
 }
 
 type VerificationCodeResult = {
@@ -293,6 +342,52 @@ const demoLinks: CustomerLink[] = buildProfileSlots("private").map((slot, index)
   created_at: new Date().toISOString(),
   ...slot,
 }));
+
+class TvApprovalErrorBoundary extends Component<
+  { children: ReactNode; supportUrl: string },
+  { hasError: boolean }
+> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error("TV approval panel render error:", error, info);
+  }
+
+  render() {
+    if (!this.state.hasError) return this.props.children;
+
+    return (
+      <div className="rounded-[1.75rem] border border-rose-200 bg-white p-5 text-center shadow-card">
+        <CircleX className="mx-auto h-9 w-9 text-rose-600" />
+        <p className="mt-3 text-base font-black text-zinc-900">
+          حدث خطأ غير متوقع، يرجى التحديث أو التواصل مع الدعم
+        </p>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="h-12 rounded-2xl border border-zinc-200 bg-zinc-100 text-sm font-black text-zinc-800"
+          >
+            تحديث الصفحة
+          </button>
+          <a
+            href={this.props.supportUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="flex h-12 items-center justify-center gap-2 rounded-2xl bg-[#8B35F5] text-sm font-black text-white"
+          >
+            <WhatsAppLogo className="h-5 w-5" />
+            تواصل مع الدعم
+          </a>
+        </div>
+      </div>
+    );
+  }
+}
 
 export default function App() {
   const [route, setRoute] = useState(() => window.location.pathname);
@@ -3564,6 +3659,7 @@ function CustomerView({
                       </a>
                     </div>
                   ) : !deviceView ? null : deviceView === "screen" ? (
+                    <TvApprovalErrorBoundary supportUrl={supportWhatsAppUrl}>
                     <div className="rounded-[1.75rem] border border-[#E0D4F8] bg-gradient-to-l from-white to-[#F7F2FF] p-4 shadow-card">
                       {tvRequestState === "loading" ? (
                         <div className="mb-4 rounded-2xl border border-[#DCCBFA] bg-white p-4">
@@ -3613,7 +3709,9 @@ function CustomerView({
                       ) : (
                         <button
                           type="button"
-                          onClick={() => {
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
                             setShowTvRequestModal(true);
                             setAgreeTvReady(false);
                           }}
@@ -3644,6 +3742,7 @@ function CustomerView({
                         تواصل مع الدعم الفني عبر الواتساب
                       </a>
                     </div>
+                    </TvApprovalErrorBoundary>
                   ) : codeRequestState === "loading" ? (
                     <div className="rounded-[1.75rem] border border-[#E0D4F8] bg-[#FCFAFF] p-4 shadow-card">
                       <div className="flex items-center justify-between gap-3">
@@ -3993,7 +4092,11 @@ function DeviceChoiceModal({
         <div className="mt-6 grid gap-3 sm:grid-cols-2">
           <button
             type="button"
-            onClick={onContinue}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onContinue();
+            }}
             disabled={!checked}
             className="h-13 rounded-2xl bg-[#8B35F5] px-5 text-sm font-black text-white shadow-[0_14px_32px_rgba(139,53,245,0.24)] transition hover:bg-[#7626DD] disabled:cursor-not-allowed disabled:opacity-40"
           >
@@ -4001,7 +4104,11 @@ function DeviceChoiceModal({
           </button>
           <button
             type="button"
-            onClick={onCancel}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onCancel();
+            }}
             className="h-13 rounded-2xl border border-[#E0D4F8] bg-white px-5 text-sm font-black text-[#7C2CE8] transition hover:bg-[#F5EEFF]"
           >
             تغيير الاختيار / إلغاء
