@@ -3155,43 +3155,56 @@ function CustomerView({
   async function finishTvApprovalSearch() {
     if (!tvSearchActiveRef.current) return;
     tvSearchActiveRef.current = false;
-    clearTvSearchTimers();
-    setTvRequestSeconds(0);
 
-    if (!supabase || !link?.id) {
+    try {
+      if (!supabase || !link?.id) {
+        setVisibleTvApprovalUrl(null);
+        setTvDisplayExpiresAt(null);
+        setTvRequestState("failed");
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("customer_links")
+        .select("tv_approval_url,updated_at,created_at")
+        .eq("id", link.id)
+        .maybeSingle();
+
+      if (error) throw error;
+
+      const fallbackUrl = String(data?.tv_approval_url || "").trim();
+      const receivedAt = data?.updated_at || data?.created_at || null;
+      const latestTime = receivedAt ? new Date(receivedAt).getTime() : Number.NaN;
+      const linkAge = Number.isNaN(latestTime)
+        ? Number.POSITIVE_INFINITY
+        : Date.now() - latestTime;
+      const isWithinFallbackWindow =
+        Boolean(fallbackUrl) &&
+        linkAge >= 0 &&
+        linkAge <= verificationCodeFallbackWindowMs;
+
+      if (isWithinFallbackWindow && receivedAt) {
+        showTvApprovalLink(
+          { tv_approval_url: fallbackUrl, updated_at: receivedAt },
+          "تم عرض أحدث رابط متاح خلال آخر 15 دقيقة",
+          true,
+        );
+        return;
+      }
+
       setVisibleTvApprovalUrl(null);
       setTvDisplayExpiresAt(null);
       setTvRequestState("failed");
-      return;
-    }
-
-    const { data, error } = await supabase
-      .from("customer_links")
-      .select("tv_approval_url,updated_at")
-      .eq("id", link.id)
-      .maybeSingle();
-
-    if (error) {
+    } catch (error) {
       console.error("Supabase TV approval fallback error:", error);
+      setVisibleTvApprovalUrl(null);
+      setTvDisplayExpiresAt(null);
+      setTvRequestState("failed");
+    } finally {
+      tvSearchActiveRef.current = false;
+      clearTvSearchTimers();
+      setTvRequestSeconds(0);
     }
-
-    const latestTime = data?.updated_at ? new Date(data.updated_at).getTime() : 0;
-    const linkAge = latestTime ? Date.now() - latestTime : Number.POSITIVE_INFINITY;
-    const isWithinFallbackWindow =
-      Boolean(data?.tv_approval_url) &&
-      !error &&
-      !Number.isNaN(latestTime) &&
-      linkAge >= 0 &&
-      linkAge <= verificationCodeFallbackWindowMs;
-
-    if (isWithinFallbackWindow && data) {
-      showTvApprovalLink(data, "تم عرض أحدث رابط متاح خلال آخر 15 دقيقة", true);
-      return;
-    }
-
-    setVisibleTvApprovalUrl(null);
-    setTvDisplayExpiresAt(null);
-    setTvRequestState("failed");
   }
 
   async function startTvApprovalSearch() {
@@ -3637,7 +3650,7 @@ function CustomerView({
                       ) : tvRequestState === "failed" ? (
                         <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-4 text-center">
                           <p className="text-sm font-black leading-7 text-rose-700">
-                            لم يتم العثور على رمز جديد حديث، يرجى التواصل مع الدعم الفني
+                            لم يتم العثور على رابط موافقة حديث، يرجى التواصل مع الدعم الفني
                           </p>
                         </div>
                       ) : tvRequestLocked ? (
