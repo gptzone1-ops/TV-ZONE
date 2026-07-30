@@ -2815,7 +2815,6 @@ function CustomerView({
   const tvTimeoutRef = useRef<number | null>(null);
   const tvCountdownRef = useRef<number | null>(null);
   const tvSearchActiveRef = useRef(false);
-  const tvBaselineRef = useRef<{ url: string | null; receivedAt: string | null }>({ url: null, receivedAt: null });
 
   useEffect(() => {
     async function loadCustomer() {
@@ -3125,30 +3124,48 @@ function CustomerView({
   async function pollTvApprovalLink() {
     if (!tvSearchActiveRef.current || !supabase || !link?.id) return;
 
-    const { data, error } = await supabase
-      .from("customer_links")
-      .select("tv_approval_url,updated_at")
-      .eq("id", link.id)
-      .maybeSingle();
+    let shouldStopSearching = false;
 
-    if (!tvSearchActiveRef.current) return;
-    if (error) {
+    try {
+      const { data, error } = await supabase
+        .from("customer_links")
+        .select("tv_approval_url,updated_at,created_at")
+        .eq("id", link.id)
+        .maybeSingle();
+
+      if (!tvSearchActiveRef.current) return;
+      if (error) throw error;
+
+      const approvalUrl = String(data?.tv_approval_url || "").trim();
+      const receivedAt = data?.updated_at || data?.created_at || null;
+      const receivedAtMs = receivedAt ? new Date(receivedAt).getTime() : Number.NaN;
+      const linkAge = Number.isNaN(receivedAtMs)
+        ? Number.POSITIVE_INFINITY
+        : Date.now() - receivedAtMs;
+      const isRecentLink =
+        Boolean(approvalUrl) &&
+        linkAge >= 0 &&
+        linkAge <= verificationCodeFallbackWindowMs;
+
+      if (isRecentLink && receivedAt) {
+        shouldStopSearching = showTvApprovalLink(
+          { tv_approval_url: approvalUrl, updated_at: receivedAt },
+          "تم العثور على رابط موافقة حديث",
+          true,
+        );
+      }
+    } catch (error) {
       console.error("Supabase TV approval polling error:", error);
-      return;
-    }
-
-    const nextUrl = String(data?.tv_approval_url || "").trim();
-    const nextTime = data?.updated_at ? new Date(data.updated_at).getTime() : 0;
-    const baselineTime = tvBaselineRef.current.receivedAt
-      ? new Date(tvBaselineRef.current.receivedAt).getTime()
-      : 0;
-    const isNewerLink =
-      Boolean(nextUrl) &&
-      !Number.isNaN(nextTime) &&
-      nextTime > baselineTime;
-
-    if (isNewerLink && data) {
-      showTvApprovalLink(data, "تم استلام رابط موافقة جديد");
+      shouldStopSearching = true;
+      setVisibleTvApprovalUrl(null);
+      setTvDisplayExpiresAt(null);
+      setTvRequestState("failed");
+    } finally {
+      if (shouldStopSearching) {
+        tvSearchActiveRef.current = false;
+        clearTvSearchTimers();
+        setTvRequestSeconds(0);
+      }
     }
   }
 
@@ -3217,8 +3234,6 @@ function CustomerView({
     ) return;
 
     const nextRequestedCount = codeRequestedCount + 1;
-    let baselineUrl = String(link.tv_approval_url || "").trim() || null;
-    let baselineReceivedAt = link.updated_at || null;
 
     if (supabase) {
       const { data, error } = await supabase
@@ -3239,8 +3254,6 @@ function CustomerView({
         return;
       }
 
-      baselineUrl = String(data.tv_approval_url || "").trim() || null;
-      baselineReceivedAt = data.updated_at || null;
       setLink((current) =>
         current
           ? {
@@ -3258,7 +3271,6 @@ function CustomerView({
       );
     }
 
-    tvBaselineRef.current = { url: baselineUrl, receivedAt: baselineReceivedAt };
     clearTvSearchTimers();
     tvSearchActiveRef.current = true;
     setShowTvRequestModal(false);
@@ -3650,7 +3662,7 @@ function CustomerView({
                       ) : tvRequestState === "failed" ? (
                         <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-4 text-center">
                           <p className="text-sm font-black leading-7 text-rose-700">
-                            لم يتم العثور على رابط موافقة حديث، يرجى التواصل مع الدعم الفني
+                            لم يتم العثور على رابط حديث، يرجى التواصل مع الدعم الفني
                           </p>
                         </div>
                       ) : tvRequestLocked ? (
