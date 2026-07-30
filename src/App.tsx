@@ -2907,6 +2907,7 @@ function CustomerView({
   const codeRequestedCount = Math.max(0, link?.code_requested_count ?? 0);
   const hasCodeRequestCredit = codeRequestedCount < codeRequestLimit;
   const attemptUsed = !hasCodeRequestCredit;
+  const hasUsedTvLink = link?.has_used_tv_link === true;
   const tvSearchSecondsRemaining = tvSearchDeadlineAt
     ? Math.max(0, Math.ceil((tvSearchDeadlineAt - nowTick) / 1000))
     : 0;
@@ -2934,11 +2935,40 @@ function CustomerView({
     tvSearchActiveRef.current = false;
     setShowTvRequestModal(false);
     setAgreeTvRequest(false);
-    setTvRequestState("idle");
     setTvSearchDeadlineAt(null);
-    setTvDisplayExpiresAt(null);
+
+    if (deviceView !== "screen" || !link?.has_used_tv_link) {
+      setTvRequestState("idle");
+      setTvDisplayExpiresAt(null);
+      setVisibleTvApprovalUrl(null);
+      return;
+    }
+
+    const usedAtMs = link.tv_link_used_at
+      ? Date.parse(link.tv_link_used_at)
+      : Number.NaN;
+    const expiresAt = Number.isFinite(usedAtMs)
+      ? usedAtMs + verificationCodeLifetimeMs
+      : 0;
+    const storedUrl = String(link.tv_approval_url || "").trim();
+
+    if (storedUrl && expiresAt > Date.now()) {
+      setVisibleTvApprovalUrl(storedUrl);
+      setTvDisplayExpiresAt(expiresAt);
+      setTvRequestState("ready");
+      return;
+    }
+
     setVisibleTvApprovalUrl(null);
-  }, [deviceView, link?.id]);
+    setTvDisplayExpiresAt(null);
+    setTvRequestState("expired");
+  }, [
+    deviceView,
+    link?.has_used_tv_link,
+    link?.id,
+    link?.tv_approval_url,
+    link?.tv_link_used_at,
+  ]);
 
   useEffect(() => {
     if (
@@ -3006,9 +3036,46 @@ function CustomerView({
     }
   }
 
-  function showTvApprovalSnapshot(snapshot: TvApprovalSnapshot, message: string) {
+  async function showTvApprovalSnapshot(snapshot: TvApprovalSnapshot, message: string) {
     const nextUrl = String(snapshot.url || "").trim();
     if (!nextUrl) return false;
+
+    const usedAt = new Date().toISOString();
+
+    if (supabase && link?.id) {
+      const { data, error } = await supabase
+        .from("customer_links")
+        .update({
+          has_used_tv_link: true,
+          tv_link_used_at: usedAt,
+        })
+        .eq("id", link.id)
+        .eq("has_used_tv_link", false)
+        .select("has_used_tv_link,tv_link_used_at,tv_approval_url")
+        .maybeSingle();
+
+      if (error) {
+        console.error("Supabase TV approval usage lock error:", error);
+        throw error;
+      }
+
+      if (!data?.has_used_tv_link) {
+        tvSearchActiveRef.current = false;
+        setVisibleTvApprovalUrl(null);
+        setTvSearchDeadlineAt(null);
+        setTvDisplayExpiresAt(null);
+        setTvRequestState("expired");
+        setLink((current) =>
+          current
+            ? {
+                ...current,
+                has_used_tv_link: true,
+              }
+            : current,
+        );
+        return false;
+      }
+    }
 
     tvSearchActiveRef.current = false;
     setLink((current) =>
@@ -3016,6 +3083,8 @@ function CustomerView({
         ? {
             ...current,
             tv_approval_url: nextUrl,
+            has_used_tv_link: true,
+            tv_link_used_at: usedAt,
             updated_at: snapshot.receivedAt || current.updated_at,
           }
         : current,
@@ -3031,8 +3100,10 @@ function CustomerView({
   function openTvRequestModal() {
     if (
       deviceView !== "screen" ||
+      hasUsedTvLink ||
       tvRequestState === "searching" ||
-      tvRequestState === "ready"
+      tvRequestState === "ready" ||
+      tvRequestState === "expired"
     ) return;
 
     setAgreeTvRequest(false);
@@ -3041,7 +3112,10 @@ function CustomerView({
 
   async function startTvApprovalSearch() {
     const customerLinkId = link?.id;
-    if (!customerLinkId || deviceView !== "screen") return;
+    if (!customerLinkId || deviceView !== "screen" || hasUsedTvLink) {
+      if (hasUsedTvLink) setTvRequestState("expired");
+      return;
+    }
 
     setShowTvRequestModal(false);
     setAgreeTvRequest(false);
@@ -3070,7 +3144,7 @@ function CustomerView({
               current.receivedAtMs > baseline.receivedAtMs);
 
           if (isNewLink) {
-            showTvApprovalSnapshot(current, "تم استلام رابط موافقة جديد");
+            await showTvApprovalSnapshot(current, "تم استلام رابط موافقة جديد");
             return;
           }
         } catch (pollError) {
@@ -3090,7 +3164,7 @@ function CustomerView({
         fallbackAge <= tvApprovalFallbackWindowMs;
 
       if (isRecentFallback) {
-        showTvApprovalSnapshot(
+        await showTvApprovalSnapshot(
           fallback,
           "تم عرض أحدث رابط متاح خلال آخر 15 دقيقة",
         );
@@ -3517,27 +3591,37 @@ function CustomerView({
                           جاري البحث عن رابط الموافقة... {tvSearchSecondsRemaining}s
                         </div>
                       ) : tvRequestState === "failed" ? (
-                        <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-4 text-center text-xs font-black leading-6 text-rose-700">
-                          لم يتم العثور على رابط موافقة حديث، يرجى التواصل مع الدعم الفني
-                        </div>
-                      ) : tvRequestState === "expired" ? (
-                        <div className="mb-4 rounded-2xl border border-zinc-200 bg-zinc-100 px-4 py-4 text-center">
-                          <p className="text-xs font-black leading-6 text-zinc-700">
-                            انتهت مدة عرض الرابط. يمكنك طلب رابط حديث عند الحاجة.
+                        <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-4 text-center">
+                          <p className="text-xs font-black leading-6 text-rose-700">
+                            لم يتم العثور على رابط موافقة حديث، يمكنك إعادة المحاولة أو التواصل مع الدعم الفني
                           </p>
                           <button
                             type="button"
                             onClick={openTvRequestModal}
                             className="mt-3 min-h-12 w-full rounded-xl bg-[#E50914] px-4 text-sm font-black text-white transition hover:bg-red-700"
                           >
-                            جلب رابط جديد للشاشة / سوني
+                            إعادة محاولة جلب الرابط
+                          </button>
+                        </div>
+                      ) : tvRequestState === "expired" ? (
+                        <div className="mb-4 rounded-2xl border border-zinc-200 bg-zinc-100 px-4 py-4 text-center">
+                          <p className="text-xs font-black leading-6 text-rose-700">
+                            انتهت صلاحية الرابط، ووصلت للحد الأقصى المتاح لاستخدام الرابط
+                          </p>
+                          <button
+                            type="button"
+                            disabled
+                            className="mt-3 min-h-12 w-full cursor-not-allowed rounded-xl bg-zinc-300 px-4 text-sm font-black text-zinc-500"
+                          >
+                            تم استهلاك رابط الشاشة
                           </button>
                         </div>
                       ) : (
                         <button
                           type="button"
                           onClick={openTvRequestModal}
-                          className="mb-4 flex min-h-14 w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-l from-[#E50914] to-red-700 px-4 text-center text-sm font-black text-white shadow-[0_14px_34px_rgba(229,9,20,0.24)] transition hover:-translate-y-0.5 hover:shadow-[0_18px_38px_rgba(229,9,20,0.3)]"
+                          disabled={hasUsedTvLink}
+                          className="mb-4 flex min-h-14 w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-l from-[#E50914] to-red-700 px-4 text-center text-sm font-black text-white shadow-[0_14px_34px_rgba(229,9,20,0.24)] transition hover:-translate-y-0.5 hover:shadow-[0_18px_38px_rgba(229,9,20,0.3)] disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           <MonitorPlay className="h-5 w-5" />
                           جلب رابط الدخول للشاشة / سوني
