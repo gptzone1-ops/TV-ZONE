@@ -68,7 +68,7 @@ const whatsappNumber = "966581688656";
 const disclaimerStorageKey = "disclaimer_accepted";
 const dayMs = 1000 * 60 * 60 * 24;
 const verificationCodeLifetimeMs = 120 * 1000;
-const verificationCodeFallbackWindowMs = 5 * 60 * 1000;
+const verificationCodeFallbackWindowMs = 15 * 60 * 1000;
 const tvApprovalFallbackWindowMs = 15 * 60 * 1000;
 const tvApprovalSearchDurationMs = 15 * 1000;
 const duplicateEmailMessage = "عفواً، هذا البريد الإلكتروني مسجل مسبقاً ولا يمكن تكراره";
@@ -2971,6 +2971,44 @@ function CustomerView({
   ]);
 
   useEffect(() => {
+    if (deviceView !== "mobile") return;
+
+    if (!attemptUsed) {
+      setCodeDisplayExpiresAt(null);
+      setCodeRequestState("idle");
+      return;
+    }
+
+    codeSearchActiveRef.current = false;
+    clearCodeSearchTimers();
+
+    const usedAtMs = link?.code_used_at
+      ? Date.parse(link.code_used_at)
+      : Number.NaN;
+    const expiresAt = Number.isFinite(usedAtMs)
+      ? usedAtMs + verificationCodeLifetimeMs
+      : 0;
+    const storedCode = String(account?.verification_code || "").trim();
+
+    if (storedCode && expiresAt > Date.now()) {
+      setCodeDisplayExpiresAt(expiresAt);
+      setCodeRequestState("ready");
+      return;
+    }
+
+    setCodeDisplayExpiresAt(null);
+    setCodeRequestState("expired");
+  }, [
+    account?.verification_code,
+    attemptUsed,
+    deviceView,
+    link?.code_request_limit,
+    link?.code_requested_count,
+    link?.code_used_at,
+    link?.id,
+  ]);
+
+  useEffect(() => {
     if (
       codeRequestState === "ready" &&
       codeDisplayExpiresAt &&
@@ -2978,6 +3016,17 @@ function CustomerView({
     ) {
       setCodeRequestState("expired");
       setCodeDisplayExpiresAt(null);
+      setLink((current) =>
+        current?.accounts
+          ? {
+              ...current,
+              accounts: {
+                ...current.accounts,
+                verification_code: null,
+              },
+            }
+          : current,
+      );
     }
   }, [codeDisplayExpiresAt, codeRequestState, nowTick]);
 
@@ -3244,43 +3293,12 @@ function CustomerView({
     setAgreePreRequest(false);
   }
 
-  async function confirmPreRequest() {
+  function confirmPreRequest() {
     if (!automatedCodeEnabled || !link?.id || !hasCodeRequestCredit) return;
-    const nextRequestedCount = codeRequestedCount + 1;
-
-    if (supabase) {
-      const { data, error } = await supabase
-        .from("customer_links")
-        .update({ code_requested_count: nextRequestedCount })
-        .eq("id", link.id)
-        .eq("code_requested_count", codeRequestedCount)
-        .select("code_requested_count,code_request_limit")
-        .maybeSingle();
-
-      if (error || !data) {
-        console.error("Supabase customer code request count update error:", error);
-        setToast({ label: "تعذر خصم محاولة الكود، حدّث الصفحة وحاول مجدداً", at: Date.now() });
-        return;
-      }
-
-      setLink((current) =>
-        current
-          ? {
-              ...current,
-              code_requested_count: data.code_requested_count,
-              code_request_limit: data.code_request_limit,
-            }
-          : current,
-      );
-    } else {
-      setLink((current) =>
-        current ? { ...current, code_requested_count: nextRequestedCount } : current,
-      );
-    }
 
     setShowPreRequestModal(false);
     setAgreePreRequest(false);
-    startCodeRequest();
+    void startCodeRequest();
   }
 
   function clearCodeSearchTimers() {
@@ -3292,13 +3310,48 @@ function CustomerView({
     countdownRef.current = null;
   }
 
-  function showVerificationCode(latestCode: VerificationCodeResult, message: string) {
+  async function showVerificationCode(latestCode: VerificationCodeResult, message: string) {
     if (!latestCode.code || !latestCode.receivedAt) return false;
+
+    const usedAt = new Date().toISOString();
+    const lockedRequestedCount = codeRequestLimit;
+
+    if (supabase && link?.id) {
+      const { data, error } = await supabase
+        .from("customer_links")
+        .update({
+          code_requested_count: lockedRequestedCount,
+          code_used_at: usedAt,
+        })
+        .eq("id", link.id)
+        .eq("code_requested_count", codeRequestedCount)
+        .select("code_requested_count,code_request_limit,code_used_at")
+        .maybeSingle();
+
+      if (error) {
+        console.error("Supabase verification code usage lock error:", error);
+        codeSearchActiveRef.current = false;
+        clearCodeSearchTimers();
+        setCodeDisplayExpiresAt(null);
+        setCodeRequestState("failed");
+        return false;
+      }
+
+      if (!data || data.code_requested_count < data.code_request_limit) {
+        codeSearchActiveRef.current = false;
+        clearCodeSearchTimers();
+        setCodeDisplayExpiresAt(null);
+        setCodeRequestState("expired");
+        return false;
+      }
+    }
 
     setLink((current) =>
       current?.accounts
         ? {
             ...current,
+            code_requested_count: lockedRequestedCount,
+            code_used_at: usedAt,
             accounts: {
               ...current.accounts,
               verification_code: latestCode.code,
@@ -3319,19 +3372,23 @@ function CustomerView({
   async function pollVerificationCode(accountId: string) {
     if (!codeSearchActiveRef.current) return;
 
-    const latestCode = await readLatestVerificationCode(accountId);
-    if (!codeSearchActiveRef.current || latestCode.error || !latestCode.code || !latestCode.receivedAt) return;
+    try {
+      const latestCode = await readLatestVerificationCode(accountId);
+      if (!codeSearchActiveRef.current || latestCode.error || !latestCode.code || !latestCode.receivedAt) return;
 
-    const baseline = requestBaselineRef.current;
-    const baselineTime = baseline.receivedAt ? new Date(baseline.receivedAt).getTime() : 0;
-    const latestTime = new Date(latestCode.receivedAt).getTime();
-    const isNewerCode =
-      !Number.isNaN(latestTime) &&
-      (latestTime > baselineTime ||
-        (!baseline.receivedAt && latestCode.code !== baseline.code));
+      const baseline = requestBaselineRef.current;
+      const baselineTime = baseline.receivedAt ? new Date(baseline.receivedAt).getTime() : 0;
+      const latestTime = new Date(latestCode.receivedAt).getTime();
+      const isNewerCode =
+        !Number.isNaN(latestTime) &&
+        (latestTime > baselineTime ||
+          (!baseline.receivedAt && latestCode.code !== baseline.code));
 
-    if (isNewerCode) {
-      showVerificationCode(latestCode, "تم استلام كود جديد");
+      if (isNewerCode) {
+        await showVerificationCode(latestCode, "تم استلام كود جديد");
+      }
+    } catch (error) {
+      console.error("Verification code polling error:", error);
     }
   }
 
@@ -3341,26 +3398,30 @@ function CustomerView({
     clearCodeSearchTimers();
     setCodeRequestSeconds(0);
 
-    const latestCode = await readLatestVerificationCode(accountId);
-    const latestTime = latestCode.receivedAt ? new Date(latestCode.receivedAt).getTime() : 0;
-    const codeAge = latestTime ? Date.now() - latestTime : Number.POSITIVE_INFINITY;
-    const isWithinFallbackWindow =
-      Boolean(latestCode.code) &&
-      !latestCode.error &&
-      !Number.isNaN(latestTime) &&
-      codeAge >= 0 &&
-      codeAge <= verificationCodeFallbackWindowMs;
+    try {
+      const latestCode = await readLatestVerificationCode(accountId);
+      const latestTime = latestCode.receivedAt ? new Date(latestCode.receivedAt).getTime() : 0;
+      const codeAge = latestTime ? Date.now() - latestTime : Number.POSITIVE_INFINITY;
+      const isWithinFallbackWindow =
+        Boolean(latestCode.code) &&
+        !latestCode.error &&
+        !Number.isNaN(latestTime) &&
+        codeAge >= 0 &&
+        codeAge <= verificationCodeFallbackWindowMs;
 
-    if (isWithinFallbackWindow) {
-      showVerificationCode(latestCode, "تم عرض أحدث كود متاح خلال آخر 5 دقائق");
-      return;
+      if (isWithinFallbackWindow) {
+        await showVerificationCode(latestCode, "تم عرض أحدث كود متاح خلال آخر 15 دقيقة");
+        return;
+      }
+    } catch (error) {
+      console.error("Verification code fallback error:", error);
     }
 
     setCodeDisplayExpiresAt(null);
     setCodeRequestState("failed");
   }
 
-  function startCodeRequest() {
+  async function startCodeRequest() {
     const accountId = account?.id;
     if (!automatedCodeEnabled || !accountId) return;
 
@@ -3369,10 +3430,43 @@ function CustomerView({
     setCodeRequestState("loading");
     setCodeRequestSeconds(15);
     setCodeDisplayExpiresAt(null);
-    requestBaselineRef.current = {
-      code: account?.verification_code || null,
-      receivedAt: account?.verification_code_received_at || null,
-    };
+    try {
+      const latestCode = await readLatestVerificationCode(accountId);
+      const latestTime = latestCode.receivedAt
+        ? new Date(latestCode.receivedAt).getTime()
+        : 0;
+      const codeAge = latestTime
+        ? Date.now() - latestTime
+        : Number.POSITIVE_INFINITY;
+      const isRecentStoredCode =
+        Boolean(latestCode.code) &&
+        !latestCode.error &&
+        Number.isFinite(latestTime) &&
+        codeAge >= 0 &&
+        codeAge <= verificationCodeFallbackWindowMs;
+
+      if (isRecentStoredCode) {
+        await showVerificationCode(
+          latestCode,
+          "تم عرض أحدث كود متاح خلال آخر 15 دقيقة",
+        );
+        return;
+      }
+
+      requestBaselineRef.current = {
+        code: latestCode.code || account?.verification_code || null,
+        receivedAt:
+          latestCode.receivedAt ||
+          account?.verification_code_received_at ||
+          null,
+      };
+    } catch (error) {
+      console.error("Initial verification code lookup error:", error);
+      requestBaselineRef.current = {
+        code: account?.verification_code || null,
+        receivedAt: account?.verification_code_received_at || null,
+      };
+    }
 
     countdownRef.current = window.setInterval(() => {
       setCodeRequestSeconds((current) => {
@@ -3724,14 +3818,22 @@ function CustomerView({
                           <CircleX className="h-7 w-7" />
                         </div>
                         <div className="min-w-0 flex-1">
-                          <p className="text-lg font-black">لم يتم العثور على رمز جديد حديث، يرجى التواصل مع الدعم الفني</p>
+                          <p className="text-lg font-black">لم يصل الرمز بعد</p>
                           <p className="mt-1 text-xs font-bold leading-6 text-zinc-500">
-                            انتهت مهلة البحث ولا يوجد كود مستلم خلال آخر 5 دقائق.
+                            يرجى التأكد من طلب الرمز في نتفليكس ثم الضغط على إعادة المحاولة.
                           </p>
                         </div>
                       </div>
+                      <button
+                        type="button"
+                        onClick={openPreRequestModal}
+                        className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#8B35F5] text-sm font-black text-white shadow-[0_14px_32px_rgba(139,53,245,0.24)] transition hover:bg-[#7626DD]"
+                      >
+                        <RefreshCw className="h-4 w-4" />
+                        إعادة المحاولة والبحث مجدداً
+                      </button>
                       <a
-                        href={attemptsExhaustedWhatsAppUrl}
+                        href={supportWhatsAppUrl}
                         target="_blank"
                         rel="noreferrer"
                         className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#8B35F5] text-sm font-black text-white shadow-[0_14px_32px_rgba(139,53,245,0.24)] transition hover:bg-[#7626DD]"
@@ -3748,7 +3850,7 @@ function CustomerView({
                           <Clock3 className="h-7 w-7" />
                         </div>
                         <div className="min-w-0 flex-1">
-                          <p className="text-lg font-black text-amber-900">انتهت صلاحية الرمز والحد المتاح</p>
+                          <p className="text-lg font-black text-amber-900">انتهت صلاحية الرمز والحد المتاح لهذه الجلسة</p>
                           <p className="mt-1 text-xs font-bold leading-6 text-amber-800">
                             لا يمكن البحث مجدداً إلا بعد أن يقوم المشرف بتجديد رصيد المحاولات.
                           </p>
@@ -4101,7 +4203,7 @@ function PreRequestModal({
           </div>
           <h2 className="text-3xl font-black md:text-4xl">تأكيد محاولة تسجيل الدخول</h2>
           <p className="mt-4 text-sm font-bold leading-8 text-zinc-700">
-            هل قمت بإدخال البريد الإلكتروني والضغط على تسجيل الدخول في تطبيق Netflix أولاً؟ تنبيه هام: يحق لك طلب الكود لمرة واحدة فقط لهذا الحساب.
+            هل قمت بإدخال البريد الإلكتروني والضغط على تسجيل الدخول في تطبيق Netflix أولاً؟ لن يتم احتساب المحاولة إلا بعد وصول الكود وظهوره لك.
           </p>
         </div>
 
@@ -4113,7 +4215,7 @@ function PreRequestModal({
             className="mt-1 h-5 w-5 rounded border-[#CDBAF2] text-[#8B35F5] focus:ring-[#8B35F5]"
           />
           <span className="text-sm font-black leading-7 text-zinc-800 md:text-base">
-            أقر بأنني بدأت تسجيل الدخول وأعلم أن هذه المحاولة هي الوحيدة المتاحة لهذا الحساب.
+            أقر بأنني بدأت تسجيل الدخول، ويمكنني إعادة البحث إذا لم يصل الكود.
           </span>
         </label>
 

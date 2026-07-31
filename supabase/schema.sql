@@ -65,6 +65,9 @@ alter table public.customer_links
   add column if not exists code_requested_count integer not null default 0;
 
 alter table public.customer_links
+  add column if not exists code_used_at timestamptz;
+
+alter table public.customer_links
   add column if not exists selected_device text;
 
 do $$

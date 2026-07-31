@@ -22,6 +22,7 @@ export type CustomerLink = {
   link_number?: number | null;
   code_request_limit?: number | null;
   code_requested_count?: number | null;
+  code_used_at?: string | null;
   selected_device?: "mobile" | "screen" | null;
   tv_approval_url?: string | null;
   has_used_tv_link?: boolean | null;
