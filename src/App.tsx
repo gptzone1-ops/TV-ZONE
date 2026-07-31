@@ -215,22 +215,61 @@ async function copyTextSilent(text: string) {
 }
 
 type VerificationCodeResult = {
+  messageId: string | null;
   code: string | null;
   receivedAt: string | null;
   error: unknown;
 };
 
 type TvApprovalSnapshot = {
+  messageId: string | null;
   url: string;
   receivedAt: string | null;
   receivedAtMs: number;
 };
 
+type VerificationMessageRow = {
+  id?: string | null;
+  code?: string | null;
+  tv_approval_url?: string | null;
+  received_at?: string | null;
+  is_used?: boolean | null;
+};
+
 const NEW_PROFILE_PINS = new Set(Object.values(PROFILE_CODES));
 
-async function readLatestVerificationCode(accountId: string): Promise<VerificationCodeResult> {
+async function readLatestVerificationCode(
+  accountId: string,
+  customerLinkId?: string,
+  onlyUnused = false,
+): Promise<VerificationCodeResult> {
   if (!supabase) {
-    return { code: null, receivedAt: null, error: null };
+    return { messageId: null, code: null, receivedAt: null, error: null };
+  }
+
+  if (customerLinkId && onlyUnused) {
+    const { data, error } = await supabase.rpc("get_latest_customer_message", {
+      p_customer_link_id: customerLinkId,
+      p_message_type: "code",
+      p_since: null,
+    });
+
+    if (!error) {
+      const row = (Array.isArray(data) ? data[0] : data) as VerificationMessageRow | null;
+      if (row?.id && row.code) {
+        return {
+          messageId: row.id,
+          code: row.code,
+          receivedAt: row.received_at || null,
+          error: null,
+        };
+      }
+
+      return { messageId: null, code: null, receivedAt: null, error: null };
+    }
+
+    console.error("Supabase verification message RPC error:", error);
+    return { messageId: null, code: null, receivedAt: null, error };
   }
 
   const [accountResult, linkResult] = await Promise.all([
@@ -271,6 +310,7 @@ async function readLatestVerificationCode(accountId: string): Promise<Verificati
   const latest = candidates[0];
   if (latest?.verification_code) {
     return {
+      messageId: null,
       code: latest.verification_code,
       receivedAt: latest.verification_code_received_at || null,
       error: null,
@@ -278,10 +318,30 @@ async function readLatestVerificationCode(accountId: string): Promise<Verificati
   }
 
   return {
+    messageId: null,
     code: null,
     receivedAt: null,
     error: accountResult.error || linkResult.error || null,
   };
+}
+
+async function consumeVerificationMessage(messageId: string, customerLinkId: string, usedAt: string) {
+  if (!supabase) return null;
+
+  const { data, error } = await supabase.rpc("consume_customer_message", {
+    p_message_id: messageId,
+    p_customer_link_id: customerLinkId,
+    p_used_at: usedAt,
+  });
+
+  if (error) {
+    console.error("Supabase verification message consumption error:", error);
+    throw error;
+  }
+
+  return (Array.isArray(data) ? data[0] : data) as
+    | (VerificationMessageRow & { message_id?: string; message_type?: string })
+    | null;
 }
 
 const demoAccount: NetflixAccount = {
@@ -2243,7 +2303,7 @@ function AccountDetail({
     }
 
     setLoadingAdminVerificationCode(true);
-    const latestCode = await readLatestVerificationCode(account.id);
+    const latestCode = await readLatestVerificationCode(account.id, links[0]?.id, false);
 
     if (latestCode.code) {
       const { error: saveError } = await supabase
@@ -2819,7 +2879,11 @@ function CustomerView({
   const countdownRef = useRef<number | null>(null);
   const codeSearchActiveRef = useRef(false);
   const tvSearchActiveRef = useRef(false);
-  const requestBaselineRef = useRef<{ code: string | null; receivedAt: string | null }>({ code: null, receivedAt: null });
+  const requestBaselineRef = useRef<{
+    messageId: string | null;
+    code: string | null;
+    receivedAt: string | null;
+  }>({ messageId: null, code: null, receivedAt: null });
 
   useEffect(() => {
     async function loadCustomer() {
@@ -2883,6 +2947,9 @@ function CustomerView({
   }, []);
 
   const account = link?.accounts;
+  const storedVerificationCode = link?.verification_code || account?.verification_code || null;
+  const storedVerificationCodeReceivedAt =
+    link?.verification_code_received_at || account?.verification_code_received_at || null;
   const service = serviceOf(account);
   const theme = serviceThemes[service];
   const supportWhatsAppUrl = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(
@@ -2898,7 +2965,7 @@ function CustomerView({
     : 0;
   const codeIsVisible = Boolean(
     codeRequestState === "ready" &&
-      account?.verification_code &&
+      storedVerificationCode &&
       codeDisplayExpiresAt &&
       codeDisplayExpiresAt > nowTick,
   );
@@ -2988,7 +3055,7 @@ function CustomerView({
     const expiresAt = Number.isFinite(usedAtMs)
       ? usedAtMs + verificationCodeLifetimeMs
       : 0;
-    const storedCode = String(account?.verification_code || "").trim();
+    const storedCode = String(storedVerificationCode || "").trim();
 
     if (storedCode && expiresAt > Date.now()) {
       setCodeDisplayExpiresAt(expiresAt);
@@ -2999,7 +3066,7 @@ function CustomerView({
     setCodeDisplayExpiresAt(null);
     setCodeRequestState("expired");
   }, [
-    account?.verification_code,
+    storedVerificationCode,
     attemptUsed,
     deviceView,
     link?.code_request_limit,
@@ -3046,6 +3113,7 @@ function CustomerView({
   async function readTvApprovalSnapshot(customerLinkId: string): Promise<TvApprovalSnapshot> {
     if (!supabase) {
       return {
+        messageId: null,
         url: String(link?.tv_approval_url || "").trim(),
         receivedAt: link?.updated_at || link?.created_at || null,
         receivedAtMs: Date.now(),
@@ -3053,28 +3121,24 @@ function CustomerView({
     }
 
     try {
-      const { data, error } = await supabase
-        .from("customer_links")
-        .select("tv_approval_url,updated_at,created_at")
-        .eq("id", customerLinkId)
-        .limit(1);
+      const { data, error } = await supabase.rpc("get_latest_customer_message", {
+        p_customer_link_id: customerLinkId,
+        p_message_type: "tv_approval_url",
+        p_since: null,
+      });
 
       if (error) throw error;
 
-      const row = Array.isArray(data) ? data[0] : data;
+      const row = (Array.isArray(data) ? data[0] : data) as VerificationMessageRow | null;
       const url =
         typeof row?.tv_approval_url === "string"
           ? row.tv_approval_url.trim()
           : "";
-      const receivedAt =
-        typeof row?.updated_at === "string"
-          ? row.updated_at
-          : typeof row?.created_at === "string"
-            ? row.created_at
-            : null;
+      const receivedAt = typeof row?.received_at === "string" ? row.received_at : null;
       const parsedTime = receivedAt ? Date.parse(receivedAt) : Number.NaN;
 
       return {
+        messageId: row?.id || null,
         url,
         receivedAt,
         receivedAtMs: Number.isFinite(parsedTime) ? parsedTime : 0,
@@ -3086,44 +3150,25 @@ function CustomerView({
   }
 
   async function showTvApprovalSnapshot(snapshot: TvApprovalSnapshot, message: string) {
-    const nextUrl = String(snapshot.url || "").trim();
+    let nextUrl = String(snapshot.url || "").trim();
     if (!nextUrl) return false;
 
     const usedAt = new Date().toISOString();
 
     if (supabase && link?.id) {
-      const { data, error } = await supabase
-        .from("customer_links")
-        .update({
-          has_used_tv_link: true,
-          tv_link_used_at: usedAt,
-        })
-        .eq("id", link.id)
-        .eq("has_used_tv_link", false)
-        .select("has_used_tv_link,tv_link_used_at,tv_approval_url")
-        .maybeSingle();
-
-      if (error) {
-        console.error("Supabase TV approval usage lock error:", error);
-        throw error;
-      }
-
-      if (!data?.has_used_tv_link) {
-        tvSearchActiveRef.current = false;
-        setVisibleTvApprovalUrl(null);
-        setTvSearchDeadlineAt(null);
-        setTvDisplayExpiresAt(null);
-        setTvRequestState("expired");
-        setLink((current) =>
-          current
-            ? {
-                ...current,
-                has_used_tv_link: true,
-              }
-            : current,
-        );
+      if (!snapshot.messageId) {
+        setTvRequestState("failed");
         return false;
       }
+
+      const consumed = await consumeVerificationMessage(snapshot.messageId, link.id, usedAt);
+      const consumedUrl = String(consumed?.tv_approval_url || "").trim();
+      if (!consumed?.message_id || !consumedUrl) {
+        setTvRequestState("failed");
+        return false;
+      }
+
+      nextUrl = consumedUrl;
     }
 
     tvSearchActiveRef.current = false;
@@ -3188,13 +3233,13 @@ function CustomerView({
         try {
           const current = await readTvApprovalSnapshot(customerLinkId);
           const isNewLink =
-            Boolean(current.url) &&
-            (current.url !== baseline.url ||
+            Boolean(current.url && current.messageId) &&
+            (current.messageId !== baseline.messageId ||
+              current.url !== baseline.url ||
               current.receivedAtMs > baseline.receivedAtMs);
 
           if (isNewLink) {
-            await showTvApprovalSnapshot(current, "تم استلام رابط موافقة جديد");
-            return;
+            if (await showTvApprovalSnapshot(current, "تم استلام رابط موافقة جديد")) return;
           }
         } catch (pollError) {
           console.error("TV approval polling tick error:", pollError);
@@ -3208,16 +3253,15 @@ function CustomerView({
         ? Date.now() - fallback.receivedAtMs
         : Number.POSITIVE_INFINITY;
       const isRecentFallback =
-        Boolean(fallback.url) &&
+        Boolean(fallback.url && fallback.messageId) &&
         fallbackAge >= 0 &&
         fallbackAge <= tvApprovalFallbackWindowMs;
 
       if (isRecentFallback) {
-        await showTvApprovalSnapshot(
+        if (await showTvApprovalSnapshot(
           fallback,
           "تم عرض أحدث رابط متاح خلال آخر 15 دقيقة",
-        );
-        return;
+        )) return;
       }
 
       setTvRequestState("failed");
@@ -3315,21 +3359,11 @@ function CustomerView({
 
     const usedAt = new Date().toISOString();
     const lockedRequestedCount = codeRequestLimit;
+    let nextCode = latestCode.code;
+    let nextReceivedAt = latestCode.receivedAt;
 
     if (supabase && link?.id) {
-      const { data, error } = await supabase
-        .from("customer_links")
-        .update({
-          code_requested_count: lockedRequestedCount,
-          code_used_at: usedAt,
-        })
-        .eq("id", link.id)
-        .eq("code_requested_count", codeRequestedCount)
-        .select("code_requested_count,code_request_limit,code_used_at")
-        .maybeSingle();
-
-      if (error) {
-        console.error("Supabase verification code usage lock error:", error);
+      if (!latestCode.messageId) {
         codeSearchActiveRef.current = false;
         clearCodeSearchTimers();
         setCodeDisplayExpiresAt(null);
@@ -3337,13 +3371,27 @@ function CustomerView({
         return false;
       }
 
-      if (!data || data.code_requested_count < data.code_request_limit) {
+      let consumed;
+      try {
+        consumed = await consumeVerificationMessage(latestCode.messageId, link.id, usedAt);
+      } catch {
         codeSearchActiveRef.current = false;
         clearCodeSearchTimers();
         setCodeDisplayExpiresAt(null);
-        setCodeRequestState("expired");
+        setCodeRequestState("failed");
         return false;
       }
+
+      if (!consumed?.message_id || !consumed.code) {
+        codeSearchActiveRef.current = false;
+        clearCodeSearchTimers();
+        setCodeDisplayExpiresAt(null);
+        setCodeRequestState("failed");
+        return false;
+      }
+
+      nextCode = consumed.code;
+      nextReceivedAt = consumed.received_at || latestCode.receivedAt;
     }
 
     setLink((current) =>
@@ -3352,10 +3400,12 @@ function CustomerView({
             ...current,
             code_requested_count: lockedRequestedCount,
             code_used_at: usedAt,
+            verification_code: nextCode,
+            verification_code_received_at: nextReceivedAt,
             accounts: {
               ...current.accounts,
-              verification_code: latestCode.code,
-              verification_code_received_at: latestCode.receivedAt,
+              verification_code: nextCode,
+              verification_code_received_at: nextReceivedAt,
             },
           }
         : current,
@@ -3373,7 +3423,7 @@ function CustomerView({
     if (!codeSearchActiveRef.current) return;
 
     try {
-      const latestCode = await readLatestVerificationCode(accountId);
+      const latestCode = await readLatestVerificationCode(accountId, link?.id, true);
       if (!codeSearchActiveRef.current || latestCode.error || !latestCode.code || !latestCode.receivedAt) return;
 
       const baseline = requestBaselineRef.current;
@@ -3381,7 +3431,8 @@ function CustomerView({
       const latestTime = new Date(latestCode.receivedAt).getTime();
       const isNewerCode =
         !Number.isNaN(latestTime) &&
-        (latestTime > baselineTime ||
+        (latestCode.messageId !== baseline.messageId ||
+          latestTime > baselineTime ||
           (!baseline.receivedAt && latestCode.code !== baseline.code));
 
       if (isNewerCode) {
@@ -3399,7 +3450,7 @@ function CustomerView({
     setCodeRequestSeconds(0);
 
     try {
-      const latestCode = await readLatestVerificationCode(accountId);
+      const latestCode = await readLatestVerificationCode(accountId, link?.id, true);
       const latestTime = latestCode.receivedAt ? new Date(latestCode.receivedAt).getTime() : 0;
       const codeAge = latestTime ? Date.now() - latestTime : Number.POSITIVE_INFINITY;
       const isWithinFallbackWindow =
@@ -3410,8 +3461,7 @@ function CustomerView({
         codeAge <= verificationCodeFallbackWindowMs;
 
       if (isWithinFallbackWindow) {
-        await showVerificationCode(latestCode, "تم عرض أحدث كود متاح خلال آخر 15 دقيقة");
-        return;
+        if (await showVerificationCode(latestCode, "تم عرض أحدث كود متاح خلال آخر 15 دقيقة")) return;
       }
     } catch (error) {
       console.error("Verification code fallback error:", error);
@@ -3431,7 +3481,7 @@ function CustomerView({
     setCodeRequestSeconds(15);
     setCodeDisplayExpiresAt(null);
     try {
-      const latestCode = await readLatestVerificationCode(accountId);
+      const latestCode = await readLatestVerificationCode(accountId, link?.id, true);
       const latestTime = latestCode.receivedAt
         ? new Date(latestCode.receivedAt).getTime()
         : 0;
@@ -3446,25 +3496,26 @@ function CustomerView({
         codeAge <= verificationCodeFallbackWindowMs;
 
       if (isRecentStoredCode) {
-        await showVerificationCode(
+        if (await showVerificationCode(
           latestCode,
           "تم عرض أحدث كود متاح خلال آخر 15 دقيقة",
-        );
-        return;
+        )) return;
       }
 
       requestBaselineRef.current = {
-        code: latestCode.code || account?.verification_code || null,
+        messageId: latestCode.messageId,
+        code: latestCode.code || storedVerificationCode,
         receivedAt:
           latestCode.receivedAt ||
-          account?.verification_code_received_at ||
+          storedVerificationCodeReceivedAt ||
           null,
       };
     } catch (error) {
       console.error("Initial verification code lookup error:", error);
       requestBaselineRef.current = {
-        code: account?.verification_code || null,
-        receivedAt: account?.verification_code_received_at || null,
+        messageId: null,
+        code: storedVerificationCode,
+        receivedAt: storedVerificationCodeReceivedAt,
       };
     }
 
@@ -3704,7 +3755,7 @@ function CustomerView({
                       ) : tvRequestState === "failed" ? (
                         <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-4 text-center">
                           <p className="text-xs font-black leading-6 text-rose-700">
-                            لم يتم العثور على رابط موافقة حديث، يمكنك إعادة المحاولة أو التواصل مع الدعم الفني
+                            لم يصل الرمز أو الرابط بعد؟ يرجى متابعة الشرح جيداً لكي تفهم هذه الخطوة وتتأكد من تطبيقها بالشكل الصحيح على نتفليكس، ثم اضغط على إعادة المحاولة.
                           </p>
                           <button
                             type="button"
@@ -3786,7 +3837,7 @@ function CustomerView({
                         </div>
                         <button
                           type="button"
-                          onClick={() => copyText(account.verification_code || "", setToast)}
+                          onClick={() => copyText(storedVerificationCode || "", setToast)}
                           className="flex h-10 items-center gap-2 rounded-xl border border-[#E0D4F8] bg-white px-4 text-sm font-black text-[#7C2CE8] transition hover:bg-[#F5EEFF]"
                         >
                           <Clipboard className="h-4 w-4" />
@@ -3795,11 +3846,11 @@ function CustomerView({
                       </div>
                       <div className="rounded-2xl border border-[#E0D4F8] bg-white px-4 py-4 text-center">
                         <p className="font-mono text-4xl font-black tracking-[0.3em] text-[#8B35F5]" dir="ltr">
-                          {account.verification_code}
+                          {storedVerificationCode}
                         </p>
-                        {account.verification_code_received_at && (
+                        {storedVerificationCodeReceivedAt && (
                           <p className="mt-2 text-xs font-bold text-zinc-500">
-                            {formatDateTime(account.verification_code_received_at)}
+                            {formatDateTime(storedVerificationCodeReceivedAt)}
                           </p>
                         )}
                         <p className="mt-2 text-xs font-black text-[#7C2CE8]">
@@ -3818,9 +3869,9 @@ function CustomerView({
                           <CircleX className="h-7 w-7" />
                         </div>
                         <div className="min-w-0 flex-1">
-                          <p className="text-lg font-black">لم يصل الرمز بعد</p>
+                          <p className="text-lg font-black">لم يصل الرمز أو الرابط بعد؟</p>
                           <p className="mt-1 text-xs font-bold leading-6 text-zinc-500">
-                            يرجى التأكد من طلب الرمز في نتفليكس ثم الضغط على إعادة المحاولة.
+                            يرجى متابعة الشرح جيداً لكي تفهم هذه الخطوة وتتأكد من تطبيقها بالشكل الصحيح على نتفليكس، ثم اضغط على إعادة المحاولة.
                           </p>
                         </div>
                       </div>

@@ -138,12 +138,45 @@ export default async function handler(req, res) {
   const accountIds = [...new Set(matchingLinks.map((link) => link.account_id).filter(Boolean))];
   const linkIds = matchingLinks.map((link) => link.id);
 
+  const receivedAt = createdAt.toISOString();
+  const messageRows = [];
+
+  if (code) {
+    messageRows.push({
+      email,
+      message_type: "code",
+      code,
+      received_at: receivedAt,
+      is_used: false,
+    });
+  }
+
+  if (tvApprovalUrl) {
+    messageRows.push({
+      email,
+      message_type: "tv_approval_url",
+      tv_approval_url: tvApprovalUrl,
+      received_at: receivedAt,
+      is_used: false,
+    });
+  }
+
+  const { data: savedMessages, error: messageSaveError } = await supabase
+    .from("verification_messages")
+    .insert(messageRows)
+    .select("id,message_type");
+
+  if (messageSaveError) {
+    console.error("Verification message save failed:", messageSaveError);
+    return send(res, 500, { success: false, error: "verification_message_save_failed" });
+  }
+
   if (code) {
     const { error: updateError } = await supabase
       .from("accounts")
       .update({
         verification_code: code,
-        verification_code_received_at: createdAt.toISOString(),
+        verification_code_received_at: receivedAt,
       })
       .in("id", accountIds);
 
@@ -173,6 +206,10 @@ export default async function handler(req, res) {
     success: true,
     code_saved: Boolean(code),
     tv_approval_url_saved: Boolean(tvApprovalUrl),
+    message_ids: (savedMessages || []).map((message) => ({
+      id: message.id,
+      type: message.message_type,
+    })),
     matched_links: matchingLinks.length,
   });
 }
