@@ -2952,12 +2952,24 @@ function CustomerView({
     link?.verification_code_received_at || account?.verification_code_received_at || null;
   const service = serviceOf(account);
   const theme = serviceThemes[service];
-  const supportWhatsAppUrl = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(
-    `مرحباً اريد الحصول على الكود المخصص للحساب: ${account?.email || ""}`,
-  )}`;
-  const attemptsExhaustedWhatsAppUrl = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(
-    `مرحباً، نفدت محاولة طلب الكود لهذا الحساب: ${account?.email || ""}. أحتاج مساعدة من الدعم الفني.`,
-  )}`;
+  const customerCode = String(link?.link_number ?? link?.short_id ?? identifier);
+  const buildWhatsAppUrl = (message: string) =>
+    `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(message)}`;
+  const supportWhatsAppUrl = buildWhatsAppUrl(
+    `مرحباً، أحتاج إلى الدعم الفني بخصوص العميل رقم: ${customerCode}`,
+  );
+  const unavailableResultWhatsAppUrl = buildWhatsAppUrl(
+    `مرحباً، أحتاج مساعدة بخصوص جلب الرمز/الرابط للعميل رقم: ${customerCode}`,
+  );
+  const attemptsExhaustedWhatsAppUrl = buildWhatsAppUrl(
+    `مرحباً، انتهت صلاحية المحاولة وأحتاج تجديدها للعميل رقم: ${customerCode}`,
+  );
+  const tvSupportWhatsAppUrl =
+    tvRequestState === "failed"
+      ? unavailableResultWhatsAppUrl
+      : tvRequestState === "expired"
+        ? attemptsExhaustedWhatsAppUrl
+        : supportWhatsAppUrl;
   const deviceLabel = (device: DeviceView) => (device === "mobile" ? "جوال / آيباد / بي سي / لابتوب" : "شاشة / سوني");
   const deviceChoiceLocked = Boolean(deviceView);
   const codeSecondsRemaining = codeDisplayExpiresAt
@@ -3631,7 +3643,7 @@ function CustomerView({
                         </div>
                       </div>
                       <a
-                        href={supportWhatsAppUrl}
+                        href={unavailableResultWhatsAppUrl}
                         target="_blank"
                         rel="noreferrer"
                         className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#8B35F5] text-sm font-black text-white shadow-[0_14px_32px_rgba(139,53,245,0.24)] transition hover:bg-[#7626DD]"
@@ -3801,7 +3813,7 @@ function CustomerView({
                         </div>
                       </div>
                       <a
-                        href={supportWhatsAppUrl}
+                        href={tvSupportWhatsAppUrl}
                         target="_blank"
                         rel="noreferrer"
                         className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#8B35F5] text-sm font-black text-white shadow-[0_14px_32px_rgba(139,53,245,0.24)] transition hover:bg-[#7626DD]"
@@ -3884,7 +3896,7 @@ function CustomerView({
                         إعادة المحاولة والبحث مجدداً
                       </button>
                       <a
-                        href={supportWhatsAppUrl}
+                        href={unavailableResultWhatsAppUrl}
                         target="_blank"
                         rel="noreferrer"
                         className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#8B35F5] text-sm font-black text-white shadow-[0_14px_32px_rgba(139,53,245,0.24)] transition hover:bg-[#7626DD]"
