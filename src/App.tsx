@@ -44,6 +44,7 @@ type DeviceView = "mobile" | "screen";
 type Toast = { label: string; at: number; tone?: "success" | "error" } | null;
 type StatTone = "neutral" | "green" | "red";
 type AccountTypeFilter = "all" | AccountType;
+type SupportIssue = "general" | "unavailable" | "expired";
 type CustomerSearchResult = { link: CustomerLink; account: NetflixAccount };
 type AccountFormResult = boolean | { ok: boolean; error?: string };
 type ServiceTheme = {
@@ -133,6 +134,32 @@ function isExpired(expiresAt: string) {
 
 function normalizeEmail(email: string) {
   return email.trim().toLowerCase();
+}
+
+function buildSupportWhatsAppUrl({
+  issue,
+  email,
+  customerCode,
+  deviceType,
+}: {
+  issue: SupportIssue;
+  email: string;
+  customerCode: string;
+  deviceType: DeviceView;
+}) {
+  const deviceName = deviceType === "screen" ? "شاشة / سوني" : "جوال / آيباد / بي سي";
+  const requestedItem = deviceType === "screen" ? "الرابط" : "الرمز";
+  let message: string;
+
+  if (issue === "expired") {
+    message = `مرحباً، نفذت محاولات طلب ${requestedItem} لـ ${deviceName} للحساب: ${email} - رقم العميل: ${customerCode}. أحتاج مساعدة من الدعم الفني.`;
+  } else if (issue === "unavailable") {
+    message = `مرحباً، لم أتمكن من الحصول على ${requestedItem} لـ ${deviceName} للحساب: ${email} - رقم العميل: ${customerCode}. أرجو المساعدة.`;
+  } else {
+    message = `مرحباً، أحتاج إلى الدعم الفني بخصوص ${requestedItem} لـ ${deviceName} للحساب: ${email} - رقم العميل: ${customerCode}.`;
+  }
+
+  return `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(message)}`;
 }
 
 function isDuplicateEmailError(error: unknown) {
@@ -2953,17 +2980,30 @@ function CustomerView({
   const service = serviceOf(account);
   const theme = serviceThemes[service];
   const customerCode = String(link?.link_number ?? link?.short_id ?? identifier);
-  const buildWhatsAppUrl = (message: string) =>
-    `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(message)}`;
-  const supportWhatsAppUrl = buildWhatsAppUrl(
-    `مرحباً، أحتاج إلى الدعم الفني بخصوص العميل رقم: ${customerCode}`,
-  );
-  const unavailableResultWhatsAppUrl = buildWhatsAppUrl(
-    `مرحباً، أحتاج مساعدة بخصوص جلب الرمز/الرابط للعميل رقم: ${customerCode}`,
-  );
-  const attemptsExhaustedWhatsAppUrl = buildWhatsAppUrl(
-    `مرحباً، انتهت صلاحية المحاولة وأحتاج تجديدها للعميل رقم: ${customerCode}`,
-  );
+  const supportEmail = account?.email || "غير متوفر";
+  const unavailableResultWhatsAppUrl = buildSupportWhatsAppUrl({
+    issue: "unavailable",
+    email: supportEmail,
+    customerCode,
+    deviceType: "mobile",
+  });
+  const attemptsExhaustedWhatsAppUrl = buildSupportWhatsAppUrl({
+    issue: "expired",
+    email: supportEmail,
+    customerCode,
+    deviceType: "mobile",
+  });
+  const screenSupportWhatsAppUrl = buildSupportWhatsAppUrl({
+    issue:
+      tvRequestState === "failed"
+        ? "unavailable"
+        : tvRequestState === "expired"
+          ? "expired"
+          : "general",
+    email: supportEmail,
+    customerCode,
+    deviceType: "screen",
+  });
   const deviceLabel = (device: DeviceView) => (device === "mobile" ? "جوال / آيباد / بي سي / لابتوب" : "شاشة / سوني");
   const deviceChoiceLocked = Boolean(deviceView);
   const codeSecondsRemaining = codeDisplayExpiresAt
@@ -4080,7 +4120,7 @@ function CustomerView({
 
           {automatedCodeEnabled && deviceView === "screen" && (
             <a
-              href={supportWhatsAppUrl}
+              href={screenSupportWhatsAppUrl}
               target="_blank"
               rel="noreferrer"
               className={cn("fixed bottom-5 left-5 z-40 flex h-[60px] w-[60px] animate-whatsapp-pulse items-center justify-center rounded-full bg-gradient-to-br text-white backdrop-blur transition duration-300 hover:-translate-y-1 hover:shadow-premium-lg", theme.gradient, theme.glow)}
