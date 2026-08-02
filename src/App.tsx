@@ -152,7 +152,7 @@ function buildSupportWhatsAppUrl({
   let message: string;
 
   if (issue === "expired") {
-    message = `مرحباً، نفذت محاولات طلب ${requestedItem} لـ ${deviceName} للحساب: ${email} - رقم العميل: ${customerCode}. أحتاج مساعدة من الدعم الفني.`;
+    message = `مرحباً، نفدت محاولات طلب ${requestedItem} لـ ${deviceName} للحساب: ${email} - رقم العميل: ${customerCode}. أحتاج مساعدة من الدعم الفني.`;
   } else if (issue === "unavailable") {
     message = `مرحباً، لم أتمكن من الحصول على ${requestedItem} لـ ${deviceName} للحساب: ${email} - رقم العميل: ${customerCode}. أرجو المساعدة.`;
   } else {
@@ -932,6 +932,8 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     const updates = {
       code_request_limit: normalizedLimit,
       code_requested_count: 0,
+      has_used_tv_link: normalizedLimit === 0,
+      tv_link_used_at: null,
     };
 
     if (supabase) {
@@ -950,6 +952,8 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
               ...link,
               code_request_limit: normalizedLimit,
               code_requested_count: 0,
+              has_used_tv_link: normalizedLimit === 0,
+              tv_link_used_at: null,
             }
           : link,
       ),
@@ -3021,6 +3025,7 @@ function CustomerView({
   const hasCodeRequestCredit = codeRequestedCount < codeRequestLimit;
   const attemptUsed = !hasCodeRequestCredit;
   const hasUsedTvLink = link?.has_used_tv_link === true;
+  const tvAttemptUsed = attemptUsed || hasUsedTvLink;
   const tvSearchSecondsRemaining = tvSearchDeadlineAt
     ? Math.max(0, Math.ceil((tvSearchDeadlineAt - nowTick) / 1000))
     : 0;
@@ -3050,7 +3055,7 @@ function CustomerView({
     setAgreeTvRequest(false);
     setTvSearchDeadlineAt(null);
 
-    if (deviceView !== "screen" || !link?.has_used_tv_link) {
+    if (deviceView !== "screen" || !tvAttemptUsed) {
       setTvRequestState("idle");
       setTvDisplayExpiresAt(null);
       setVisibleTvApprovalUrl(null);
@@ -3077,6 +3082,7 @@ function CustomerView({
     setTvRequestState("expired");
   }, [
     deviceView,
+    tvAttemptUsed,
     link?.has_used_tv_link,
     link?.id,
     link?.tv_approval_url,
@@ -3225,6 +3231,7 @@ function CustomerView({
             tv_approval_url: nextUrl,
             has_used_tv_link: true,
             tv_link_used_at: usedAt,
+            code_requested_count: codeRequestLimit,
             updated_at: snapshot.receivedAt || current.updated_at,
           }
         : current,
@@ -3240,7 +3247,7 @@ function CustomerView({
   function openTvRequestModal() {
     if (
       deviceView !== "screen" ||
-      hasUsedTvLink ||
+      tvAttemptUsed ||
       tvRequestState === "searching" ||
       tvRequestState === "ready" ||
       tvRequestState === "expired"
@@ -3252,8 +3259,8 @@ function CustomerView({
 
   async function startTvApprovalSearch() {
     const customerLinkId = link?.id;
-    if (!customerLinkId || deviceView !== "screen" || hasUsedTvLink) {
-      if (hasUsedTvLink) setTvRequestState("expired");
+    if (!customerLinkId || deviceView !== "screen" || tvAttemptUsed) {
+      if (tvAttemptUsed) setTvRequestState("expired");
       return;
     }
 
@@ -3323,13 +3330,13 @@ function CustomerView({
   }
 
   function requestDeviceChoice(device: DeviceView) {
-    if (!automatedCodeEnabled || deviceChoiceLocked || (device === "mobile" && attemptUsed)) return;
+    if (!automatedCodeEnabled || deviceChoiceLocked || attemptUsed) return;
     setPendingDeviceView(device);
     setAgreeDeviceChoice(false);
   }
 
   async function confirmDeviceChoice() {
-    if (!pendingDeviceView || !link?.id || (pendingDeviceView === "mobile" && attemptUsed)) return;
+    if (!pendingDeviceView || !link?.id || attemptUsed) return;
     const selectedDevice = pendingDeviceView;
 
     if (supabase) {
@@ -3708,7 +3715,7 @@ function CustomerView({
                       <button
                         type="button"
                         onClick={() => requestDeviceChoice("screen")}
-                        disabled={deviceChoiceLocked}
+                        disabled={deviceChoiceLocked || attemptUsed}
                         className={cn(
                           "flex min-h-12 items-center justify-center gap-2 rounded-2xl px-3 text-sm font-black transition disabled:cursor-not-allowed",
                           deviceView === "screen"
@@ -3722,7 +3729,7 @@ function CustomerView({
                     </div>
                     {attemptUsed && !deviceChoiceLocked ? (
                       <p className="mt-3 rounded-2xl bg-white/80 px-4 py-3 text-xs font-black text-rose-600">
-                        تم استهلاك رصيد الأكواد للجوال، ويمكنك اختيار شاشة / سوني دون خصم رصيد.
+                        تم استهلاك رصيد المحاولة ولا يمكن طلب رمز أو رابط جديد قبل تجديده من المشرف.
                       </p>
                     ) : deviceChoiceLocked ? (
                       <p className="mt-3 rounded-2xl bg-white/80 px-4 py-3 text-xs font-black text-[#7C2CE8]">
@@ -3814,21 +3821,23 @@ function CustomerView({
                       ) : tvRequestState === "expired" ? (
                         <div className="mb-4 rounded-2xl border border-zinc-200 bg-zinc-100 px-4 py-4 text-center">
                           <p className="text-xs font-black leading-6 text-rose-700">
-                            انتهت صلاحية الرابط، ووصلت للحد الأقصى المتاح لاستخدام الرابط
+                            نفدت المحاولات المتاحة لهذا الحساب
                           </p>
-                          <button
-                            type="button"
-                            disabled
-                            className="mt-3 min-h-12 w-full cursor-not-allowed rounded-xl bg-zinc-300 px-4 text-sm font-black text-zinc-500"
+                          <a
+                            href={screenSupportWhatsAppUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#8B35F5] px-4 text-sm font-black text-white shadow-[0_12px_28px_rgba(139,53,245,0.22)] transition hover:bg-[#7626DD]"
                           >
-                            تم استهلاك رابط الشاشة
-                          </button>
+                            <WhatsAppLogo className="h-5 w-5" />
+                            تواصل مع الدعم الفني عبر الواتساب
+                          </a>
                         </div>
                       ) : (
                         <button
                           type="button"
                           onClick={openTvRequestModal}
-                          disabled={hasUsedTvLink}
+                          disabled={tvAttemptUsed}
                           className="mb-4 flex min-h-14 w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-l from-[#E50914] to-red-700 px-4 text-center text-sm font-black text-white shadow-[0_14px_34px_rgba(229,9,20,0.24)] transition hover:-translate-y-0.5 hover:shadow-[0_18px_38px_rgba(229,9,20,0.3)] disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           <MonitorPlay className="h-5 w-5" />

@@ -128,13 +128,14 @@ begin
         verification_code_received_at = selected_message.received_at
     where target.id = p_customer_link_id;
   elsif selected_message.message_type = 'tv_approval_url' then
-    if used_tv_link then
+    if used_tv_link or requested_count >= request_limit then
       return;
     end if;
 
     update public.customer_links as target
     set has_used_tv_link = true,
         tv_link_used_at = p_used_at,
+        code_requested_count = request_limit,
         tv_approval_url = selected_message.tv_approval_url,
         updated_at = selected_message.received_at
     where target.id = p_customer_link_id;
