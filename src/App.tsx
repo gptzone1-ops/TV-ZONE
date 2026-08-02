@@ -2964,12 +2964,6 @@ function CustomerView({
   const attemptsExhaustedWhatsAppUrl = buildWhatsAppUrl(
     `مرحباً، انتهت صلاحية المحاولة وأحتاج تجديدها للعميل رقم: ${customerCode}`,
   );
-  const tvSupportWhatsAppUrl =
-    tvRequestState === "failed"
-      ? unavailableResultWhatsAppUrl
-      : tvRequestState === "expired"
-        ? attemptsExhaustedWhatsAppUrl
-        : supportWhatsAppUrl;
   const deviceLabel = (device: DeviceView) => (device === "mobile" ? "جوال / آيباد / بي سي / لابتوب" : "شاشة / سوني");
   const deviceChoiceLocked = Boolean(deviceView);
   const codeSecondsRemaining = codeDisplayExpiresAt
@@ -3801,26 +3795,6 @@ function CustomerView({
                           جلب رابط الدخول للشاشة / سوني
                         </button>
                       )}
-                      <div className="flex items-center gap-4">
-                        <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-[#F0E7FF] text-[#8B35F5]">
-                          <WhatsAppLogo className="h-7 w-7" />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <p className="text-lg font-black">شاشة / سوني</p>
-                          <p className="mt-1 text-xs font-bold leading-6 text-zinc-500">
-                            لهذا النوع من الأجهزة، تواصل مع الدعم للحصول على الكود ومساعدتك في الدخول.
-                          </p>
-                        </div>
-                      </div>
-                      <a
-                        href={tvSupportWhatsAppUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#8B35F5] text-sm font-black text-white shadow-[0_14px_32px_rgba(139,53,245,0.24)] transition hover:bg-[#7626DD]"
-                      >
-                        <WhatsAppLogo className="h-5 w-5" />
-                        تواصل مع الدعم للحصول على الكود
-                      </a>
                     </div>
                   ) : codeRequestState === "loading" ? (
                     <div className="rounded-[1.75rem] border border-[#E0D4F8] bg-[#FCFAFF] p-4 shadow-card">
@@ -3980,32 +3954,69 @@ function CustomerView({
                   <h2 className="text-3xl font-black md:text-4xl">خطوات الدخول إلى {theme.name}</h2>
                 </div>
                 <div className="space-y-3">
-                  <StepCard
-                    step="Step 1"
-                    icon={Smartphone}
-                    title={`افتح ${theme.name}`}
-                    text={`افتح تطبيق ${theme.name} أو الموقع الرسمي من جهازك.`}
-                    theme={theme}
-                  />
-                  <StepCard
-                    step="Step 2"
-                    icon={Link2}
-                    title="افتح رابط الحساب"
-                    text="استخدم زر الدخول عبر الرابط لفتح الحساب في تبويب جديد."
-                    theme={theme}
-                  />
-                  <StepCard
-                    step="Step 3"
-                    icon={MessageCircle}
-                    title="تواصل عبر الواتساب"
-                    text="إذا احتجت كود التحقق أو واجهت مشكلة، راسلنا مباشرة من الزر المخصص."
-                    theme={theme}
-                  />
+                  {service === "netflix" ? (
+                    <>
+                      <StepCard
+                        step="Step 1"
+                        icon={MonitorPlay}
+                        title="تابع الشرح المرئي"
+                        text="شاهد فيديو الشرح أولاً لفهم طريقة الدخول الصحيحة قبل البدء."
+                        theme={theme}
+                      />
+                      <StepCard
+                        step="Step 2"
+                        icon={Smartphone}
+                        title="ابدأ تسجيل الدخول"
+                        text="افتح تطبيق نتفليكس على جهازك وابدأ بطلب تسجيل الدخول أولاً."
+                        theme={theme}
+                      />
+                      <StepCard
+                        step="Step 3"
+                        icon={KeyRound}
+                        title="اطلب الرمز أو الرابط"
+                        text="اضغط على زر طلب الرمز، أو اطلب رابط الموافقة إذا كان جهازك شاشة أو سوني."
+                        theme={theme}
+                      />
+                      <StepCard
+                        step="Step 4"
+                        icon={Clipboard}
+                        title="أكمل تسجيل الدخول"
+                        text="انسخ الرمز أو افتح رابط الموافقة فوراً لإتمام تسجيل الدخول في نتفليكس."
+                        theme={theme}
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <StepCard
+                        step="Step 1"
+                        icon={Smartphone}
+                        title={`افتح ${theme.name}`}
+                        text={`افتح تطبيق ${theme.name} أو الموقع الرسمي من جهازك.`}
+                        theme={theme}
+                      />
+                      <StepCard
+                        step="Step 2"
+                        icon={Link2}
+                        title="افتح رابط الحساب"
+                        text="استخدم زر الدخول عبر الرابط لفتح الحساب في تبويب جديد."
+                        theme={theme}
+                      />
+                      <StepCard
+                        step="Step 3"
+                        icon={MessageCircle}
+                        title="تواصل عبر الواتساب"
+                        text="إذا احتجت كود التحقق أو واجهت مشكلة، راسلنا مباشرة من الزر المخصص."
+                        theme={theme}
+                      />
+                    </>
+                  )}
                 </div>
 
-                <p className="mt-6 text-center text-sm font-bold leading-7 text-zinc-600">
-                  ملاحظة: يمكن فتح الرابط مباشرة، وللدعم السريع استخدم زر الواتساب بالأسفل.
-                </p>
+                {service === "shahid" && (
+                  <p className="mt-6 text-center text-sm font-bold leading-7 text-zinc-600">
+                    ملاحظة: يمكن فتح الرابط مباشرة، وللدعم السريع استخدم زر الواتساب بالأسفل.
+                  </p>
+                )}
               </section>
 
             </div>
