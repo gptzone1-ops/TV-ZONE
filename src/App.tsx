@@ -35,7 +35,14 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { LEGACY_PROFILE_CODES, PROFILE_CODES, accountTypeLabel, buildProfileSlots, generateShortId } from "./lib/profiles";
+import {
+  LEGACY_PROFILE_CODES,
+  PREVIOUS_PROFILE_CODES,
+  PROFILE_CODES,
+  accountTypeLabel,
+  buildProfileSlots,
+  generateShortId,
+} from "./lib/profiles";
 import { hasSupabaseConfig, supabase } from "./lib/supabase";
 import type { AccountType, CustomerLink, NetflixAccount, ServiceType } from "./types";
 
@@ -226,7 +233,7 @@ function getCustomerUrl(link: CustomerLink) {
 
 function getProfilePin(link: CustomerLink) {
   const storedPin = `${link.profile_code ?? ""}`.trim();
-  if (NEW_PROFILE_PINS.has(storedPin)) return storedPin;
+  if (STORED_PROFILE_PINS.has(storedPin)) return storedPin;
 
   const profileKey = `${link.profile_label || link.profile_name || ""}`.toUpperCase().match(/[A-E]/)?.[0];
   return profileKey ? LEGACY_PROFILE_CODES[profileKey] : "";
@@ -263,7 +270,10 @@ type VerificationMessageRow = {
   is_used?: boolean | null;
 };
 
-const NEW_PROFILE_PINS = new Set(Object.values(PROFILE_CODES));
+const STORED_PROFILE_PINS = new Set([
+  ...Object.values(PREVIOUS_PROFILE_CODES),
+  ...Object.values(PROFILE_CODES),
+]);
 
 async function readLatestVerificationCode(
   accountId: string,
