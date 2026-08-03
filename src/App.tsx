@@ -189,19 +189,12 @@ function buildSupportWhatsAppUrl({
   deviceType: DeviceView;
 }) {
   const deviceName = deviceType === "screen" ? "شاشة / سوني" : "جوال / آيباد / بي سي / لابتوب";
-  const problem =
-    issue === "expired"
-      ? "استنفاد المحاولات"
-      : issue === "unavailable"
-        ? deviceType === "screen"
-          ? "تعذر العثور على الرابط"
-          : "تعذر العثور على الكود"
-        : "مشكلة أو استفسار عام";
-  const message = `مرحباً، أعيش مشكلة/استفسار في الحساب:
+  void issue;
+  const message = `مرحباً، أواجه مشكلة/استفسار في الحساب:
 - البريد الإلكتروني: ${email}
 - رقم العميل (ID/Code): ${customerCode}
 - نوع الجهاز: ${deviceName}
-- نوع المشكلة: ${problem}`;
+- نوع المشكلة: استنفاذ المحاولات`;
 
   return `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(message)}`;
 }
