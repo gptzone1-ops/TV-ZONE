@@ -86,6 +86,14 @@ export default async function handler(req, res) {
           chat_id: telegramChatId,
           text: messageText,
           parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: "✅ قبول الطلب", callback_data: `approve:${requestId}` },
+                { text: "❌ رفض الطلب", callback_data: `reject:${requestId}` },
+              ],
+            ],
+          },
         }),
       },
     );
