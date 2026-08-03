@@ -7,7 +7,7 @@ create table if not exists public.extra_credit_requests (
     reason_type in ('كود خاطئ', 'استبدال الجهاز أو الدخول بجهاز آخر', 'عدم تطبيق الخطوات وذهاب الكود', 'أخرى')
   ),
   description text not null check (char_length(btrim(description)) >= 10),
-  image_url text not null check (btrim(image_url) <> ''),
+  image_url text,
   attachment_type text not null default 'image' check (attachment_type in ('image', 'video')),
   status text not null default 'pending' check (status in ('pending', 'approved', 'rejected')),
   created_at timestamptz not null default now(),
@@ -16,6 +16,17 @@ create table if not exists public.extra_credit_requests (
 
 alter table public.extra_credit_requests
   add column if not exists attachment_type text not null default 'image';
+
+alter table public.extra_credit_requests
+  alter column image_url drop not null;
+
+alter table public.extra_credit_requests
+  drop constraint if exists extra_credit_requests_image_url_check;
+
+alter table public.extra_credit_requests
+  add constraint extra_credit_requests_image_url_check check (
+    status <> 'pending' or (image_url is not null and btrim(image_url) <> '')
+  );
 
 alter table public.extra_credit_requests
   drop constraint if exists extra_credit_requests_reason_type_check;
@@ -68,10 +79,10 @@ grant select, insert on public.extra_credit_requests to anon, authenticated;
 
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 values (
-  'screenshots',
-  'screenshots',
+  'extra_credit_requests',
+  'extra_credit_requests',
   true,
-  52428800,
+  null,
   array[
     'image/jpeg',
     'image/png',
@@ -94,18 +105,18 @@ on conflict (id) do update set
   file_size_limit = excluded.file_size_limit,
   allowed_mime_types = excluded.allowed_mime_types;
 
-drop policy if exists "Allow credit screenshot uploads" on storage.objects;
-drop policy if exists "Allow credit screenshot reads" on storage.objects;
+drop policy if exists "Allow extra credit attachment uploads" on storage.objects;
+drop policy if exists "Allow extra credit attachment reads" on storage.objects;
 
-create policy "Allow credit screenshot uploads"
+create policy "Allow extra credit attachment uploads"
   on storage.objects for insert
   to anon, authenticated
-  with check (bucket_id = 'screenshots');
+  with check (bucket_id = 'extra_credit_requests');
 
-create policy "Allow credit screenshot reads"
+create policy "Allow extra credit attachment reads"
   on storage.objects for select
   to anon, authenticated
-  using (bucket_id = 'screenshots');
+  using (bucket_id = 'extra_credit_requests');
 
 create or replace function public.review_extra_credit_request(
   p_request_id uuid,
@@ -149,7 +160,8 @@ begin
 
   update public.extra_credit_requests as requests
   set status = p_status,
-      reviewed_at = now()
+      reviewed_at = now(),
+      image_url = null
   where requests.id = selected_request.id;
 
   return true;

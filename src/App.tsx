@@ -82,12 +82,14 @@ const adminEmail = import.meta.env.VITE_ADMIN_EMAIL || "admin@zonestore.sa";
 const adminAuthKey = "zone-admin-auth";
 const adminAuthValue = `remembered:${adminPassword}`;
 const whatsappNumber = "966581688656";
+const extraCreditStorageBucket = "extra_credit_requests";
 const disclaimerStorageKey = "disclaimer_accepted";
 const dayMs = 1000 * 60 * 60 * 24;
 const verificationCodeLifetimeMs = 120 * 1000;
 const verificationCodeFallbackWindowMs = 15 * 60 * 1000;
 const tvApprovalFallbackWindowMs = 15 * 60 * 1000;
 const tvApprovalSearchDurationMs = 15 * 1000;
+const adminAccountsPageSize = 10;
 const extraCreditReasons: ExtraCreditReason[] = [
   "كود خاطئ",
   "استبدال الجهاز أو الدخول بجهاز آخر",
@@ -448,6 +450,8 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalAccounts, setTotalAccounts] = useState(0);
   const [toast, setToast] = useState<Toast>(null);
 
   useEffect(() => {
@@ -459,7 +463,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
   useEffect(() => {
     if (!authenticated) return;
     void loadData();
-  }, [authenticated]);
+  }, [authenticated, currentPage, selectedService]);
 
   useEffect(() => {
     localStorage.setItem("zone-admin-screen", screen);
@@ -491,24 +495,37 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     return () => {
       void client.removeChannel(channel);
     };
-  }, [authenticated]);
+  }, [authenticated, currentPage, selectedService]);
 
   async function loadData() {
     if (!supabase) {
       setAccounts([demoAccount]);
       setLinks(demoLinks);
       setExtraCreditRequests([]);
+      setTotalAccounts(1);
       return;
     }
 
     setLoading(true);
+    const from = (currentPage - 1) * adminAccountsPageSize;
+    const to = currentPage * adminAccountsPageSize - 1;
+    let accountsQuery = supabase
+      .from("accounts")
+      .select("*", { count: "exact" });
+
+    accountsQuery = selectedService === "shahid"
+      ? accountsQuery.eq("service_type", "shahid")
+      : accountsQuery.or("service_type.eq.netflix,service_type.is.null");
+
     const [
-      { data: accountsData, error: accountsError },
+      { data: accountsData, error: accountsError, count: accountsCount },
       { data: linksData, error: linksError },
       { data: creditRequestsData, error: creditRequestsError },
     ] =
       await Promise.all([
-        supabase.from("accounts").select("*").order("created_at", { ascending: false }),
+        accountsQuery
+          .order("created_at", { ascending: false })
+          .range(from, to),
         supabase.from("customer_links").select("*").order("profile_name", { ascending: true }),
         supabase
           .from("extra_credit_requests")
@@ -521,6 +538,10 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     } else {
       setAccounts((accountsData || []) as NetflixAccount[]);
       setLinks((linksData || []) as CustomerLink[]);
+      setTotalAccounts(accountsCount || 0);
+      if ((accountsCount || 0) > 0 && !(accountsData || []).length && currentPage > 1) {
+        setCurrentPage((page) => Math.max(1, page - 1));
+      }
     }
     if (creditRequestsError) {
       console.error("Supabase extra credit requests load error:", creditRequestsError);
@@ -1033,7 +1054,9 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       const request = extraCreditRequests.find((item) => item.id === requestId);
       setExtraCreditRequests((current) =>
         current.map((item) =>
-          item.id === requestId ? { ...item, status, reviewed_at: new Date().toISOString() } : item,
+          item.id === requestId
+            ? { ...item, status, reviewed_at: new Date().toISOString(), image_url: null }
+            : item,
         ),
       );
       if (status === "approved" && request) {
@@ -1178,6 +1201,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
   const activeAccounts = serviceAccounts.filter((account) => !isExpired(account.expires_at)).length;
   const expiredAccounts = serviceAccounts.filter((account) => isExpired(account.expires_at)).length;
   const privateAccounts = serviceAccounts.filter((account) => account.account_type === "private").length;
+  const totalPages = Math.max(1, Math.ceil(totalAccounts / adminAccountsPageSize));
 
   if (!authenticated) {
     return (
@@ -1203,10 +1227,12 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       <ServiceSelector
         onLogout={logout}
         onNetflix={() => {
+          setCurrentPage(1);
           setSelectedService("netflix");
           setScreen("netflix");
         }}
         onShahid={() => {
+          setCurrentPage(1);
           setSelectedService("shahid");
           setScreen("netflix");
         }}
@@ -1254,6 +1280,9 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       <Dashboard
         accounts={filteredAccounts}
         loading={loading}
+        currentPage={currentPage}
+        totalPages={totalPages}
+        totalAccounts={totalAccounts}
         query={query}
         customerSearchResult={customerSearchResult}
         stats={[
@@ -1268,7 +1297,12 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
           setScreen("selector");
           localStorage.setItem("zone-admin-screen", "selector");
         }}
-        onQuery={setQuery}
+        onQuery={(value) => {
+          setQuery(value);
+          setCurrentPage(1);
+        }}
+        onPreviousPage={() => setCurrentPage((page) => Math.max(1, page - 1))}
+        onNextPage={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
         onAdd={addAccount}
         onUpdate={updateAccount}
         onSelect={(id) => {
@@ -1425,7 +1459,12 @@ function Dashboard({
   query,
   customerSearchResult,
   loading,
+  currentPage,
+  totalPages,
+  totalAccounts,
   onQuery,
+  onPreviousPage,
+  onNextPage,
   onAdd,
   onUpdate,
   onSelect,
@@ -1443,7 +1482,12 @@ function Dashboard({
   query: string;
   customerSearchResult: CustomerSearchResult | null;
   loading: boolean;
+  currentPage: number;
+  totalPages: number;
+  totalAccounts: number;
   onQuery: (query: string) => void;
+  onPreviousPage: () => void;
+  onNextPage: () => void;
   onAdd: Parameters<typeof AccountForm>[0]["onAdd"];
   onUpdate: Parameters<typeof AccountForm>[0]["onUpdate"];
   onSelect: (id: string) => void;
@@ -1657,7 +1701,7 @@ function Dashboard({
             <div>
               <p className="text-xs font-black uppercase text-[#8B35F5]">ZONE STORE</p>
               <h2 className="mt-1 text-xl font-black">قائمة الحسابات</h2>
-              <p className="mt-1 text-xs font-semibold text-zinc-500">عرض {visibleAccounts.length} من {accounts.length} عميل</p>
+              <p className="mt-1 text-xs font-semibold text-zinc-500">عرض {visibleAccounts.length} من {totalAccounts} حساب</p>
             </div>
             <div className="flex items-center gap-2">
               <span className="rounded-lg bg-[#F3ECFF] px-3 py-2 text-xs font-black text-[#6F22D6]">
@@ -1722,6 +1766,37 @@ function Dashboard({
               </div>
               <p className="text-sm font-black text-zinc-700">لا توجد حسابات مطابقة</p>
               <p className="text-xs font-semibold text-zinc-400">جرّب تغيير عبارة البحث أو الفلتر أو أضف حساباً جديداً.</p>
+            </div>
+          )}
+
+          {totalAccounts > 0 && (
+            <div className="flex flex-col items-center justify-between gap-3 border-t border-[#EEE7F8] bg-[#FCFAFF] px-4 py-4 sm:flex-row sm:px-5">
+              <p className="text-xs font-bold text-zinc-500">
+                عرض {Math.min((currentPage - 1) * adminAccountsPageSize + 1, totalAccounts)} إلى{" "}
+                {Math.min(currentPage * adminAccountsPageSize, totalAccounts)} من {totalAccounts}
+              </p>
+
+              <div className="flex items-center gap-2" dir="rtl">
+                <button
+                  type="button"
+                  onClick={onPreviousPage}
+                  disabled={currentPage <= 1 || loading}
+                  className="h-10 min-w-20 rounded-xl border border-[#DCCBFA] bg-white px-4 text-sm font-black text-[#7427D9] transition hover:border-[#B98AF5] hover:bg-[#F7F2FF] disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  السابق
+                </button>
+                <span className="min-w-28 rounded-xl bg-[#F1E8FF] px-4 py-2.5 text-center text-sm font-black text-[#6F22D6]">
+                  صفحة {currentPage} من {totalPages}
+                </span>
+                <button
+                  type="button"
+                  onClick={onNextPage}
+                  disabled={currentPage >= totalPages || loading}
+                  className="h-10 min-w-20 rounded-xl bg-[#8B35F5] px-4 text-sm font-black text-white shadow-[0_8px_20px_rgba(139,53,245,0.22)] transition hover:bg-[#7626DD] disabled:cursor-not-allowed disabled:bg-[#D9C2F6] disabled:shadow-none"
+                >
+                  التالي
+                </button>
+              </div>
             </div>
           )}
         </section>
@@ -2184,9 +2259,10 @@ function ExtraCreditRequestsPage({
               const customerNumber = customer?.link_number ? `#${customer.link_number}` : "غير متوفر";
               const device = customer?.selected_device === "screen" ? "شاشة / سوني" : customer?.selected_device === "mobile" ? "جوال / آيباد / بي سي" : "غير محدد";
               const isProcessing = processingId === request.id;
+              const attachmentUrl = request.image_url || "";
               const isVideoAttachment =
                 request.attachment_type === "video" ||
-                /\.(mp4|webm|mov|m4v|ogv|ogg)$/i.test(request.image_url.split("?")[0]);
+                /\.(mp4|webm|mov|m4v|ogv|ogg)$/i.test(attachmentUrl.split("?")[0]);
 
               return (
                 <article key={request.id} className="overflow-hidden rounded-3xl border border-[#E8DCFF] bg-white shadow-[0_18px_48px_rgba(70,40,120,0.10)]">
@@ -2219,28 +2295,34 @@ function ExtraCreditRequestsPage({
                       <p className="text-xs font-bold text-zinc-500">وصف العميل</p>
                       <p className="mt-1 whitespace-pre-wrap text-sm font-bold leading-7 text-zinc-700">{request.description}</p>
                     </div>
-                    <div className="overflow-hidden rounded-2xl border border-[#E8DDF8] bg-zinc-50">
-                      {isVideoAttachment ? (
-                        <video
-                          src={request.image_url}
-                          controls
-                          playsInline
-                          preload="metadata"
-                          className="aspect-video w-full bg-black object-contain"
-                        />
-                      ) : (
-                        <img src={request.image_url} alt="إثبات المشكلة" className="aspect-video w-full object-contain" />
-                      )}
-                      <a
-                        href={request.image_url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="flex h-11 items-center justify-center gap-2 bg-white text-xs font-black text-[#7C2CE8] transition hover:bg-[#F8F4FF]"
-                      >
-                        <Eye className="h-4 w-4" />
-                        {isVideoAttachment ? "فتح الفيديو في نافذة جديدة" : "فتح الصورة بالحجم الكامل"}
-                      </a>
-                    </div>
+                    {attachmentUrl ? (
+                      <div className="overflow-hidden rounded-2xl border border-[#E8DDF8] bg-zinc-50">
+                        {isVideoAttachment ? (
+                          <video
+                            src={attachmentUrl}
+                            controls
+                            playsInline
+                            preload="metadata"
+                            className="aspect-video w-full bg-black object-contain"
+                          />
+                        ) : (
+                          <img src={attachmentUrl} alt="إثبات المشكلة" className="aspect-video w-full object-contain" />
+                        )}
+                        <a
+                          href={attachmentUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="flex h-11 items-center justify-center gap-2 bg-white text-xs font-black text-[#7C2CE8] transition hover:bg-[#F8F4FF]"
+                        >
+                          <Eye className="h-4 w-4" />
+                          {isVideoAttachment ? "فتح الفيديو في نافذة جديدة" : "فتح الصورة بالحجم الكامل"}
+                        </a>
+                      </div>
+                    ) : (
+                      <div className="rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-5 text-center text-xs font-black text-zinc-500">
+                        تم حذف المرفق من التخزين بعد معالجة الطلب
+                      </div>
+                    )}
                     <div className="grid grid-cols-2 gap-3">
                       <button
                         type="button"
@@ -3754,11 +3836,11 @@ function CustomerView({
       const randomPart = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
       const storagePath = `credit-requests/${link.id}/${randomPart}.${extension}`;
       const { error: uploadError } = await supabase.storage
-        .from("screenshots")
+        .from(extraCreditStorageBucket)
         .upload(storagePath, screenshot, { contentType: screenshot.type, upsert: false });
       if (uploadError) throw uploadError;
 
-      const { data: publicUrlData } = supabase.storage.from("screenshots").getPublicUrl(storagePath);
+      const { data: publicUrlData } = supabase.storage.from(extraCreditStorageBucket).getPublicUrl(storagePath);
       const imageUrl = publicUrlData.publicUrl;
       const { data, error } = await supabase
         .from("extra_credit_requests")
@@ -4650,12 +4732,6 @@ function ExtraCreditRequestModal({
       setError("يرجى إرفاق صورة إثبات للمشكلة.");
       return;
     }
-    const maxSize = requiresVideo ? 50 * 1024 * 1024 : 5 * 1024 * 1024;
-    if (screenshot.size > maxSize) {
-      setError(requiresVideo ? "حجم الفيديو يجب ألا يتجاوز 50 ميجابايت." : "حجم الصورة يجب ألا يتجاوز 5 ميجابايت.");
-      return;
-    }
-
     setError("");
     setSubmitting(true);
     await onSubmit(reasonType, cleanDescription, screenshot);
@@ -4733,7 +4809,7 @@ function ExtraCreditRequestModal({
               <Plus className="mx-auto h-7 w-7 text-[#8B35F5]" />
               <p className="mt-2 text-sm font-black text-[#7C2CE8]">{requiresVideo ? "إرفاق فيديو تسجيل الخروج" : "إرفاق صورة للمشكلة"}</p>
               <p className="mt-1 text-xs font-bold text-zinc-500">
-                {requiresVideo ? "مقطع فيديو بحد أقصى 50MB" : "صورة بحد أقصى 5MB"}
+                {requiresVideo ? "مقطع فيديو ضمن السعة المتاحة في التخزين" : "صورة ضمن السعة المتاحة في التخزين"}
               </p>
             </div>
           )}

@@ -51,7 +51,7 @@ export type ExtraCreditRequest = {
   customer_id: string;
   reason_type: ExtraCreditReason;
   description: string;
-  image_url: string;
+  image_url: string | null;
   attachment_type?: "image" | "video";
   status: ExtraCreditRequestStatus;
   created_at: string;
