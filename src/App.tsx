@@ -188,17 +188,20 @@ function buildSupportWhatsAppUrl({
   customerCode: string;
   deviceType: DeviceView;
 }) {
-  const deviceName = deviceType === "screen" ? "شاشة / سوني" : "جوال / آيباد / بي سي";
-  const requestedItem = deviceType === "screen" ? "الرابط" : "الرمز";
-  let message: string;
-
-  if (issue === "expired") {
-    message = `مرحباً، نفدت محاولات طلب ${requestedItem} لـ ${deviceName} للحساب: ${email} - رقم العميل: ${customerCode}. أحتاج مساعدة من الدعم الفني.`;
-  } else if (issue === "unavailable") {
-    message = `مرحباً، لم أتمكن من الحصول على ${requestedItem} لـ ${deviceName} للحساب: ${email} - رقم العميل: ${customerCode}. أرجو المساعدة.`;
-  } else {
-    message = `مرحباً، أحتاج إلى الدعم الفني بخصوص ${requestedItem} لـ ${deviceName} للحساب: ${email} - رقم العميل: ${customerCode}.`;
-  }
+  const deviceName = deviceType === "screen" ? "شاشة / سوني" : "جوال / آيباد / بي سي / لابتوب";
+  const problem =
+    issue === "expired"
+      ? "استنفاد المحاولات"
+      : issue === "unavailable"
+        ? deviceType === "screen"
+          ? "تعذر العثور على الرابط"
+          : "تعذر العثور على الكود"
+        : "مشكلة أو استفسار عام";
+  const message = `مرحباً، أعيش مشكلة/استفسار في الحساب:
+- البريد الإلكتروني: ${email}
+- رقم العميل (ID/Code): ${customerCode}
+- نوع الجهاز: ${deviceName}
+- نوع المشكلة: ${problem}`;
 
   return `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(message)}`;
 }
@@ -3511,23 +3514,6 @@ function CustomerView({
     customerCode,
     deviceType: "mobile",
   });
-  const attemptsExhaustedWhatsAppUrl = buildSupportWhatsAppUrl({
-    issue: "expired",
-    email: supportEmail,
-    customerCode,
-    deviceType: "mobile",
-  });
-  const screenSupportWhatsAppUrl = buildSupportWhatsAppUrl({
-    issue:
-      tvRequestState === "failed"
-        ? "unavailable"
-        : tvRequestState === "expired"
-          ? "expired"
-          : "general",
-    email: supportEmail,
-    customerCode,
-    deviceType: "screen",
-  });
   const deviceLabel = (device: DeviceView) => (device === "mobile" ? "جوال / آيباد / بي سي / لابتوب" : "شاشة / سوني");
   const deviceChoiceLocked = Boolean(deviceView);
   const codeSecondsRemaining = codeDisplayExpiresAt
@@ -3546,6 +3532,19 @@ function CustomerView({
   const attemptUsed = !hasCodeRequestCredit;
   const hasUsedTvLink = link?.has_used_tv_link === true;
   const tvAttemptUsed = attemptUsed || hasUsedTvLink;
+  const floatingSupportDevice: DeviceView = deviceView || "mobile";
+  const floatingSupportIssue: SupportIssue =
+    attemptUsed || codeRequestState === "expired" || tvRequestState === "expired"
+      ? "expired"
+      : codeRequestState === "failed" || tvRequestState === "failed"
+        ? "unavailable"
+        : "general";
+  const floatingSupportWhatsAppUrl = buildSupportWhatsAppUrl({
+    issue: floatingSupportIssue,
+    email: supportEmail,
+    customerCode,
+    deviceType: floatingSupportDevice,
+  });
   const tvSearchSecondsRemaining = tvSearchDeadlineAt
     ? Math.max(0, Math.ceil((tvSearchDeadlineAt - nowTick) / 1000))
     : 0;
@@ -4186,7 +4185,7 @@ function CustomerView({
 
   return (
     <Shell toast={toast}>
-      <div className="min-h-screen bg-gradient-to-b from-[#F3F4F6] via-[#F9FAFB] to-white px-4 py-6 md:py-10" dir="rtl">
+      <div className="min-h-screen bg-gradient-to-b from-[#F3F4F6] via-[#F9FAFB] to-white px-4 pb-24 pt-6 md:pb-28 md:pt-10" dir="rtl">
         <div className="mx-auto w-full max-w-[640px]">
           <header className="mb-8 flex items-center justify-between rounded-[2rem] border border-white bg-white/80 p-4 shadow-premium backdrop-blur">
             <div className="flex items-center gap-3">
@@ -4347,15 +4346,6 @@ function CustomerView({
                           </p>
                         </div>
                       </div>
-                      <a
-                        href={attemptsExhaustedWhatsAppUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#8B35F5] text-sm font-black text-white transition hover:bg-[#7626DD]"
-                      >
-                        <WhatsAppLogo className="h-5 w-5" />
-                        تواصل مع الدعم الفني
-                      </a>
                       <ExtraCreditRequestAction
                         status={extraCreditRequest?.status}
                         onOpen={() => setShowExtraCreditModal(true)}
@@ -4406,10 +4396,14 @@ function CustomerView({
                           <p className="text-xs font-black leading-6 text-rose-700">
                             لم يصل الرمز أو الرابط بعد؟ يرجى متابعة الشرح جيداً لكي تفهم هذه الخطوة وتتأكد من تطبيقها بالشكل الصحيح على نتفليكس، ثم اضغط على إعادة المحاولة.
                           </p>
+                          <ExtraCreditRequestAction
+                            status={extraCreditRequest?.status}
+                            onOpen={() => setShowExtraCreditModal(true)}
+                          />
                           <button
                             type="button"
                             onClick={openTvRequestModal}
-                            className="mt-3 min-h-12 w-full rounded-xl bg-[#E50914] px-4 text-sm font-black text-white transition hover:bg-red-700"
+                            className="mt-3 min-h-12 w-full rounded-xl border border-rose-200 bg-white px-4 text-sm font-black text-rose-700 transition hover:bg-rose-100"
                           >
                             إعادة محاولة جلب الرابط
                           </button>
@@ -4419,15 +4413,6 @@ function CustomerView({
                           <p className="text-xs font-black leading-6 text-rose-700">
                             نفدت المحاولات المتاحة لهذا الحساب
                           </p>
-                          <a
-                            href={screenSupportWhatsAppUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#8B35F5] px-4 text-sm font-black text-white shadow-[0_12px_28px_rgba(139,53,245,0.22)] transition hover:bg-[#7626DD]"
-                          >
-                            <WhatsAppLogo className="h-5 w-5" />
-                            تواصل مع الدعم الفني عبر الواتساب
-                          </a>
                           <ExtraCreditRequestAction
                             status={extraCreditRequest?.status}
                             onOpen={() => setShowExtraCreditModal(true)}
@@ -4510,23 +4495,18 @@ function CustomerView({
                           </p>
                         </div>
                       </div>
+                      <ExtraCreditRequestAction
+                        status={extraCreditRequest?.status}
+                        onOpen={() => setShowExtraCreditModal(true)}
+                      />
                       <button
                         type="button"
                         onClick={openPreRequestModal}
-                        className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#8B35F5] text-sm font-black text-white shadow-[0_14px_32px_rgba(139,53,245,0.24)] transition hover:bg-[#7626DD]"
+                        className="mt-3 flex h-12 w-full items-center justify-center gap-2 rounded-2xl border border-[#DCCBFA] bg-white text-sm font-black text-[#7C2CE8] transition hover:bg-[#F5EEFF]"
                       >
                         <RefreshCw className="h-4 w-4" />
                         إعادة المحاولة والبحث مجدداً
                       </button>
-                      <a
-                        href={unavailableResultWhatsAppUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#8B35F5] text-sm font-black text-white shadow-[0_14px_32px_rgba(139,53,245,0.24)] transition hover:bg-[#7626DD]"
-                      >
-                        <WhatsAppLogo className="h-5 w-5" />
-                        تواصل مع الدعم الفني عبر الواتساب
-                      </a>
                     </div>
                   ) : deviceView === "mobile" &&
                     (codeRequestState === "expired" || (attemptUsed && codeRequestState === "idle")) ? (
@@ -4542,15 +4522,6 @@ function CustomerView({
                           </p>
                         </div>
                       </div>
-                      <a
-                        href={attemptsExhaustedWhatsAppUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#8B35F5] text-sm font-black text-white shadow-[0_14px_32px_rgba(139,53,245,0.24)] transition hover:bg-[#7626DD]"
-                      >
-                        <WhatsAppLogo className="h-5 w-5" />
-                        تواصل مع الدعم الفني عبر الواتساب
-                      </a>
                       <ExtraCreditRequestAction
                         status={extraCreditRequest?.status}
                         onOpen={() => setShowExtraCreditModal(true)}
@@ -4738,13 +4709,15 @@ function CustomerView({
             />
           )}
 
-          {automatedCodeEnabled && deviceView === "screen" && (
+          {link && account && (
             <a
-              href={screenSupportWhatsAppUrl}
+              href={floatingSupportWhatsAppUrl}
               target="_blank"
               rel="noreferrer"
-              className={cn("fixed bottom-5 left-5 z-40 flex h-[60px] w-[60px] animate-whatsapp-pulse items-center justify-center rounded-full bg-gradient-to-br text-white backdrop-blur transition duration-300 hover:-translate-y-1 hover:shadow-premium-lg", theme.gradient, theme.glow)}
-              aria-label="WhatsApp"
+              className="fixed right-4 z-40 flex h-14 w-14 animate-whatsapp-pulse items-center justify-center rounded-full bg-[#25D366] text-white shadow-[0_14px_35px_rgba(37,211,102,0.30)] backdrop-blur transition duration-300 hover:-translate-y-1 hover:bg-[#1EBE5D] hover:shadow-[0_18px_40px_rgba(37,211,102,0.38)] md:right-6"
+              style={{ bottom: "max(1.25rem, env(safe-area-inset-bottom))" }}
+              aria-label="تواصل مع الدعم عبر واتساب"
+              title="تواصل مع الدعم عبر واتساب"
             >
               <WhatsAppLogo className="h-7 w-7" />
             </a>
@@ -4782,9 +4755,9 @@ function ExtraCreditRequestAction({
     <button
       type="button"
       onClick={onOpen}
-      className="mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl border border-[#8B35F5] bg-white px-4 text-sm font-black text-[#7C2CE8] transition hover:bg-[#8B35F5] hover:text-white"
+      className="mt-3 flex min-h-13 w-full items-center justify-center gap-2 rounded-2xl bg-[#8B35F5] px-4 text-sm font-black text-white shadow-[0_14px_32px_rgba(139,53,245,0.28)] transition hover:-translate-y-0.5 hover:bg-[#7626DD] hover:shadow-[0_18px_36px_rgba(139,53,245,0.34)]"
     >
-      <Plus className="h-4 w-4" />
+      <Sparkles className="h-5 w-5" />
       طلب رصيد إضافي
     </button>
   );
