@@ -160,6 +160,23 @@ function normalizeEmail(email: string) {
   return email.trim().toLowerCase();
 }
 
+function notifyExtraCreditRequestInBackground(requestId: string) {
+  void fetch("/api/notify-extra-credit", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ request_id: requestId }),
+    keepalive: true,
+  })
+    .then(async (response) => {
+      if (response.ok) return;
+      const result = (await response.json().catch(() => null)) as { error?: string } | null;
+      throw new Error(result?.error || `telegram_notification_failed_${response.status}`);
+    })
+    .catch((error) => {
+      console.error("Telegram extra credit notification failed:", error);
+    });
+}
+
 function buildSupportWhatsAppUrl({
   issue,
   email,
@@ -3954,6 +3971,7 @@ function CustomerView({
       setExtraCreditRequest(data as ExtraCreditRequest);
       setShowExtraCreditModal(false);
       setToast({ label: "تم تقديم طلبك بنجاح وهو قيد المراجعة حالياً", at: Date.now() });
+      notifyExtraCreditRequestInBackground(data.id);
       return true;
     } catch (error) {
       console.error("Extra credit request submit error:", error);
