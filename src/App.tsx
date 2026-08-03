@@ -90,7 +90,7 @@ const tvApprovalFallbackWindowMs = 15 * 60 * 1000;
 const tvApprovalSearchDurationMs = 15 * 1000;
 const extraCreditReasons: ExtraCreditReason[] = [
   "كود خاطئ",
-  "إضافة جهاز جديد",
+  "استبدال الجهاز أو الدخول بجهاز آخر",
   "عدم تطبيق الخطوات وذهاب الكود",
   "أخرى",
 ];
@@ -2184,6 +2184,9 @@ function ExtraCreditRequestsPage({
               const customerNumber = customer?.link_number ? `#${customer.link_number}` : "غير متوفر";
               const device = customer?.selected_device === "screen" ? "شاشة / سوني" : customer?.selected_device === "mobile" ? "جوال / آيباد / بي سي" : "غير محدد";
               const isProcessing = processingId === request.id;
+              const isVideoAttachment =
+                request.attachment_type === "video" ||
+                /\.(mp4|webm|mov|m4v|ogv|ogg)$/i.test(request.image_url.split("?")[0]);
 
               return (
                 <article key={request.id} className="overflow-hidden rounded-3xl border border-[#E8DCFF] bg-white shadow-[0_18px_48px_rgba(70,40,120,0.10)]">
@@ -2216,18 +2219,28 @@ function ExtraCreditRequestsPage({
                       <p className="text-xs font-bold text-zinc-500">وصف العميل</p>
                       <p className="mt-1 whitespace-pre-wrap text-sm font-bold leading-7 text-zinc-700">{request.description}</p>
                     </div>
-                    <a
-                      href={request.image_url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="group block overflow-hidden rounded-2xl border border-[#E8DDF8] bg-zinc-50"
-                    >
-                      <img src={request.image_url} alt="إثبات المشكلة" className="aspect-video w-full object-contain transition group-hover:scale-[1.01]" />
-                      <span className="flex h-11 items-center justify-center gap-2 bg-white text-xs font-black text-[#7C2CE8]">
+                    <div className="overflow-hidden rounded-2xl border border-[#E8DDF8] bg-zinc-50">
+                      {isVideoAttachment ? (
+                        <video
+                          src={request.image_url}
+                          controls
+                          playsInline
+                          preload="metadata"
+                          className="aspect-video w-full bg-black object-contain"
+                        />
+                      ) : (
+                        <img src={request.image_url} alt="إثبات المشكلة" className="aspect-video w-full object-contain" />
+                      )}
+                      <a
+                        href={request.image_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="flex h-11 items-center justify-center gap-2 bg-white text-xs font-black text-[#7C2CE8] transition hover:bg-[#F8F4FF]"
+                      >
                         <Eye className="h-4 w-4" />
-                        فتح الصورة بالحجم الكامل
-                      </span>
-                    </a>
+                        {isVideoAttachment ? "فتح الفيديو في نافذة جديدة" : "فتح الصورة بالحجم الكامل"}
+                      </a>
+                    </div>
                     <div className="grid grid-cols-2 gap-3">
                       <button
                         type="button"
@@ -3229,29 +3242,28 @@ function CustomerView({
     const client = supabase;
     const customerId = link.id;
 
-    async function loadPendingRequest() {
+    async function loadLatestRequest() {
       const { data, error } = await client
         .from("extra_credit_requests")
         .select("*")
         .eq("customer_id", customerId)
-        .eq("status", "pending")
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle();
       if (error) {
-        console.error("Supabase pending extra credit request load error:", error);
+        console.error("Supabase latest extra credit request load error:", error);
         return;
       }
       setExtraCreditRequest((data || null) as ExtraCreditRequest | null);
     }
 
-    void loadPendingRequest();
+    void loadLatestRequest();
     const channel = client
       .channel(`zone-customer-credit-${customerId}`)
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "extra_credit_requests", filter: `customer_id=eq.${customerId}` },
-        () => void loadPendingRequest(),
+        () => void loadLatestRequest(),
       )
       .on(
         "postgres_changes",
@@ -3710,7 +3722,7 @@ function CustomerView({
     description: string,
     screenshot: File,
   ) {
-    if (!link?.id || extraCreditRequest?.status === "pending") return false;
+    if (!link?.id || extraCreditRequest?.status === "pending" || extraCreditRequest?.status === "rejected") return false;
     const cleanDescription = description.trim();
     if (cleanDescription.length < 10) {
       setToast({ label: "يجب ألا يقل وصف المشكلة عن 10 أحرف", tone: "error", at: Date.now() });
@@ -3724,6 +3736,7 @@ function CustomerView({
         reason_type: reasonType,
         description: cleanDescription,
         image_url: URL.createObjectURL(screenshot),
+        attachment_type: reasonType === "استبدال الجهاز أو الدخول بجهاز آخر" ? "video" : "image",
         status: "pending",
         created_at: new Date().toISOString(),
       };
@@ -3734,7 +3747,10 @@ function CustomerView({
     }
 
     try {
-      const extension = screenshot.name.split(".").pop()?.toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
+      const attachmentType = reasonType === "استبدال الجهاز أو الدخول بجهاز آخر" ? "video" : "image";
+      const extension =
+        screenshot.name.split(".").pop()?.toLowerCase().replace(/[^a-z0-9]/g, "") ||
+        (attachmentType === "video" ? "mp4" : "jpg");
       const randomPart = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
       const storagePath = `credit-requests/${link.id}/${randomPart}.${extension}`;
       const { error: uploadError } = await supabase.storage
@@ -3751,6 +3767,7 @@ function CustomerView({
           reason_type: reasonType,
           description: cleanDescription,
           image_url: imageUrl,
+          attachment_type: attachmentType,
           status: "pending",
         })
         .select("*")
@@ -3770,7 +3787,7 @@ function CustomerView({
       return true;
     } catch (error) {
       console.error("Extra credit request submit error:", error);
-      setToast({ label: "تعذر إرسال الطلب، تحقق من الصورة وحاول مرة أخرى", tone: "error", at: Date.now() });
+      setToast({ label: "تعذر إرسال الطلب، تحقق من المرفق وحاول مرة أخرى", tone: "error", at: Date.now() });
       return false;
     }
   }
@@ -4156,7 +4173,7 @@ function CustomerView({
                         تواصل مع الدعم الفني
                       </a>
                       <ExtraCreditRequestAction
-                        pending={extraCreditRequest?.status === "pending"}
+                        status={extraCreditRequest?.status}
                         onOpen={() => setShowExtraCreditModal(true)}
                       />
                     </div>
@@ -4228,7 +4245,7 @@ function CustomerView({
                             تواصل مع الدعم الفني عبر الواتساب
                           </a>
                           <ExtraCreditRequestAction
-                            pending={extraCreditRequest?.status === "pending"}
+                            status={extraCreditRequest?.status}
                             onOpen={() => setShowExtraCreditModal(true)}
                           />
                         </div>
@@ -4351,7 +4368,7 @@ function CustomerView({
                         تواصل مع الدعم الفني عبر الواتساب
                       </a>
                       <ExtraCreditRequestAction
-                        pending={extraCreditRequest?.status === "pending"}
+                        status={extraCreditRequest?.status}
                         onOpen={() => setShowExtraCreditModal(true)}
                       />
                     </div>
@@ -4554,8 +4571,22 @@ function CustomerView({
   );
 }
 
-function ExtraCreditRequestAction({ pending, onOpen }: { pending: boolean; onOpen: () => void }) {
-  if (pending) {
+function ExtraCreditRequestAction({
+  status,
+  onOpen,
+}: {
+  status?: ExtraCreditRequestStatus;
+  onOpen: () => void;
+}) {
+  if (status === "rejected") {
+    return (
+      <div className="mt-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-center text-sm font-black leading-6 text-rose-700">
+        تم رفض طلبك للحصول على رصيد إضافي
+      </div>
+    );
+  }
+
+  if (status === "pending") {
     return (
       <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-center text-xs font-black leading-6 text-amber-800">
         تم تقديم طلبك بنجاح وهو قيد المراجعة حالياً
@@ -4588,6 +4619,7 @@ function ExtraCreditRequestModal({
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const requiresVideo = reasonType === "استبدال الجهاز أو الدخول بجهاز آخر";
 
   useEffect(() => {
     if (!screenshot) {
@@ -4607,15 +4639,20 @@ function ExtraCreditRequestModal({
       return;
     }
     if (!screenshot) {
-      setError("يرجى إرفاق صورة توضح المشكلة.");
+      setError(requiresVideo ? "يرجى إرفاق مقطع فيديو يوضح تسجيل الخروج." : "يرجى إرفاق صورة إثبات للمشكلة.");
       return;
     }
-    if (!["image/jpeg", "image/png", "image/webp"].includes(screenshot.type)) {
-      setError("الصيغ المسموحة هي JPG وPNG وWEBP فقط.");
+    if (requiresVideo && !screenshot.type.startsWith("video/")) {
+      setError("هذا السبب يتطلب إرفاق مقطع فيديو.");
       return;
     }
-    if (screenshot.size > 5 * 1024 * 1024) {
-      setError("حجم الصورة يجب ألا يتجاوز 5 ميجابايت.");
+    if (!requiresVideo && !screenshot.type.startsWith("image/")) {
+      setError("يرجى إرفاق صورة إثبات للمشكلة.");
+      return;
+    }
+    const maxSize = requiresVideo ? 50 * 1024 * 1024 : 5 * 1024 * 1024;
+    if (screenshot.size > maxSize) {
+      setError(requiresVideo ? "حجم الفيديو يجب ألا يتجاوز 50 ميجابايت." : "حجم الصورة يجب ألا يتجاوز 5 ميجابايت.");
       return;
     }
 
@@ -4632,7 +4669,7 @@ function ExtraCreditRequestModal({
           <div>
             <p className="text-xs font-black text-[#8B35F5]">مراجعة من إدارة المتجر</p>
             <h2 className="mt-1 text-2xl font-black">طلب رصيد إضافي</h2>
-            <p className="mt-2 text-xs font-bold leading-6 text-zinc-500">وضح المشكلة وأرفق صورة واضحة لتسريع مراجعة طلبك.</p>
+            <p className="mt-2 text-xs font-bold leading-6 text-zinc-500">وضح المشكلة وأرفق الإثبات المطلوب لتسريع مراجعة طلبك.</p>
           </div>
           <button type="button" onClick={onClose} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-zinc-100 text-zinc-500 transition hover:bg-zinc-200" aria-label="إغلاق">
             <X className="h-5 w-5" />
@@ -4643,7 +4680,11 @@ function ExtraCreditRequestModal({
           <span className="mb-2 block text-sm font-black">سبب المشكلة</span>
           <select
             value={reasonType}
-            onChange={(event) => setReasonType(event.target.value as ExtraCreditReason)}
+            onChange={(event) => {
+              setReasonType(event.target.value as ExtraCreditReason);
+              setScreenshot(null);
+              setError("");
+            }}
             className="h-13 w-full rounded-xl border-2 border-[#E0D4F8] bg-[#FCFAFF] px-4 text-sm font-black outline-none transition focus:border-[#8B35F5]"
           >
             {extraCreditReasons.map((reason) => <option key={reason} value={reason}>{reason}</option>)}
@@ -4665,10 +4706,16 @@ function ExtraCreditRequestModal({
           />
         </label>
 
-        <label className="mt-4 block cursor-pointer rounded-2xl border-2 border-dashed border-[#D8C1FF] bg-[#FAF8FF] p-4 text-center transition hover:border-[#8B35F5]">
+        <p className="mt-4 rounded-xl bg-[#F5EEFF] px-4 py-3 text-xs font-black leading-6 text-[#6E25CF]">
+          {requiresVideo
+            ? "يرجى إرفاق تسجيل شاشة أو تصوير فيديو لعملية تسجيل الخروج من الحساب الخاص بنا بالكامل."
+            : "يرجى إرفاق صورة إثبات للمشكلة."}
+        </p>
+
+        <label className="mt-3 block cursor-pointer rounded-2xl border-2 border-dashed border-[#D8C1FF] bg-[#FAF8FF] p-4 text-center transition hover:border-[#8B35F5]">
           <input
             type="file"
-            accept="image/jpeg,image/png,image/webp"
+            accept={requiresVideo ? "video/*" : "image/*"}
             className="sr-only"
             onChange={(event) => {
               setScreenshot(event.target.files?.[0] || null);
@@ -4676,12 +4723,18 @@ function ExtraCreditRequestModal({
             }}
           />
           {previewUrl ? (
-            <img src={previewUrl} alt="معاينة الإثبات" className="mx-auto max-h-52 w-full rounded-xl object-contain" />
+            requiresVideo ? (
+              <video src={previewUrl} controls playsInline className="mx-auto max-h-64 w-full rounded-xl bg-black object-contain" />
+            ) : (
+              <img src={previewUrl} alt="معاينة الإثبات" className="mx-auto max-h-52 w-full rounded-xl object-contain" />
+            )
           ) : (
             <div className="py-5">
               <Plus className="mx-auto h-7 w-7 text-[#8B35F5]" />
-              <p className="mt-2 text-sm font-black text-[#7C2CE8]">إرفاق صورة للمشكلة</p>
-              <p className="mt-1 text-xs font-bold text-zinc-500">JPG أو PNG أو WEBP، بحد أقصى 5MB</p>
+              <p className="mt-2 text-sm font-black text-[#7C2CE8]">{requiresVideo ? "إرفاق فيديو تسجيل الخروج" : "إرفاق صورة للمشكلة"}</p>
+              <p className="mt-1 text-xs font-bold text-zinc-500">
+                {requiresVideo ? "مقطع فيديو بحد أقصى 50MB" : "صورة بحد أقصى 5MB"}
+              </p>
             </div>
           )}
         </label>

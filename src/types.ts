@@ -1,6 +1,10 @@
 export type AccountType = "private" | "shared";
 export type ServiceType = "netflix" | "shahid";
-export type ExtraCreditReason = "كود خاطئ" | "إضافة جهاز جديد" | "عدم تطبيق الخطوات وذهاب الكود" | "أخرى";
+export type ExtraCreditReason =
+  | "كود خاطئ"
+  | "استبدال الجهاز أو الدخول بجهاز آخر"
+  | "عدم تطبيق الخطوات وذهاب الكود"
+  | "أخرى";
 export type ExtraCreditRequestStatus = "pending" | "approved" | "rejected";
 
 export type NetflixAccount = {
@@ -48,6 +52,7 @@ export type ExtraCreditRequest = {
   reason_type: ExtraCreditReason;
   description: string;
   image_url: string;
+  attachment_type?: "image" | "video";
   status: ExtraCreditRequestStatus;
   created_at: string;
   reviewed_at?: string | null;

@@ -4,14 +4,38 @@ create table if not exists public.extra_credit_requests (
   id uuid primary key default gen_random_uuid(),
   customer_id uuid not null references public.customer_links(id) on delete cascade,
   reason_type text not null check (
-    reason_type in ('كود خاطئ', 'إضافة جهاز جديد', 'عدم تطبيق الخطوات وذهاب الكود', 'أخرى')
+    reason_type in ('كود خاطئ', 'استبدال الجهاز أو الدخول بجهاز آخر', 'عدم تطبيق الخطوات وذهاب الكود', 'أخرى')
   ),
   description text not null check (char_length(btrim(description)) >= 10),
   image_url text not null check (btrim(image_url) <> ''),
+  attachment_type text not null default 'image' check (attachment_type in ('image', 'video')),
   status text not null default 'pending' check (status in ('pending', 'approved', 'rejected')),
   created_at timestamptz not null default now(),
   reviewed_at timestamptz
 );
+
+alter table public.extra_credit_requests
+  add column if not exists attachment_type text not null default 'image';
+
+alter table public.extra_credit_requests
+  drop constraint if exists extra_credit_requests_reason_type_check;
+
+update public.extra_credit_requests
+set reason_type = 'استبدال الجهاز أو الدخول بجهاز آخر'
+where reason_type = 'إضافة جهاز جديد';
+
+alter table public.extra_credit_requests
+  add constraint extra_credit_requests_reason_type_check check (
+    reason_type in ('كود خاطئ', 'استبدال الجهاز أو الدخول بجهاز آخر', 'عدم تطبيق الخطوات وذهاب الكود', 'أخرى')
+  );
+
+alter table public.extra_credit_requests
+  drop constraint if exists extra_credit_requests_attachment_type_check;
+
+alter table public.extra_credit_requests
+  add constraint extra_credit_requests_attachment_type_check check (
+    attachment_type in ('image', 'video')
+  );
 
 create unique index if not exists extra_credit_requests_one_pending_per_customer
   on public.extra_credit_requests(customer_id)
@@ -37,6 +61,7 @@ create policy "Allow customer credit request inserts"
     status = 'pending'
     and char_length(btrim(description)) >= 10
     and btrim(image_url) <> ''
+    and attachment_type in ('image', 'video')
   );
 
 grant select, insert on public.extra_credit_requests to anon, authenticated;
@@ -46,10 +71,28 @@ values (
   'screenshots',
   'screenshots',
   true,
-  5242880,
-  array['image/jpeg', 'image/png', 'image/webp']
+  52428800,
+  array[
+    'image/jpeg',
+    'image/png',
+    'image/webp',
+    'image/gif',
+    'image/heic',
+    'image/heif',
+    'video/mp4',
+    'video/webm',
+    'video/quicktime',
+    'video/x-m4v',
+    'video/ogg',
+    'video/mpeg',
+    'video/3gpp',
+    'video/3gpp2'
+  ]
 )
-on conflict (id) do nothing;
+on conflict (id) do update set
+  public = excluded.public,
+  file_size_limit = excluded.file_size_limit,
+  allowed_mime_types = excluded.allowed_mime_types;
 
 drop policy if exists "Allow credit screenshot uploads" on storage.objects;
 drop policy if exists "Allow credit screenshot reads" on storage.objects;
