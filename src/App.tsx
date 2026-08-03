@@ -4789,6 +4789,7 @@ function ExtraCreditRequestModal({
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [pledgeAccepted, setPledgeAccepted] = useState(false);
   const requiresVideo = reasonType === "استبدال الجهاز أو الدخول بجهاز آخر";
 
   useEffect(() => {
@@ -4818,6 +4819,10 @@ function ExtraCreditRequestModal({
     }
     if (!requiresVideo && !screenshot.type.startsWith("image/")) {
       setError("يرجى إرفاق صورة إثبات للمشكلة.");
+      return;
+    }
+    if (!pledgeAccepted) {
+      setError("يجب الموافقة على الإقرار والتعهد أولاً لإتمام إرسال الطلب.");
       return;
     }
     setError("");
@@ -4903,17 +4908,52 @@ function ExtraCreditRequestModal({
           )}
         </label>
 
+        <section className="mt-5 rounded-2xl border border-amber-200 bg-amber-50/80 p-4 shadow-[0_10px_28px_rgba(146,92,10,0.08)]">
+          <p className="text-sm font-black leading-7 text-[#7A3510]">
+            ⚠️ تنبيه وإبراء للذمة: هذا الاشتراك مخصص لاستخدام جهاز واحد فقط، ويُمنع منعاً باتاً تشغيل الحساب أو الدخول به على أكثر من جهاز في نفس الوقت. نحن لا نحلل ولا نبيح أي استخدام يخالف هذا الشرط.
+          </p>
+
+          <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-xl border border-amber-200 bg-white p-3 transition hover:border-amber-400">
+            <input
+              type="checkbox"
+              required
+              checked={pledgeAccepted}
+              onChange={(event) => {
+                setPledgeAccepted(event.target.checked);
+                if (event.target.checked) setError("");
+              }}
+              className="mt-1 h-5 w-5 shrink-0 accent-[#8B35F5]"
+            />
+            <span className="text-sm font-black leading-7 text-zinc-900">
+              أقر وأتعهد أمام الله تعالى بأنني سأستخدم الحساب على جهاز واحد فقط، ولن أقوم بإدخاله أو تشغيله على أكثر من جهاز في وقت واحد.
+            </span>
+          </label>
+
+          {!pledgeAccepted && (
+            <p className="mt-2 text-xs font-black text-amber-800">يجب تحديد مربع التعهد لتفعيل زر الإرسال.</p>
+          )}
+        </section>
+
         {error && <p className="mt-4 rounded-xl bg-rose-50 px-4 py-3 text-center text-xs font-black text-rose-700">{error}</p>}
 
         <div className="mt-6 grid grid-cols-[1fr_auto] gap-3">
-          <button
-            type="submit"
-            disabled={submitting}
-            className="flex h-13 items-center justify-center gap-2 rounded-xl bg-[#8B35F5] px-5 text-sm font-black text-white shadow-[0_12px_28px_rgba(139,53,245,0.25)] transition hover:bg-[#7626DD] disabled:cursor-wait disabled:opacity-60"
+          <div
+            className="rounded-xl"
+            onClick={() => {
+              if (!pledgeAccepted && !submitting) {
+                setError("يجب الموافقة على الإقرار والتعهد أولاً لإتمام إرسال الطلب.");
+              }
+            }}
           >
-            {submitting && <RefreshCw className="h-4 w-4 animate-spin" />}
-            {submitting ? "جاري الإرسال..." : "تأكيد الإرسال"}
-          </button>
+            <button
+              type="submit"
+              disabled={submitting || !pledgeAccepted}
+              className="flex h-13 w-full items-center justify-center gap-2 rounded-xl bg-[#8B35F5] px-5 text-sm font-black text-white shadow-[0_12px_28px_rgba(139,53,245,0.25)] transition hover:bg-[#7626DD] disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none"
+            >
+              {submitting && <RefreshCw className="h-4 w-4 animate-spin" />}
+              {submitting ? "جاري الإرسال..." : "تأكيد الإرسال"}
+            </button>
+          </div>
           <button type="button" onClick={onClose} disabled={submitting} className="h-13 rounded-xl border border-zinc-200 bg-white px-5 text-sm font-black text-zinc-600 transition hover:bg-zinc-50">
             إلغاء
           </button>
