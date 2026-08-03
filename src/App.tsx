@@ -449,6 +449,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
   const [extraCreditRequests, setExtraCreditRequests] = useState<ExtraCreditRequest[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalAccounts, setTotalAccounts] = useState(0);
@@ -461,9 +462,14 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
   }, [toast]);
 
   useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedQuery(query.trim()), 300);
+    return () => window.clearTimeout(timer);
+  }, [query]);
+
+  useEffect(() => {
     if (!authenticated) return;
     void loadData();
-  }, [authenticated, currentPage, selectedService]);
+  }, [authenticated, currentPage, selectedService, debouncedQuery]);
 
   useEffect(() => {
     localStorage.setItem("zone-admin-screen", screen);
@@ -495,7 +501,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     return () => {
       void client.removeChannel(channel);
     };
-  }, [authenticated, currentPage, selectedService]);
+  }, [authenticated, currentPage, selectedService, debouncedQuery]);
 
   async function loadData() {
     if (!supabase) {
@@ -509,6 +515,37 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     setLoading(true);
     const from = (currentPage - 1) * adminAccountsPageSize;
     const to = currentPage * adminAccountsPageSize - 1;
+    const rawSearchTerm = debouncedQuery.replace(/^#/, "").trim();
+    const searchTerm = rawSearchTerm.replace(/[,()*]/g, " ").trim();
+    const matchingAccountIds = new Set<string>();
+
+    if (searchTerm) {
+      const linkSearches = [
+        supabase
+          .from("customer_links")
+          .select("account_id")
+          .ilike("short_id", `%${searchTerm}%`),
+      ];
+
+      if (/^\d+$/.test(searchTerm)) {
+        linkSearches.push(
+          supabase
+            .from("customer_links")
+            .select("account_id")
+            .eq("link_number", Number(searchTerm)),
+        );
+      }
+
+      const linkSearchResults = await Promise.all(linkSearches);
+      linkSearchResults.forEach(({ data, error }) => {
+        if (error) {
+          console.error("Supabase customer number/code search error:", error);
+          return;
+        }
+        (data || []).forEach((item) => matchingAccountIds.add(item.account_id));
+      });
+    }
+
     let accountsQuery = supabase
       .from("accounts")
       .select("*", { count: "exact" });
@@ -516,6 +553,13 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     accountsQuery = selectedService === "shahid"
       ? accountsQuery.eq("service_type", "shahid")
       : accountsQuery.or("service_type.eq.netflix,service_type.is.null");
+
+    if (searchTerm) {
+      const accountIds = Array.from(matchingAccountIds);
+      accountsQuery = accountIds.length
+        ? accountsQuery.or(`email.ilike.%${searchTerm}%,id.in.(${accountIds.join(",")})`)
+        : accountsQuery.ilike("email", `%${searchTerm}%`);
+    }
 
     const [
       { data: accountsData, error: accountsError, count: accountsCount },
@@ -686,6 +730,30 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       return { ok: false, error: emptyEmailMessage };
     }
 
+    const optimisticId = `optimistic-${crypto.randomUUID()}`;
+    const optimisticAccount: NetflixAccount = {
+      id: optimisticId,
+      email: normalizedEmail,
+      password: form.password,
+      account_type: form.account_type,
+      supplier_code_url: form.supplier_code_url,
+      expires_at,
+      service_type: selectedService,
+      use_automated_code: true,
+      created_at: new Date().toISOString(),
+    };
+    let optimisticAccountVisible = true;
+    const rollbackOptimisticAccount = () => {
+      if (!optimisticAccountVisible) return;
+      optimisticAccountVisible = false;
+      setAccounts((current) => current.filter((item) => item.id !== optimisticId));
+      setTotalAccounts((current) => Math.max(0, current - 1));
+    };
+
+    setAccounts((current) => [optimisticAccount, ...current]);
+    setTotalAccounts((current) => current + 1);
+    setToast({ label: "تمت إضافة الحساب، جاري الحفظ في الخلفية", at: Date.now() });
+
     try {
       const validation = await validateAccountEmailAndProfiles(
         normalizedEmail,
@@ -694,10 +762,12 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       );
       if (!accountFormSucceeded(validation)) {
         const error = accountFormError(validation) || duplicateEmailMessage;
+        rollbackOptimisticAccount();
         setToast({ label: error, at: Date.now(), tone: "error" });
         return { ok: false, error };
       }
     } catch {
+      rollbackOptimisticAccount();
       setToast({ label: "تعذر التحقق من البريد الإلكتروني، حاول مرة أخرى", at: Date.now(), tone: "error" });
       return { ok: false, error: "تعذر التحقق من البريد الإلكتروني، حاول مرة أخرى" };
     }
@@ -706,31 +776,22 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       const shortIds = await createUniqueShortIds(slots.length);
       slots = slots.map((slot, index) => ({ ...slot, short_id: shortIds[index] }));
     } catch {
+      rollbackOptimisticAccount();
       setToast({ label: "تعذر توليد روابط قصيرة فريدة، حاول مرة أخرى", at: Date.now(), tone: "error" });
       return { ok: false, error: "تعذر توليد روابط قصيرة فريدة، حاول مرة أخرى" };
     }
 
     if (!supabase) {
-      const account: NetflixAccount = {
-        id: crypto.randomUUID(),
-        created_at: new Date().toISOString(),
-        expires_at,
-        service_type: selectedService,
-        use_automated_code: true,
-        ...form,
-        email: normalizedEmail,
-      };
       const createdLinks = slots.map((slot) => ({
         id: crypto.randomUUID(),
-        account_id: account.id,
-        email: account.email,
+        account_id: optimisticAccount.id,
+        email: optimisticAccount.email,
         created_at: new Date().toISOString(),
         ...slot,
       }));
-      setAccounts((current) => [account, ...current]);
       setLinks((current) => [...current, ...createdLinks]);
-      setSelectedAccountId(account.id);
-      setScreen("account");
+      optimisticAccountVisible = false;
+      setAccounts((current) => current.slice(0, adminAccountsPageSize));
       setToast({ label: "تم إنشاء الحساب محلياً للمعاينة", at: Date.now() });
       return true;
     }
@@ -741,13 +802,14 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       const { data, error: accountError } = await supabase
         .from("accounts")
         .insert({ ...form, email: normalizedEmail, expires_at, service_type: selectedService, use_automated_code: true })
-        .select()
+        .select("id,email,password,account_type,expires_at,created_at,service_type,use_automated_code,supplier_code_url")
         .single();
 
       if (accountError) throw accountError;
       account = data as NetflixAccount;
     } catch (error) {
       setLoading(false);
+      rollbackOptimisticAccount();
       if (isDuplicateEmailError(error)) {
         setToast({ label: duplicateEmailSaveMessage, at: Date.now(), tone: "error" });
         return { ok: false, error: duplicateEmailSaveMessage };
@@ -759,21 +821,27 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
 
     if (!account) {
       setLoading(false);
+      rollbackOptimisticAccount();
       setToast({ label: "تعذر إنشاء الحساب", at: Date.now(), tone: "error" });
       return false;
     }
 
     let linksError: unknown = null;
+    let createdLinks: CustomerLink[] = [];
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
-        const { error } = await supabase.from("customer_links").insert(
-          slots.map((slot) => ({
-            account_id: account.id,
-            email: normalizedEmail,
-            ...slot,
-          })),
-        );
+        const { data, error } = await supabase
+          .from("customer_links")
+          .insert(
+            slots.map((slot) => ({
+              account_id: account.id,
+              email: normalizedEmail,
+              ...slot,
+            })),
+          )
+          .select("*");
         if (error) throw error;
+        createdLinks = (data || []) as CustomerLink[];
         linksError = null;
         break;
       } catch (error) {
@@ -791,8 +859,10 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     }
 
     if (linksError) {
+      await supabase.from("accounts").delete().eq("id", account.id);
+      rollbackOptimisticAccount();
+      setAccounts((current) => current.filter((item) => item.id !== account?.id));
       if (isCustomerLinksEmailConstraintError(linksError)) {
-        await supabase.from("accounts").delete().eq("id", account.id);
         setLoading(false);
         setToast({
           label: "يوجد قيد مكرر خاطئ على روابط العملاء. نفّذ SQL إزالة unique_customer_email ثم أعد المحاولة.",
@@ -806,29 +876,36 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       }
 
       if (isShortIdConflictError(linksError)) {
-        await supabase.from("accounts").delete().eq("id", account.id);
         setLoading(false);
         setToast({ label: "تعذر حجز رابط قصير فريد، أعد المحاولة", at: Date.now(), tone: "error" });
         return { ok: false, error: "تعذر حجز رابط قصير فريد، أعد المحاولة" };
       }
 
       if (isDuplicateEmailError(linksError)) {
-        await supabase.from("accounts").delete().eq("id", account.id);
         setLoading(false);
         setToast({ label: duplicateEmailSaveMessage, at: Date.now(), tone: "error" });
         return { ok: false, error: duplicateEmailSaveMessage };
       }
 
       console.error("Supabase customer links insert error:", linksError);
-      setToast({ label: "تم إنشاء الحساب وتعذر إنشاء الروابط", at: Date.now(), tone: "error" });
-    } else {
-      setToast({ label: "تم إنشاء الحساب والروابط", at: Date.now() });
+      setLoading(false);
+      setToast({ label: "تعذر حفظ الحساب والروابط، تمت إزالة الحساب المؤقت", at: Date.now(), tone: "error" });
+      return false;
     }
-    await loadData();
-    setSelectedAccountId(account.id);
-    setScreen("account");
+
+    optimisticAccountVisible = false;
+    setAccounts((current) => [
+      account as NetflixAccount,
+      ...current.filter((item) => item.id !== optimisticId && item.id !== account?.id),
+    ].slice(0, adminAccountsPageSize));
+    setLinks((current) => [
+      ...current.filter((item) => !createdLinks.some((createdLink) => createdLink.id === item.id)),
+      ...createdLinks,
+    ]);
+    setSelectedAccountId((current) => (current === optimisticId ? account?.id || null : current));
     setLoading(false);
-    return !linksError;
+    setToast({ label: "تم حفظ الحساب والروابط بنجاح", at: Date.now() });
+    return true;
   }
 
   async function updateAccount(
@@ -1155,8 +1232,8 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       links
         .filter(
           (link) =>
-            link.link_number != null &&
-            String(link.link_number).includes(normalizedCustomerNumber),
+            (link.link_number != null && String(link.link_number).includes(normalizedCustomerNumber)) ||
+            String(link.short_id || "").toLowerCase().includes(normalizedCustomerNumber),
         )
         .map((link) => link.account_id),
     );
@@ -1561,7 +1638,7 @@ function Dashboard({
               <input
                 value={query}
                 onChange={(event) => onQuery(event.target.value)}
-                placeholder="ابحث بالبريد الإلكتروني أو رقم العميل مثل 100..."
+                placeholder="ابحث بالبريد الإلكتروني أو رقم العميل أو الكود..."
                 className="h-13 w-full rounded-xl border-2 border-[#D8C1FF] bg-white px-4 pr-12 text-sm font-bold outline-none transition duration-300 placeholder:text-zinc-400 focus:border-[#8B35F5] focus:shadow-[0_0_0_4px_rgba(139,53,245,0.10)]"
               />
             </div>
@@ -2453,9 +2530,20 @@ function AccountForm({
     event.preventDefault();
     setFormError("");
     const supplier_code_url = supplierCodeUrl.trim() || undefined;
-    const result = initialAccount
-      ? await onUpdate(initialAccount.id, { email: normalizeEmail(email), password, supplier_code_url })
-      : await onAdd({ email: normalizeEmail(email), password, account_type: accountType, supplier_code_url });
+    const cleanEmail = normalizeEmail(email);
+
+    if (!cleanEmail) {
+      setFormError(emptyEmailMessage);
+      return;
+    }
+
+    if (!initialAccount) {
+      onClose();
+      void onAdd({ email: cleanEmail, password, account_type: accountType, supplier_code_url });
+      return;
+    }
+
+    const result = await onUpdate(initialAccount.id, { email: cleanEmail, password, supplier_code_url });
 
     if (accountFormSucceeded(result)) {
       onClose();
