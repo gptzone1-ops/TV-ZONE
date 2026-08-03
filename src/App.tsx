@@ -4755,9 +4755,9 @@ function ExtraCreditRequestAction({
     <button
       type="button"
       onClick={onOpen}
-      className="mt-3 flex min-h-13 w-full items-center justify-center gap-2 rounded-2xl bg-[#8B35F5] px-4 text-sm font-black text-white shadow-[0_14px_32px_rgba(139,53,245,0.28)] transition hover:-translate-y-0.5 hover:bg-[#7626DD] hover:shadow-[0_18px_36px_rgba(139,53,245,0.34)]"
+      className="mt-3 flex min-h-[56px] w-full items-center justify-center gap-2.5 rounded-2xl bg-[#8B35F5] px-5 py-3.5 text-base font-bold text-white shadow-[0_14px_32px_rgba(139,53,245,0.28)] transition hover:-translate-y-0.5 hover:bg-[#7626DD] hover:shadow-[0_18px_36px_rgba(139,53,245,0.34)] active:translate-y-0"
     >
-      <Sparkles className="h-5 w-5" />
+      <Sparkles className="h-5 w-5 shrink-0" />
       طلب رصيد إضافي
     </button>
   );
@@ -4844,9 +4844,15 @@ function ExtraCreditRequestModal({
   }
 
   return (
-    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-zinc-950/60 p-4 backdrop-blur-sm" dir="rtl">
-      <form onSubmit={submit} className="max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-3xl border border-[#E8DCFF] bg-white p-5 shadow-premium-lg md:p-7">
-        <div className="flex items-start justify-between gap-4">
+    <div
+      className="fixed inset-0 z-[90] flex items-end justify-center bg-zinc-950/60 p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] backdrop-blur-sm sm:items-center sm:p-4"
+      dir="rtl"
+    >
+      <form
+        onSubmit={submit}
+        className="flex max-h-[calc(100dvh-1rem)] w-full max-w-lg flex-col overflow-hidden rounded-3xl border border-[#E8DCFF] bg-white shadow-premium-lg sm:max-h-[90dvh]"
+      >
+        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-zinc-100 p-5 pb-4 sm:p-7 sm:pb-5">
           <div>
             <p className="text-xs font-black text-[#8B35F5]">مراجعة من إدارة المتجر</p>
             <h2 className="mt-1 text-2xl font-black">طلب رصيد إضافي</h2>
@@ -4857,6 +4863,7 @@ function ExtraCreditRequestModal({
           </button>
         </div>
 
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-6 pt-1 sm:px-6">
         <label className="mt-6 block">
           <span className="mb-2 block text-sm font-black">سبب المشكلة</span>
           <select
@@ -4947,8 +4954,9 @@ function ExtraCreditRequestModal({
         </section>
 
         {error && <p className="mt-4 rounded-xl bg-rose-50 px-4 py-3 text-center text-xs font-black text-rose-700">{error}</p>}
+        </div>
 
-        <div className="mt-6 grid grid-cols-[1fr_auto] gap-3">
+        <div className="grid shrink-0 grid-cols-[minmax(0,1fr)_auto] gap-3 border-t border-zinc-100 bg-white px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-4 shadow-[0_-12px_30px_rgba(24,24,27,0.06)] sm:px-6 sm:pb-5">
           <div
             className="rounded-xl"
             onClick={() => {
