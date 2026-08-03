@@ -3928,8 +3928,6 @@ function CustomerView({
         created_at: new Date().toISOString(),
       };
       setExtraCreditRequest(demoRequest);
-      setShowExtraCreditModal(false);
-      setToast({ label: "تم تقديم طلبك بنجاح وهو قيد المراجعة حالياً", at: Date.now() });
       return true;
     }
 
@@ -3969,8 +3967,6 @@ function CustomerView({
       }
 
       setExtraCreditRequest(data as ExtraCreditRequest);
-      setShowExtraCreditModal(false);
-      setToast({ label: "تم تقديم طلبك بنجاح وهو قيد المراجعة حالياً", at: Date.now() });
       notifyExtraCreditRequestInBackground(data.id);
       return true;
     } catch (error) {
@@ -4807,6 +4803,7 @@ function ExtraCreditRequestModal({
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
   const [pledgeAccepted, setPledgeAccepted] = useState(false);
   const requiresVideo = reasonType === "استبدال الجهاز أو الدخول بجهاز آخر";
 
@@ -4845,8 +4842,32 @@ function ExtraCreditRequestModal({
     }
     setError("");
     setSubmitting(true);
-    await onSubmit(reasonType, cleanDescription, screenshot);
+    const succeeded = await onSubmit(reasonType, cleanDescription, screenshot);
     setSubmitting(false);
+    if (succeeded) setSubmitted(true);
+  }
+
+  if (submitted) {
+    return (
+      <div className="fixed inset-0 z-[90] flex items-center justify-center bg-zinc-950/60 p-4 backdrop-blur-sm" dir="rtl">
+        <div className="w-full max-w-md rounded-3xl border border-emerald-200 bg-white p-6 text-center shadow-premium-lg md:p-8" role="dialog" aria-modal="true" aria-label="تم استلام الطلب">
+          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-600 shadow-[0_12px_30px_rgba(5,150,105,0.16)]">
+            <CircleCheck className="h-8 w-8" />
+          </div>
+          <h2 className="mt-5 text-2xl font-black text-zinc-950">تم استلام طلبك بنجاح! 🚀</h2>
+          <p className="mt-4 text-sm font-bold leading-8 text-zinc-600">
+            تستغرق عملية مراجعة الطلب من دقيقة واحدة إلى ساعة كحد أقصى. سنقوم بتحديث حسابك فور الانتهاء.
+          </p>
+          <button
+            type="button"
+            onClick={onClose}
+            className="mt-6 h-13 w-full rounded-xl bg-[#8B35F5] px-5 text-sm font-black text-white shadow-[0_12px_28px_rgba(139,53,245,0.24)] transition hover:bg-[#7626DD]"
+          >
+            حسناً، فهمت
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (
