@@ -5078,20 +5078,22 @@ function ExtraCreditRequestModal({
               <p className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-bold leading-7 text-rose-800">
                 {rejectionReason}
               </p>
-              <button
-                type="button"
-                onClick={resetForAnotherRequest}
-                className="mt-5 min-h-13 w-full rounded-xl bg-[#8B35F5] px-5 text-sm font-black text-white shadow-[0_12px_28px_rgba(139,53,245,0.24)] transition hover:bg-[#7626DD]"
-              >
-                تقديم طلب رصيد جديد
-              </button>
-              <button
-                type="button"
-                onClick={onClose}
-                className="mt-3 min-h-12 w-full rounded-xl border border-zinc-200 bg-white px-5 text-sm font-black text-zinc-600 transition hover:bg-zinc-50"
-              >
-                إغلاق
-              </button>
+              <div className="mt-5 flex w-full flex-col gap-3">
+                <button
+                  type="button"
+                  onClick={resetForAnotherRequest}
+                  className="flex min-h-14 w-full items-center justify-center rounded-2xl bg-[#8B35F5] px-5 py-4 text-base font-bold text-white shadow-[0_12px_28px_rgba(139,53,245,0.24)] transition hover:-translate-y-0.5 hover:bg-[#7626DD]"
+                >
+                  تقديم طلب رصيد جديد
+                </button>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="flex min-h-14 w-full items-center justify-center rounded-2xl border border-zinc-200 bg-white px-5 py-4 text-base font-bold text-zinc-600 transition hover:bg-zinc-50"
+                >
+                  إغلاق
+                </button>
+              </div>
             </>
           ) : (
             <>
