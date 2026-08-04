@@ -4812,7 +4812,7 @@ function ExtraCreditRequestAction({
           onClick={onOpen}
           className="mt-3 min-h-12 w-full rounded-xl bg-[#8B35F5] px-4 text-sm font-black text-white shadow-[0_10px_24px_rgba(139,53,245,0.22)] transition hover:bg-[#7626DD]"
         >
-          تقديم طلب رصيد مرة أخرى
+          تقديم طلب رصيد جديد
         </button>
       </div>
     );
@@ -4889,7 +4889,7 @@ function ExtraCreditRequestModal({
   }, [screenshot]);
 
   async function waitForDecision(createdRequest: ExtraCreditRequest) {
-    const deadline = Date.now() + 12_000;
+    const deadline = Date.now() + 25_000;
     let latestRequest = createdRequest;
 
     while (Date.now() < deadline && mountedRef.current) {
@@ -4899,8 +4899,7 @@ function ExtraCreditRequestModal({
 
         if (
           latestRequest.status === "approved" ||
-          latestRequest.status === "rejected" ||
-          latestRequest.ai_decision === "manual_review"
+          latestRequest.status === "rejected"
         ) {
           return latestRequest;
         }
@@ -4908,7 +4907,19 @@ function ExtraCreditRequestModal({
         console.error("Extra credit request polling error:", pollError);
       }
 
-      await new Promise((resolve) => window.setTimeout(resolve, 1_200));
+      const remainingWait = Math.min(1_200, Math.max(0, deadline - Date.now()));
+      if (remainingWait > 0) {
+        await new Promise((resolve) => window.setTimeout(resolve, remainingWait));
+      }
+    }
+
+    if (mountedRef.current) {
+      try {
+        const finalRequest = await onCheckStatus(createdRequest.id);
+        if (finalRequest) latestRequest = finalRequest;
+      } catch (finalPollError) {
+        console.error("Extra credit request final polling error:", finalPollError);
+      }
     }
 
     return latestRequest;
@@ -4990,7 +5001,7 @@ function ExtraCreditRequestModal({
               <p className="mt-4 text-sm font-bold leading-8 text-zinc-700">
                 جاري فحص المرفق والطلب بواسطة الذكاء الاصطناعي... 🤖
               </p>
-              <p className="mt-2 text-xs font-bold text-zinc-500">يظهر القرار هنا تلقائياً خلال 12 ثانية.</p>
+              <p className="mt-2 text-xs font-bold text-zinc-500">يظهر القرار هنا تلقائياً خلال 25 ثانية.</p>
             </>
           ) : phase === "approved" ? (
             <>
@@ -5023,7 +5034,7 @@ function ExtraCreditRequestModal({
                 onClick={resetForAnotherRequest}
                 className="mt-5 min-h-13 w-full rounded-xl bg-[#8B35F5] px-5 text-sm font-black text-white shadow-[0_12px_28px_rgba(139,53,245,0.24)] transition hover:bg-[#7626DD]"
               >
-                تقديم طلب رصيد مرة أخرى
+                تقديم طلب رصيد جديد
               </button>
               <button
                 type="button"
