@@ -3527,7 +3527,6 @@ function CustomerView({
     deviceType: "mobile",
   });
   const deviceLabel = (device: DeviceView) => (device === "mobile" ? "جوال / آيباد / بي سي / لابتوب" : "شاشة / سوني");
-  const deviceChoiceLocked = Boolean(deviceView);
   const codeSecondsRemaining = codeDisplayExpiresAt
     ? Math.max(0, Math.ceil((codeDisplayExpiresAt - nowTick) / 1000))
     : 0;
@@ -3542,6 +3541,7 @@ function CustomerView({
   const codeRequestedCount = Math.max(0, link?.code_requested_count ?? 0);
   const hasCodeRequestCredit = codeRequestedCount < codeRequestLimit;
   const attemptUsed = !hasCodeRequestCredit;
+  const deviceChoiceLocked = attemptUsed;
   const hasUsedTvLink = link?.has_used_tv_link === true;
   const tvAttemptUsed = attemptUsed || hasUsedTvLink;
   const floatingSupportDevice: DeviceView = deviceView || "mobile";
@@ -3861,22 +3861,38 @@ function CustomerView({
   }
 
   function requestDeviceChoice(device: DeviceView) {
-    if (!automatedCodeEnabled || deviceChoiceLocked || attemptUsed) return;
+    if (!automatedCodeEnabled || deviceChoiceLocked || device === deviceView) return;
     setPendingDeviceView(device);
     setAgreeDeviceChoice(false);
   }
 
   async function confirmDeviceChoice() {
-    if (!pendingDeviceView || !link?.id || attemptUsed) return;
+    if (!pendingDeviceView || !link?.id || deviceChoiceLocked) return;
     const selectedDevice = pendingDeviceView;
+
+    codeSearchActiveRef.current = false;
+    clearCodeSearchTimers();
+    tvSearchActiveRef.current = false;
+    setShowPreRequestModal(false);
+    setAgreePreRequest(false);
+    setShowTvRequestModal(false);
+    setAgreeTvRequest(false);
+    setCodeRequestState("idle");
+    setCodeRequestSeconds(0);
+    setCodeDisplayExpiresAt(null);
+    setTvRequestState("idle");
+    setTvSearchDeadlineAt(null);
+    setTvDisplayExpiresAt(null);
+    setVisibleTvApprovalUrl(null);
 
     if (supabase) {
       const { data, error } = await supabase
         .from("customer_links")
         .update({ selected_device: selectedDevice })
         .eq("id", link.id)
-        .is("selected_device", null)
-        .select("selected_device")
+        .eq("code_request_limit", codeRequestLimit)
+        .eq("code_requested_count", codeRequestedCount)
+        .select("selected_device,code_request_limit,code_requested_count")
         .maybeSingle();
 
       if (error) {
@@ -3888,15 +3904,15 @@ function CustomerView({
       if (!data?.selected_device) {
         const { data: currentLink, error: refreshError } = await supabase
           .from("customer_links")
-          .select("selected_device")
+          .select("selected_device,code_request_limit,code_requested_count")
           .eq("id", link.id)
           .maybeSingle();
         if (refreshError) console.error("Supabase customer device refresh error:", refreshError);
-        if (currentLink?.selected_device === "mobile" || currentLink?.selected_device === "screen") {
-          setLink((current) =>
-            current ? { ...current, selected_device: currentLink.selected_device } : current,
-          );
-          setDeviceView(currentLink.selected_device);
+        if (currentLink) {
+          setLink((current) => (current ? { ...current, ...currentLink } : current));
+          if (currentLink.selected_device === "mobile" || currentLink.selected_device === "screen") {
+            setDeviceView(currentLink.selected_device);
+          }
         }
         setPendingDeviceView(null);
         setAgreeDeviceChoice(false);
@@ -4347,7 +4363,7 @@ function CustomerView({
                       <button
                         type="button"
                         onClick={() => requestDeviceChoice("mobile")}
-                        disabled={deviceChoiceLocked || attemptUsed}
+                        disabled={deviceChoiceLocked || deviceView === "mobile"}
                         className={cn(
                           "flex min-h-12 items-center justify-center gap-2 rounded-2xl px-3 text-sm font-black transition disabled:cursor-not-allowed",
                           deviceView === "mobile"
@@ -4361,7 +4377,7 @@ function CustomerView({
                       <button
                         type="button"
                         onClick={() => requestDeviceChoice("screen")}
-                        disabled={deviceChoiceLocked || attemptUsed}
+                        disabled={deviceChoiceLocked || deviceView === "screen"}
                         className={cn(
                           "flex min-h-12 items-center justify-center gap-2 rounded-2xl px-3 text-sm font-black transition disabled:cursor-not-allowed",
                           deviceView === "screen"
@@ -4373,13 +4389,13 @@ function CustomerView({
                         شاشة / سوني
                       </button>
                     </div>
-                    {attemptUsed && !deviceChoiceLocked ? (
+                    {deviceChoiceLocked ? (
                       <p className="mt-3 rounded-2xl bg-white/80 px-4 py-3 text-xs font-black text-rose-600">
-                        تم استهلاك رصيد المحاولة ولا يمكن طلب رمز أو رابط جديد قبل تجديده من المشرف.
+                        تم استهلاك رصيد المحاولة وقفل التبديل بين الأجهزة. سيُفتح مجدداً عند قبول طلب رصيد إضافي.
                       </p>
-                    ) : deviceChoiceLocked ? (
+                    ) : deviceView ? (
                       <p className="mt-3 rounded-2xl bg-white/80 px-4 py-3 text-xs font-black text-[#7C2CE8]">
-                        تم تأكيد نوع الجهاز ولا يمكن تغييره.
+                        يمكنك التبديل بين أنواع الأجهزة بحرية حتى يتم استخدام الرمز أو رابط الدخول الحالي.
                       </p>
                     ) : (
                       <p className="mt-3 rounded-2xl bg-white/80 px-4 py-3 text-xs font-black text-zinc-600">
@@ -4425,6 +4441,12 @@ function CustomerView({
                             allowFullScreen
                           />
                         </div>
+                      </div>
+
+                      <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-4 text-right shadow-[0_10px_26px_rgba(217,119,6,0.10)]">
+                        <p className="text-sm font-black leading-7 text-amber-900">
+                          💡 ملاحظة مهمة: إذا كانت شاشتك تظهر كوداً رقمياً بدلاً من الرابط، يمكنك التحويل إلى قسم (جوال / آيباد / بي سي / لابتوب) وأخذ الكود المباشر من هناك وتسجيل الدخول به في شاشتك بسهولة!
+                        </p>
                       </div>
 
                       {tvRequestState === "ready" && visibleTvApprovalUrl ? (
@@ -5376,7 +5398,7 @@ function DeviceChoiceModal({
           </div>
           <h2 className="text-3xl font-black md:text-4xl">تأكيد نوع الجهاز</h2>
           <p className="mt-4 text-sm font-bold leading-7 text-zinc-700">
-            هل أنت متأكد من اختيار جهاز ({deviceLabel})؟ تنبيه: لا يمكنك تغيير نوع الجهاز بعد التأكيد.
+            هل تريد الانتقال إلى جهاز ({deviceLabel})؟ يمكنك التبديل مرة أخرى ما دمت لم تستخدم الرمز أو رابط الدخول.
           </p>
         </div>
 
@@ -5388,7 +5410,7 @@ function DeviceChoiceModal({
             className="mt-1 h-5 w-5 rounded border-[#CDBAF2] text-[#8B35F5] focus:ring-[#8B35F5]"
           />
           <span className="text-sm font-black leading-7 text-zinc-800 md:text-base">
-            أقر بأنني اخترت الجهاز الصحيح ولن أتمكن من تغيير خياري لاحقاً.
+            أؤكد الانتقال إلى هذا النوع من الأجهزة، وأعلم أن التبديل سيُقفل بعد استهلاك المحاولة.
           </span>
         </label>
 
