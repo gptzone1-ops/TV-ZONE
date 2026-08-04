@@ -57,6 +57,25 @@ async function answerCallbackQuery(callbackQueryId, text, showAlert = false) {
   }
 }
 
+async function editReviewMessage(message, text) {
+  if (!message?.chat?.id || !message?.message_id) return;
+
+  const isMediaMessage = Boolean(
+    message.photo?.length || message.video || message.animation || message.document,
+  );
+  const sharedPayload = {
+    chat_id: message.chat.id,
+    message_id: message.message_id,
+    reply_markup: { inline_keyboard: [] },
+  };
+
+  if (isMediaMessage) {
+    await callTelegram("editMessageCaption", { ...sharedPayload, caption: text });
+  } else {
+    await callTelegram("editMessageText", { ...sharedPayload, text });
+  }
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ success: false, error: "method_not_allowed" });
@@ -111,15 +130,12 @@ export default async function handler(req, res) {
       await answerCallbackQuery(callbackQuery.id, "تمت معالجة هذا الطلب مسبقاً.", true);
       if (request && callbackQuery.message?.chat?.id && callbackQuery.message?.message_id) {
         try {
-          await callTelegram("editMessageText", {
-            chat_id: callbackQuery.message.chat.id,
-            message_id: callbackQuery.message.message_id,
-            text:
-              request.status === "approved"
-                ? `✅ تمت معالجة هذا الطلب وقبوله مسبقاً.\n\nرقم الطلب: ${requestId}`
-                : `❌ تمت معالجة هذا الطلب ورفضه مسبقاً.\n\nرقم الطلب: ${requestId}`,
-            reply_markup: { inline_keyboard: [] },
-          });
+          await editReviewMessage(
+            callbackQuery.message,
+            request.status === "approved"
+              ? `✅ تمت معالجة هذا الطلب وقبوله مسبقاً.\n\nرقم الطلب: ${requestId}`
+              : `❌ تمت معالجة هذا الطلب ورفضه مسبقاً.\n\nرقم الطلب: ${requestId}`,
+          );
         } catch (editError) {
           console.error("Telegram already-reviewed message update failed:", editError);
         }
@@ -165,12 +181,10 @@ export default async function handler(req, res) {
 
     if (callbackQuery.message?.chat?.id && callbackQuery.message?.message_id) {
       try {
-        await callTelegram("editMessageText", {
-          chat_id: callbackQuery.message.chat.id,
-          message_id: callbackQuery.message.message_id,
-          text: `${resultText}\n\nرقم الطلب: ${requestId}`,
-          reply_markup: { inline_keyboard: [] },
-        });
+        await editReviewMessage(
+          callbackQuery.message,
+          `${resultText}\n\nرقم الطلب: ${requestId}`,
+        );
       } catch (editError) {
         console.error("Telegram reviewed message update failed:", editError);
       }

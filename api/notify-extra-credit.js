@@ -340,13 +340,78 @@ async function analyzeAttachment(supabase, request, customer, email) {
   }
 }
 
-async function sendTelegram(messageText, requestId, withActions) {
+function buildTelegramActions(requestId, withActions) {
+  if (!withActions) return undefined;
+  return {
+    inline_keyboard: [
+      [
+        { text: "✅ قبول الطلب", callback_data: `approve:${requestId}` },
+        { text: "❌ رفض الطلب", callback_data: `reject:${requestId}` },
+      ],
+    ],
+  };
+}
+
+function fitTelegramCaption(messageText) {
+  const maxLength = 1000;
+  if (messageText.length <= maxLength) return messageText;
+
+  const keptLines = [];
+  let currentLength = 0;
+  for (const line of messageText.split("\n")) {
+    const nextLength = currentLength + line.length + (keptLines.length ? 1 : 0);
+    if (nextLength > maxLength - 4) break;
+    keptLines.push(line);
+    currentLength = nextLength;
+  }
+  return `${keptLines.join("\n")}\n...`;
+}
+
+function buildAttachmentFallback(messageText, request) {
+  const mediaUrl = String(request?.image_url || "").trim();
+  if (!mediaUrl) return messageText;
+  const safeUrl = mediaUrl.replace(/([()])/g, "\\$1");
+  const label = request?.attachment_type === "video" ? "🎥 عرض الفيديو المرفق" : "🖼️ عرض المرفق";
+  return `${messageText}\n\n[${label}](${safeUrl})`;
+}
+
+async function sendTelegram(messageText, requestId, withActions, request) {
   if (!telegramBotToken || !telegramChatId) {
     console.error("Telegram notification skipped: missing configuration");
     return false;
   }
 
+  const replyMarkup = buildTelegramActions(requestId, withActions);
+  const mediaUrl = String(request?.image_url || "").trim();
+
   try {
+    if (mediaUrl) {
+      const isVideo = request?.attachment_type === "video";
+      const mediaMethod = isVideo ? "sendVideo" : "sendPhoto";
+      const mediaField = isVideo ? "video" : "photo";
+      const mediaResponse = await fetch(
+        `https://api.telegram.org/bot${telegramBotToken}/${mediaMethod}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: telegramChatId,
+            [mediaField]: mediaUrl,
+            caption: fitTelegramCaption(messageText),
+            parse_mode: "Markdown",
+            ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+          }),
+        },
+      );
+
+      if (mediaResponse.ok) return true;
+      console.error(
+        "Telegram media notification failed; falling back to text:",
+        mediaResponse.status,
+        await mediaResponse.text(),
+      );
+    }
+
     const response = await fetch(
       `https://api.telegram.org/bot${telegramBotToken}/sendMessage`,
       {
@@ -354,20 +419,9 @@ async function sendTelegram(messageText, requestId, withActions) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           chat_id: telegramChatId,
-          text: messageText,
+          text: buildAttachmentFallback(messageText, request),
           parse_mode: "Markdown",
-          ...(withActions
-            ? {
-                reply_markup: {
-                  inline_keyboard: [
-                    [
-                      { text: "✅ قبول الطلب", callback_data: `approve:${requestId}` },
-                      { text: "❌ رفض الطلب", callback_data: `reject:${requestId}` },
-                    ],
-                  ],
-                },
-              }
-            : {}),
+          ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
         }),
       },
     );
@@ -383,6 +437,10 @@ async function sendTelegram(messageText, requestId, withActions) {
 }
 
 function buildTelegramMessage({ request, email, customerCode, deviceType, assessment, outcome }) {
+  const linkedCustomer = Array.isArray(request.customer_links)
+    ? request.customer_links[0]
+    : request.customer_links;
+  const profileName = linkedCustomer?.profile_label || linkedCustomer?.profile_name || "غير متوفر";
   const confidence = Math.round((assessment?.confidence || 0) * 100);
   const heading =
     outcome.decision === "auto_approved"
@@ -396,15 +454,13 @@ function buildTelegramMessage({ request, email, customerCode, deviceType, assess
     "-----------------------------",
     `📧 *البريد الإلكتروني:* ${escapeMarkdown(email)}`,
     `🆔 *رقم العميل:* ${escapeMarkdown(customerCode)}`,
+    `👤 *اسم البروفايل:* ${escapeMarkdown(profileName)}`,
     `📱 *نوع الجهاز:* ${escapeMarkdown(deviceType)}`,
     `❓ *سبب المشكلة:* ${escapeMarkdown(request.reason_type)}`,
     `📝 *وصف العميل:* ${escapeMarkdown(request.description)}`,
     `🧠 *تحليل Gemini:* ${escapeMarkdown(assessment?.summary || outcome.reason)}`,
     `📊 *درجة الثقة:* ${confidence}%`,
     `⚖️ *سبب القرار:* ${escapeMarkdown(outcome.reason)}`,
-    outcome.decision === "manual_review" && request.image_url
-      ? `🔗 *رابط المرفق:* ${escapeMarkdown(request.image_url)}`
-      : null,
   ]
     .filter(Boolean)
     .join("\n");
@@ -516,6 +572,7 @@ export default async function handler(req, res) {
       }),
       requestId,
       true,
+      request,
     );
     return res.status(200).json({ success: true, decision: "manual_review" });
   }
@@ -539,6 +596,7 @@ export default async function handler(req, res) {
       }),
       requestId,
       true,
+      request,
     );
     return res.status(200).json({ success: true, decision: "manual_review" });
   }
@@ -559,6 +617,7 @@ export default async function handler(req, res) {
       buildTelegramMessage({ request, email, customerCode, deviceType, assessment, outcome }),
       requestId,
       true,
+      request,
     );
     return res.status(200).json({ success: true, decision: outcome.decision });
   }
@@ -574,24 +633,7 @@ export default async function handler(req, res) {
       buildTelegramMessage({ request, email, customerCode, deviceType, assessment, outcome }),
       requestId,
       true,
-    );
-    return res.status(200).json({ success: true, decision: outcome.decision });
-  }
-
-  const { error: removeError } = await supabase.storage
-    .from(storageObject.bucket)
-    .remove([storageObject.path]);
-  if (removeError) {
-    console.error("AI-reviewed attachment deletion failed:", removeError);
-    outcome = {
-      decision: "manual_review",
-      reason: "تعذر حذف المرفق بأمان بعد التحليل، لذلك أحيل الطلب للمراجعة اليدوية.",
-    };
-    await saveManualReview(supabase, requestId, assessment, outcome.reason);
-    await sendTelegram(
-      buildTelegramMessage({ request, email, customerCode, deviceType, assessment, outcome }),
-      requestId,
-      true,
+      request,
     );
     return res.status(200).json({ success: true, decision: outcome.decision });
   }
@@ -626,7 +668,15 @@ export default async function handler(req, res) {
     buildTelegramMessage({ request, email, customerCode, deviceType, assessment, outcome }),
     requestId,
     false,
+    request,
   );
+
+  const { error: removeError } = await supabase.storage
+    .from(storageObject.bucket)
+    .remove([storageObject.path]);
+  if (removeError) {
+    console.error("AI-reviewed attachment deletion failed after Telegram delivery:", removeError);
+  }
 
   return res.status(200).json({ success: true, decision: outcome.decision });
 }
