@@ -419,6 +419,7 @@ async function saveManualReview(supabase, requestId, assessment, reason) {
       ai_analysis: assessment?.summary || reason,
       ai_model: geminiModel,
       ai_reviewed_at: new Date().toISOString(),
+      ai_rejection_reason: null,
       review_reason: null,
     })
     .eq("id", requestId)
@@ -613,6 +614,7 @@ export default async function handler(req, res) {
       ai_analysis: assessment.summary,
       ai_model: geminiModel,
       ai_reviewed_at: new Date().toISOString(),
+      ai_rejection_reason: reviewedStatus === "rejected" ? outcome.reason : null,
       review_reason: reviewedStatus === "rejected" ? outcome.reason : null,
     })
     .eq("id", requestId);

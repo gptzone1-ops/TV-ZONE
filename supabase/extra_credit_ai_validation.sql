@@ -4,6 +4,7 @@ alter table public.extra_credit_requests
   add column if not exists ai_analysis text,
   add column if not exists ai_model text,
   add column if not exists ai_reviewed_at timestamptz,
+  add column if not exists ai_rejection_reason text,
   add column if not exists review_reason text;
 
 alter table public.extra_credit_requests

@@ -19,6 +19,7 @@ create table if not exists public.extra_credit_requests (
   ai_analysis text,
   ai_model text,
   ai_reviewed_at timestamptz,
+  ai_rejection_reason text,
   review_reason text,
   created_at timestamptz not null default now(),
   reviewed_at timestamptz
@@ -33,6 +34,7 @@ alter table public.extra_credit_requests
   add column if not exists ai_analysis text,
   add column if not exists ai_model text,
   add column if not exists ai_reviewed_at timestamptz,
+  add column if not exists ai_rejection_reason text,
   add column if not exists review_reason text;
 
 alter table public.extra_credit_requests

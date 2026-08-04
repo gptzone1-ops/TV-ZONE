@@ -66,6 +66,7 @@ export type ExtraCreditRequest = {
   ai_analysis?: string | null;
   ai_model?: string | null;
   ai_reviewed_at?: string | null;
+  ai_rejection_reason?: string | null;
   review_reason?: string | null;
   customer_links?: CustomerLink;
 };
