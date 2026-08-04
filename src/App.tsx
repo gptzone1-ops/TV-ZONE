@@ -3919,6 +3919,7 @@ function CustomerView({
     reasonType: ExtraCreditReason,
     description: string,
     screenshot: File,
+    onProgress?: (progress: number) => void,
   ): Promise<ExtraCreditRequest | null> {
     if (!link?.id || extraCreditRequest?.status === "pending") return null;
     const cleanDescription = description.trim();
@@ -3935,14 +3936,16 @@ function CustomerView({
         description: cleanDescription,
         image_url: URL.createObjectURL(screenshot),
         attachment_type: reasonType === "استبدال الجهاز أو الدخول بجهاز آخر" ? "video" : "image",
-        status: "pending",
+        status: "approved",
         created_at: new Date().toISOString(),
       };
       setExtraCreditRequest(demoRequest);
+      onProgress?.(100);
       return demoRequest;
     }
 
     try {
+      onProgress?.(5);
       const attachmentType = reasonType === "استبدال الجهاز أو الدخول بجهاز آخر" ? "video" : "image";
       const extension =
         screenshot.name.split(".").pop()?.toLowerCase().replace(/[^a-z0-9]/g, "") ||
@@ -3953,6 +3956,7 @@ function CustomerView({
         .from(extraCreditStorageBucket)
         .upload(storagePath, screenshot, { contentType: screenshot.type, upsert: false });
       if (uploadError) throw uploadError;
+      onProgress?.(30);
 
       const { data: publicUrlData } = supabase.storage.from(extraCreditStorageBucket).getPublicUrl(storagePath);
       const imageUrl = publicUrlData.publicUrl;
@@ -3978,6 +3982,7 @@ function CustomerView({
       }
 
       setExtraCreditRequest(data as ExtraCreditRequest);
+      onProgress?.(35);
       processExtraCreditRequestInBackground(data.id);
       return data as ExtraCreditRequest;
     } catch (error) {
@@ -4854,7 +4859,12 @@ function ExtraCreditRequestModal({
   onCheckStatus,
 }: {
   onClose: () => void;
-  onSubmit: (reasonType: ExtraCreditReason, description: string, screenshot: File) => Promise<ExtraCreditRequest | null>;
+  onSubmit: (
+    reasonType: ExtraCreditReason,
+    description: string,
+    screenshot: File,
+    onProgress?: (progress: number) => void,
+  ) => Promise<ExtraCreditRequest | null>;
   onCheckStatus: (requestId: string) => Promise<ExtraCreditRequest | null>;
 }) {
   type ReviewPhase = "form" | "checking" | "approved" | "rejected" | "manual";
@@ -4867,6 +4877,7 @@ function ExtraCreditRequestModal({
   const [pledgeAccepted, setPledgeAccepted] = useState(false);
   const [phase, setPhase] = useState<ReviewPhase>("form");
   const [decisionRequest, setDecisionRequest] = useState<ExtraCreditRequest | null>(null);
+  const [reviewProgress, setReviewProgress] = useState(0);
   const mountedRef = useRef(true);
   const manualCloseTimerRef = useRef<number | null>(null);
   const requiresVideo = reasonType === "استبدال الجهاز أو الدخول بجهاز آخر";
@@ -4879,6 +4890,21 @@ function ExtraCreditRequestModal({
   }, []);
 
   useEffect(() => {
+    if (phase !== "checking") return;
+
+    const progressTimer = window.setInterval(() => {
+      setReviewProgress((current) => {
+        if (current < 30) return Math.min(29, current + 2);
+        if (current < 80) return Math.min(79, current + 1.5);
+        if (current < 96) return Math.min(96, current + 0.35);
+        return current;
+      });
+    }, 350);
+
+    return () => window.clearInterval(progressTimer);
+  }, [phase]);
+
+  useEffect(() => {
     if (!screenshot) {
       setPreviewUrl(null);
       return;
@@ -4889,37 +4915,29 @@ function ExtraCreditRequestModal({
   }, [screenshot]);
 
   async function waitForDecision(createdRequest: ExtraCreditRequest) {
-    const deadline = Date.now() + 25_000;
     let latestRequest = createdRequest;
 
-    while (Date.now() < deadline && mountedRef.current) {
+    while (mountedRef.current) {
       try {
         const refreshedRequest = await onCheckStatus(createdRequest.id);
         if (refreshedRequest) latestRequest = refreshedRequest;
 
         if (
           latestRequest.status === "approved" ||
-          latestRequest.status === "rejected"
+          latestRequest.status === "rejected" ||
+          latestRequest.ai_decision === "manual_review"
         ) {
           return latestRequest;
+        }
+
+        if (latestRequest.ai_decision === "processing") {
+          setReviewProgress((current) => Math.max(current, 45));
         }
       } catch (pollError) {
         console.error("Extra credit request polling error:", pollError);
       }
 
-      const remainingWait = Math.min(1_200, Math.max(0, deadline - Date.now()));
-      if (remainingWait > 0) {
-        await new Promise((resolve) => window.setTimeout(resolve, remainingWait));
-      }
-    }
-
-    if (mountedRef.current) {
-      try {
-        const finalRequest = await onCheckStatus(createdRequest.id);
-        if (finalRequest) latestRequest = finalRequest;
-      } catch (finalPollError) {
-        console.error("Extra credit request final polling error:", finalPollError);
-      }
+      await new Promise((resolve) => window.setTimeout(resolve, 1_200));
     }
 
     return latestRequest;
@@ -4934,6 +4952,7 @@ function ExtraCreditRequestModal({
     setSubmitting(false);
     setPledgeAccepted(false);
     setDecisionRequest(null);
+    setReviewProgress(0);
     setPhase("form");
   }
 
@@ -4962,17 +4981,31 @@ function ExtraCreditRequestModal({
     }
     setError("");
     setSubmitting(true);
-    const createdRequest = await onSubmit(reasonType, cleanDescription, screenshot);
+    setReviewProgress(3);
+    setPhase("checking");
+    const createdRequest = await onSubmit(
+      reasonType,
+      cleanDescription,
+      screenshot,
+      (progress) => setReviewProgress((current) => Math.max(current, progress)),
+    );
     if (!mountedRef.current) return;
     setSubmitting(false);
-    if (!createdRequest) return;
+    if (!createdRequest) {
+      setReviewProgress(0);
+      setPhase("form");
+      return;
+    }
 
     setDecisionRequest(createdRequest);
-    setPhase("checking");
+    setReviewProgress((current) => Math.max(current, 35));
     const reviewedRequest = await waitForDecision(createdRequest);
     if (!mountedRef.current) return;
 
     setDecisionRequest(reviewedRequest);
+    setReviewProgress(100);
+    await new Promise((resolve) => window.setTimeout(resolve, 350));
+    if (!mountedRef.current) return;
     if (reviewedRequest.status === "approved") {
       setPhase("approved");
     } else if (reviewedRequest.status === "rejected") {
@@ -4988,6 +5021,13 @@ function ExtraCreditRequestModal({
       decisionRequest?.ai_rejection_reason ||
       decisionRequest?.review_reason ||
       "لم يستوفِ المرفق شروط طلب الرصيد الإضافي.";
+    const roundedProgress = Math.min(100, Math.round(reviewProgress));
+    const progressLabel =
+      roundedProgress < 30
+        ? "جاري رفع المرفق..."
+        : roundedProgress < 80
+          ? "جاري تحليل الصورة والتحقق من الشروط بواسطة الذكاء الاصطناعي... 🤖"
+          : "جاري إصدار القرار وتحديث الحساب...";
 
     return (
       <div className="fixed inset-0 z-[90] flex items-center justify-center bg-zinc-950/60 p-4 backdrop-blur-sm" dir="rtl">
@@ -4995,13 +5035,22 @@ function ExtraCreditRequestModal({
           {phase === "checking" ? (
             <>
               <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-[#F5EEFF] text-[#8B35F5] shadow-[0_12px_30px_rgba(139,53,245,0.16)]">
-                <RefreshCw className="h-8 w-8 animate-spin" />
+                <Sparkles className="h-8 w-8" />
               </div>
               <h2 className="mt-5 text-2xl font-black text-zinc-950">جاري فحص الطلب</h2>
-              <p className="mt-4 text-sm font-bold leading-8 text-zinc-700">
-                جاري فحص المرفق والطلب بواسطة الذكاء الاصطناعي... 🤖
+              <div className="mt-6 overflow-hidden rounded-full bg-[#EEE5FC] p-1 shadow-inner">
+                <div
+                  className="h-4 rounded-full bg-gradient-to-l from-[#8B35F5] to-[#B469FF] transition-[width] duration-500 ease-out"
+                  style={{ width: `${roundedProgress}%` }}
+                />
+              </div>
+              <div className="mt-3 flex items-center justify-between gap-3 text-sm font-black">
+                <span className="text-zinc-700">{progressLabel}</span>
+                <span className="shrink-0 text-[#7C2CE8]" dir="ltr">{roundedProgress}%</span>
+              </div>
+              <p className="mt-4 text-xs font-bold leading-6 text-zinc-500">
+                ستبقى النافذة مفتوحة حتى وصول قرار القبول أو الرفض النهائي.
               </p>
-              <p className="mt-2 text-xs font-bold text-zinc-500">يظهر القرار هنا تلقائياً خلال 25 ثانية.</p>
             </>
           ) : phase === "approved" ? (
             <>

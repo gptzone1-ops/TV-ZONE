@@ -128,8 +128,8 @@ function determineDecision(request, assessment) {
     }
 
     return {
-      decision: "manual_review",
-      reason: "لم يكن دليل تسجيل الخروج وظهور معرّف الحساب واضحاً بدرجة كافية للقرار التلقائي.",
+      decision: "auto_rejected",
+      reason: "تم رفض الطلب لأن الفيديو لا يوضح تسجيل الخروج وظهور معرّف الحساب بدرجة كافية.",
     };
   }
 
@@ -156,8 +156,8 @@ function determineDecision(request, assessment) {
   }
 
   return {
-    decision: "manual_review",
-    reason: "الدليل غير حاسم ويحتاج إلى مراجعة بشرية قبل تعديل رصيد العميل.",
+    decision: "auto_rejected",
+    reason: "تم رفض الطلب لأن المرفق لا يوضح مشكلة مؤهلة لإضافة رصيد بصورة كافية.",
   };
 }
 
@@ -177,7 +177,7 @@ function buildPrompt(request, customer, email) {
 1. مشكلات الكود أو عدم الفتح: الدليل المقبول يظهر بوضوح Netflix أو خطأ تسجيل دخول، أو لوحة بحث/عدم ظهور الكود، أو تعذر فتح الاشتراك.
 2. استبدال الجهاز: لا يقبل إلا فيديو يوضح عملية Sign Out من الجهاز الأول، مع ظهور البريد الإلكتروني أو اسم الملف A/B/C/D/E بوضوح.
 3. ارفض الدليل الواضح غير المتعلق بالخدمة، الصورة السوداء/الفارغة، الوصف العشوائي غير المفهوم، أو طلب استخدام جهازين معاً دون إثبات تسجيل الخروج.
-4. إذا لم تكن متأكداً تماماً من أحد الشروط، اعتبر الحالة غير حاسمة للمراجعة اليدوية.
+4. إذا لم تتوفر أدلة كافية للقبول، وضح النقص بدقة ليتم رفض الطلب بسبب مفهوم للعميل.
 
 أعد تقييماً واقعياً ودقيقاً. لا تفترض تفاصيل غير ظاهرة في المرفق.`;
 }
@@ -230,11 +230,11 @@ async function uploadToGemini(mediaBlob, mimeType, requestId) {
 
 async function waitForGeminiFile(file) {
   let currentFile = file;
-  for (let attempt = 0; attempt < 36; attempt += 1) {
+  for (let attempt = 0; attempt < 80; attempt += 1) {
     if (currentFile?.state === "ACTIVE") return currentFile;
     if (currentFile?.state === "FAILED") throw new Error("gemini_file_processing_failed");
 
-    await sleep(4000);
+    await sleep(1500);
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/${currentFile.name}`,
       { headers: { "x-goog-api-key": geminiApiKey } },
@@ -269,8 +269,16 @@ async function analyzeAttachment(supabase, request, customer, email) {
   const mimeType = normalizeMimeType(mediaBlob.type, request.attachment_type);
   let geminiFile = null;
   try {
-    geminiFile = await uploadToGemini(mediaBlob, mimeType, request.id);
-    const activeFile = await waitForGeminiFile(geminiFile);
+    let mediaPart;
+    if (request.attachment_type === "video" || mediaBlob.size > 12 * 1024 * 1024) {
+      geminiFile = await uploadToGemini(mediaBlob, mimeType, request.id);
+      const activeFile = await waitForGeminiFile(geminiFile);
+      mediaPart = { fileData: { mimeType, fileUri: activeFile.uri } };
+    } else {
+      const inlineData = Buffer.from(await mediaBlob.arrayBuffer()).toString("base64");
+      mediaPart = { inlineData: { mimeType, data: inlineData } };
+    }
+
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent`,
       {
@@ -284,7 +292,7 @@ async function analyzeAttachment(supabase, request, customer, email) {
             {
               role: "user",
               parts: [
-                { fileData: { mimeType, fileUri: activeFile.uri } },
+                mediaPart,
                 { text: buildPrompt(request, customer, email) },
               ],
             },
@@ -338,6 +346,25 @@ async function analyzeAttachment(supabase, request, customer, email) {
   } finally {
     await deleteGeminiFile(geminiFile?.name);
   }
+}
+
+function isRetryableGeminiError(error) {
+  const message = String(error?.message || error);
+  return /(?:429|500|502|503|504|fetch failed|ECONNRESET|ETIMEDOUT)/i.test(message);
+}
+
+async function analyzeAttachmentWithRetry(supabase, request, customer, email) {
+  let lastError;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await analyzeAttachment(supabase, request, customer, email);
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableGeminiError(error) || attempt === 2) throw error;
+      await sleep(700 * (attempt + 1));
+    }
+  }
+  throw lastError || new Error("gemini_analysis_failed");
 }
 
 function buildTelegramActions(requestId, withActions) {
@@ -579,7 +606,7 @@ export default async function handler(req, res) {
 
   let assessment;
   try {
-    assessment = await analyzeAttachment(supabase, request, customer, email);
+    assessment = await analyzeAttachmentWithRetry(supabase, request, customer, email);
   } catch (error) {
     console.error("Gemini extra credit analysis failed:", error);
     const reason = "تعذر إكمال الفحص الآلي بأمان، لذلك أحيل الطلب للمراجعة اليدوية.";
