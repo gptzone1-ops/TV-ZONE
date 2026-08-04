@@ -6,6 +6,11 @@ export type ExtraCreditReason =
   | "عدم تطبيق الخطوات وذهاب الكود"
   | "أخرى";
 export type ExtraCreditRequestStatus = "pending" | "approved" | "rejected";
+export type ExtraCreditAiDecision =
+  | "processing"
+  | "auto_approved"
+  | "auto_rejected"
+  | "manual_review";
 
 export type NetflixAccount = {
   id: string;
@@ -56,5 +61,11 @@ export type ExtraCreditRequest = {
   status: ExtraCreditRequestStatus;
   created_at: string;
   reviewed_at?: string | null;
+  ai_decision?: ExtraCreditAiDecision | null;
+  ai_confidence?: number | null;
+  ai_analysis?: string | null;
+  ai_model?: string | null;
+  ai_reviewed_at?: string | null;
+  review_reason?: string | null;
   customer_links?: CustomerLink;
 };

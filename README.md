@@ -36,3 +36,20 @@ npm run dev
 ```text
 VITE_ADMIN_PASSWORD
 ```
+
+## فحص طلبات الرصيد عبر Gemini
+
+شغّل ملف الترحيل التالي مرة واحدة داخل Supabase SQL Editor:
+
+```text
+supabase/extra_credit_ai_validation.sql
+```
+
+ثم أضف متغير الخادم التالي في Vercel للبيئات المطلوبة وأعد النشر:
+
+```text
+GEMINI_API_KEY
+```
+
+يمكن اختيار موديل مختلف اختيارياً عبر `GEMINI_MODEL`. القيمة الافتراضية هي
+`gemini-3.6-flash`. لا تستخدم بادئة `VITE_` لمفتاح Gemini حتى لا يصل إلى المتصفح.

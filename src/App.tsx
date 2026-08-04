@@ -160,7 +160,7 @@ function normalizeEmail(email: string) {
   return email.trim().toLowerCase();
 }
 
-function notifyExtraCreditRequestInBackground(requestId: string) {
+function processExtraCreditRequestInBackground(requestId: string) {
   void fetch("/api/notify-extra-credit", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -170,10 +170,10 @@ function notifyExtraCreditRequestInBackground(requestId: string) {
     .then(async (response) => {
       if (response.ok) return;
       const result = (await response.json().catch(() => null)) as { error?: string } | null;
-      throw new Error(result?.error || `telegram_notification_failed_${response.status}`);
+      throw new Error(result?.error || `extra_credit_ai_processing_failed_${response.status}`);
     })
     .catch((error) => {
-      console.error("Telegram extra credit notification failed:", error);
+      console.error("Extra credit AI processing failed:", error);
     });
 }
 
@@ -2385,6 +2385,25 @@ function ExtraCreditRequestsPage({
                       <p className="text-xs font-bold text-zinc-500">وصف العميل</p>
                       <p className="mt-1 whitespace-pre-wrap text-sm font-bold leading-7 text-zinc-700">{request.description}</p>
                     </div>
+                    {request.ai_decision === "processing" ? (
+                      <div className="flex items-center gap-3 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm font-black text-sky-800">
+                        <RefreshCw className="h-4 w-4 shrink-0 animate-spin" />
+                        جارٍ فحص المرفق تلقائياً عبر Gemini
+                      </div>
+                    ) : request.ai_analysis ? (
+                      <div className="rounded-2xl border border-[#DCCBFA] bg-[#F8F4FF] p-4">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-xs font-black text-[#7C2CE8]">تحليل Gemini</p>
+                          <span className="rounded-full bg-white px-3 py-1 text-[11px] font-black text-[#6E25CF]">
+                            الثقة {Math.round((request.ai_confidence || 0) * 100)}%
+                          </span>
+                        </div>
+                        <p className="mt-2 text-sm font-bold leading-7 text-zinc-700">{request.ai_analysis}</p>
+                        {request.ai_decision === "manual_review" && (
+                          <p className="mt-2 text-xs font-black text-amber-700">أحيل للمراجعة اليدوية بسبب عدم حسم الدليل آلياً.</p>
+                        )}
+                      </div>
+                    ) : null}
                     {attachmentUrl ? (
                       <div className="overflow-hidden rounded-2xl border border-[#E8DDF8] bg-zinc-50">
                         {isVideoAttachment ? (
@@ -3959,7 +3978,7 @@ function CustomerView({
       }
 
       setExtraCreditRequest(data as ExtraCreditRequest);
-      notifyExtraCreditRequestInBackground(data.id);
+      processExtraCreditRequestInBackground(data.id);
       return true;
     } catch (error) {
       console.error("Extra credit request submit error:", error);
@@ -4341,6 +4360,8 @@ function CustomerView({
                       </div>
                       <ExtraCreditRequestAction
                         status={extraCreditRequest?.status}
+                        aiDecision={extraCreditRequest?.ai_decision}
+                        rejectionReason={extraCreditRequest?.review_reason}
                         onOpen={() => setShowExtraCreditModal(true)}
                       />
                     </div>
@@ -4391,6 +4412,8 @@ function CustomerView({
                           </p>
                           <ExtraCreditRequestAction
                             status={extraCreditRequest?.status}
+                            aiDecision={extraCreditRequest?.ai_decision}
+                            rejectionReason={extraCreditRequest?.review_reason}
                             onOpen={() => setShowExtraCreditModal(true)}
                           />
                           <button
@@ -4408,6 +4431,8 @@ function CustomerView({
                           </p>
                           <ExtraCreditRequestAction
                             status={extraCreditRequest?.status}
+                            aiDecision={extraCreditRequest?.ai_decision}
+                            rejectionReason={extraCreditRequest?.review_reason}
                             onOpen={() => setShowExtraCreditModal(true)}
                           />
                         </div>
@@ -4490,6 +4515,8 @@ function CustomerView({
                       </div>
                       <ExtraCreditRequestAction
                         status={extraCreditRequest?.status}
+                        aiDecision={extraCreditRequest?.ai_decision}
+                        rejectionReason={extraCreditRequest?.review_reason}
                         onOpen={() => setShowExtraCreditModal(true)}
                       />
                       <button
@@ -4517,6 +4544,8 @@ function CustomerView({
                       </div>
                       <ExtraCreditRequestAction
                         status={extraCreditRequest?.status}
+                        aiDecision={extraCreditRequest?.ai_decision}
+                        rejectionReason={extraCreditRequest?.review_reason}
                         onOpen={() => setShowExtraCreditModal(true)}
                       />
                     </div>
@@ -4723,15 +4752,22 @@ function CustomerView({
 
 function ExtraCreditRequestAction({
   status,
+  aiDecision,
+  rejectionReason,
   onOpen,
 }: {
   status?: ExtraCreditRequestStatus;
+  aiDecision?: ExtraCreditRequest["ai_decision"];
+  rejectionReason?: string | null;
   onOpen: () => void;
 }) {
   if (status === "rejected") {
     return (
       <div className="mt-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-center text-sm font-black leading-6 text-rose-700">
-        تم رفض طلبك للحصول على رصيد إضافي
+        <p>تم رفض طلبك للحصول على رصيد إضافي</p>
+        {rejectionReason && (
+          <p className="mt-2 text-xs font-bold leading-6 text-rose-800">{rejectionReason}</p>
+        )}
       </div>
     );
   }
@@ -4739,7 +4775,17 @@ function ExtraCreditRequestAction({
   if (status === "pending") {
     return (
       <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-center text-xs font-black leading-6 text-amber-800">
-        تم تقديم طلبك بنجاح وهو قيد المراجعة حالياً
+        {aiDecision === "manual_review"
+          ? "تم فحص طلبك آلياً وإحالته للمراجعة اليدوية لضمان دقة القرار"
+          : "تم تقديم طلبك بنجاح وجارٍ فحصه حالياً"}
+      </div>
+    );
+  }
+
+  if (status === "approved") {
+    return (
+      <div className="mt-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-center text-sm font-black leading-6 text-emerald-700">
+        تم قبول طلبك وإضافة محاولة جديدة إلى حسابك
       </div>
     );
   }
