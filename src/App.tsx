@@ -4475,19 +4475,22 @@ function CustomerView({
                           <p className="text-xs font-black leading-6 text-rose-700">
                             لم يصل الرمز أو الرابط بعد؟ يرجى متابعة الشرح جيداً لكي تفهم هذه الخطوة وتتأكد من تطبيقها بالشكل الصحيح على نتفليكس، ثم اضغط على إعادة المحاولة.
                           </p>
-                          <ExtraCreditRequestAction
-                            status={extraCreditRequest?.status}
-                            aiDecision={extraCreditRequest?.ai_decision}
-                            rejectionReason={extraCreditRequest?.ai_rejection_reason || extraCreditRequest?.review_reason}
-                            onOpen={() => setShowExtraCreditModal(true)}
-                          />
-                          <button
-                            type="button"
-                            onClick={openTvRequestModal}
-                            className="mt-3 min-h-12 w-full rounded-xl border border-rose-200 bg-white px-4 text-sm font-black text-rose-700 transition hover:bg-rose-100"
-                          >
-                            إعادة محاولة جلب الرابط
-                          </button>
+                          {attemptUsed ? (
+                            <ExtraCreditRequestAction
+                              status={extraCreditRequest?.status}
+                              aiDecision={extraCreditRequest?.ai_decision}
+                              rejectionReason={extraCreditRequest?.ai_rejection_reason || extraCreditRequest?.review_reason}
+                              onOpen={() => setShowExtraCreditModal(true)}
+                            />
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={openTvRequestModal}
+                              className="mt-3 min-h-12 w-full rounded-xl border border-rose-200 bg-white px-4 text-sm font-black text-rose-700 transition hover:bg-rose-100"
+                            >
+                              إعادة محاولة جلب الرابط
+                            </button>
+                          )}
                         </div>
                       ) : tvRequestState === "expired" ? (
                         <div className="mb-4 rounded-2xl border border-zinc-200 bg-zinc-100 px-4 py-4 text-center">
@@ -4578,20 +4581,23 @@ function CustomerView({
                           </p>
                         </div>
                       </div>
-                      <ExtraCreditRequestAction
-                        status={extraCreditRequest?.status}
-                        aiDecision={extraCreditRequest?.ai_decision}
-                        rejectionReason={extraCreditRequest?.ai_rejection_reason || extraCreditRequest?.review_reason}
-                        onOpen={() => setShowExtraCreditModal(true)}
-                      />
-                      <button
-                        type="button"
-                        onClick={openPreRequestModal}
-                        className="mt-3 flex h-12 w-full items-center justify-center gap-2 rounded-2xl border border-[#DCCBFA] bg-white text-sm font-black text-[#7C2CE8] transition hover:bg-[#F5EEFF]"
-                      >
-                        <RefreshCw className="h-4 w-4" />
-                        إعادة المحاولة والبحث مجدداً
-                      </button>
+                      {attemptUsed ? (
+                        <ExtraCreditRequestAction
+                          status={extraCreditRequest?.status}
+                          aiDecision={extraCreditRequest?.ai_decision}
+                          rejectionReason={extraCreditRequest?.ai_rejection_reason || extraCreditRequest?.review_reason}
+                          onOpen={() => setShowExtraCreditModal(true)}
+                        />
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={openPreRequestModal}
+                          className="mt-3 flex h-12 w-full items-center justify-center gap-2 rounded-2xl border border-[#DCCBFA] bg-white text-sm font-black text-[#7C2CE8] transition hover:bg-[#F5EEFF]"
+                        >
+                          <RefreshCw className="h-4 w-4" />
+                          إعادة المحاولة والبحث مجدداً
+                        </button>
+                      )}
                     </div>
                   ) : deviceView === "mobile" &&
                     (codeRequestState === "expired" || (attemptUsed && codeRequestState === "idle")) ? (
