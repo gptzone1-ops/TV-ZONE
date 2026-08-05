@@ -1005,60 +1005,63 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     }
 
     setLoading(true);
-    const { error } = await supabase
-      .from("accounts")
-      .update({
-        email: normalizedEmail,
-        password: form.password,
-        supplier_code_url: syncedSupplierCodeUrl,
-        ...(form.created_at ? { created_at: form.created_at } : {}),
-        ...(form.expires_at ? { expires_at: form.expires_at } : {}),
-      })
-      .eq("id", accountId);
+    try {
+      const response = await fetch("/api/update-account", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-admin-password": adminPassword,
+        },
+        body: JSON.stringify({
+          account_id: accountId,
+          email: normalizedEmail,
+          password: form.password,
+          supplier_code_url: syncedSupplierCodeUrl,
+          created_at: form.created_at,
+          expires_at: form.expires_at,
+        }),
+      });
+      const result = (await response.json().catch(() => null)) as {
+        success?: boolean;
+        error?: string;
+        account?: NetflixAccount;
+        links?: CustomerLink[];
+      } | null;
 
-    if (error) {
+      if (!response.ok || !result?.success || !result.account) {
+        if (result?.error === "duplicate_email") {
+          setToast({ label: duplicateEmailSaveMessage, at: Date.now(), tone: "error" });
+          return { ok: false, error: duplicateEmailSaveMessage };
+        }
+        const rlsMessage = result?.error === "account_update_returned_no_row"
+          ? "تعذر تعديل الحساب بسبب صلاحيات Supabase (RLS)"
+          : "تعذر حفظ تعديلات الحساب في قاعدة البيانات";
+        console.error("Verified account update failed:", result?.error || response.statusText);
+        setToast({ label: rlsMessage, at: Date.now(), tone: "error" });
+        return { ok: false, error: rlsMessage };
+      }
+
+      setAccounts((current) =>
+        current.map((account) => (account.id === accountId ? result.account as NetflixAccount : account)),
+      );
+      setLinks((current) => {
+        const refreshedLinks = result.links || [];
+        return refreshedLinks.length
+          ? [...current.filter((link) => link.account_id !== accountId), ...refreshedLinks]
+          : current.map((link) => (link.account_id === accountId ? { ...link, email: normalizedEmail } : link));
+      });
+
+      await loadData();
+      setToast({ label: "تم حفظ البريد وتحديث الرابط بنجاح", at: Date.now() });
+      return true;
+    } catch (error) {
+      console.error("Account update request failed:", error);
+      const message = "تعذر الاتصال بالخادم لحفظ تعديلات الحساب";
+      setToast({ label: message, at: Date.now(), tone: "error" });
+      return { ok: false, error: message };
+    } finally {
       setLoading(false);
-      if (isDuplicateEmailError(error)) {
-        setToast({ label: duplicateEmailSaveMessage, at: Date.now(), tone: "error" });
-        return { ok: false, error: duplicateEmailSaveMessage };
-      }
-      setToast({ label: "تعذر حفظ تعديلات الحساب", at: Date.now(), tone: "error" });
-      return false;
     }
-
-    const { error: linksUpdateError } = await supabase.from("customer_links").update({ email: normalizedEmail }).eq("account_id", accountId);
-    setLoading(false);
-
-    if (linksUpdateError) {
-      if (isDuplicateEmailError(linksUpdateError)) {
-        setToast({ label: duplicateEmailSaveMessage, at: Date.now(), tone: "error" });
-        return { ok: false, error: duplicateEmailSaveMessage };
-      }
-
-      console.error("Supabase customer link email update error:", linksUpdateError);
-      setToast({ label: "تم حفظ الحساب وتعذر تحديث روابط العملاء", at: Date.now(), tone: "error" });
-      return false;
-    }
-
-    setAccounts((current) =>
-      current.map((account) =>
-        account.id === accountId
-          ? {
-              ...account,
-              ...form,
-              email: normalizedEmail,
-              supplier_code_url: syncedSupplierCodeUrl,
-              created_at: form.created_at || account.created_at,
-              expires_at: form.expires_at || account.expires_at,
-            }
-          : account,
-      ),
-    );
-    setLinks((current) =>
-      current.map((link) => (link.account_id === accountId ? { ...link, email: normalizedEmail } : link)),
-    );
-    setToast({ label: "تم حفظ تعديلات الحساب", at: Date.now() });
-    return true;
   }
 
   async function updateAccountDates(accountId: string, form: { created_at: string; expires_at: string }) {
