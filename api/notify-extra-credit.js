@@ -87,10 +87,16 @@ function normalizeAssessment(raw) {
     requestsSimultaneousDevices: raw?.requestsSimultaneousDevices === true,
     confidence,
     summary: String(raw?.summary || "لم يقدم Gemini ملخصاً واضحاً.").slice(0, 2000),
+    diagnosticRejectionReason: String(raw?.diagnosticRejectionReason || "").trim().slice(0, 1000),
     evidence: Array.isArray(raw?.evidence)
       ? raw.evidence.map((item) => String(item)).filter(Boolean).slice(0, 8)
       : [],
   };
+}
+
+function detailedRejectionReason(assessment, fallback) {
+  const diagnosticReason = String(assessment?.diagnosticRejectionReason || "").trim();
+  return diagnosticReason.length >= 12 ? diagnosticReason : fallback;
 }
 
 function determineDecision(request, assessment) {
@@ -102,7 +108,13 @@ function determineDecision(request, assessment) {
 
   if (isReplacement) {
     if (request.attachment_type !== "video") {
-      return { decision: "auto_rejected", reason: devicePolicyRejection };
+      return {
+        decision: "auto_rejected",
+        reason: detailedRejectionReason(
+          assessment,
+          "المرفق المقدم ليس فيديو يوضح تسجيل الخروج من الجهاز القديم، وهو شرط أساسي لاستبدال الجهاز.",
+        ),
+      };
     }
 
     if (
@@ -124,12 +136,20 @@ function determineDecision(request, assessment) {
         !assessment.descriptionMeaningful ||
         !assessment.attachmentRelevant)
     ) {
-      return { decision: "auto_rejected", reason: devicePolicyRejection };
+      return {
+        decision: "auto_rejected",
+        reason: assessment.requestsSimultaneousDevices
+          ? devicePolicyRejection
+          : detailedRejectionReason(assessment, devicePolicyRejection),
+      };
     }
 
     return {
       decision: "auto_rejected",
-      reason: "تم رفض الطلب لأن الفيديو لا يوضح تسجيل الخروج وظهور معرّف الحساب بدرجة كافية.",
+      reason: detailedRejectionReason(
+        assessment,
+        "الفيديو المرفق لا يوضح عملية تسجيل الخروج من الجهاز القديم مع ظهور البريد الإلكتروني أو اسم الملف بوضوح.",
+      ),
     };
   }
 
@@ -151,13 +171,19 @@ function determineDecision(request, assessment) {
   ) {
     return {
       decision: "auto_rejected",
-      reason: "تعذر قبول الطلب لأن الوصف أو المرفق غير واضح أو غير متعلق بمشكلة الاشتراك.",
+      reason: detailedRejectionReason(
+        assessment,
+        "المرفق غير واضح أو لا يعرض مشكلة مرتبطة بتسجيل الدخول إلى Netflix أو الحصول على الرمز.",
+      ),
     };
   }
 
   return {
     decision: "auto_rejected",
-    reason: "تم رفض الطلب لأن المرفق لا يوضح مشكلة مؤهلة لإضافة رصيد بصورة كافية.",
+    reason: detailedRejectionReason(
+      assessment,
+      "المرفق لا يُظهر بوضوح شاشة الخطأ أو تعذر ظهور الرمز أو المشكلة التي تمنع فتح الاشتراك.",
+    ),
   };
 }
 
@@ -177,7 +203,13 @@ function buildPrompt(request, customer, email) {
 1. مشكلات الكود أو عدم الفتح: الدليل المقبول يظهر بوضوح Netflix أو خطأ تسجيل دخول، أو لوحة بحث/عدم ظهور الكود، أو تعذر فتح الاشتراك.
 2. استبدال الجهاز: لا يقبل إلا فيديو يوضح عملية Sign Out من الجهاز الأول، مع ظهور البريد الإلكتروني أو اسم الملف A/B/C/D/E بوضوح.
 3. ارفض الدليل الواضح غير المتعلق بالخدمة، الصورة السوداء/الفارغة، الوصف العشوائي غير المفهوم، أو طلب استخدام جهازين معاً دون إثبات تسجيل الخروج.
-4. إذا لم تتوفر أدلة كافية للقبول، وضح النقص بدقة ليتم رفض الطلب بسبب مفهوم للعميل.
+4. افحص المحتوى المرئي الفعلي وحدد بالضبط ما الذي يظهر وما الدليل المطلوب غير الظاهر. لا تستخدم سبباً عاماً مثل "المرفق غير كافٍ" إذا كان يمكن وصف النقص بصرياً.
+5. اكتب diagnosticRejectionReason بالعربية كجملة مباشرة مخصصة لهذا المرفق، صالحة للعرض للعميل، ومن دون ذكر درجات الثقة أو تفاصيل تقنية داخلية. إذا كان المرفق مستوفياً للشروط اجعلها سلسلة فارغة.
+6. أمثلة لصياغة السبب بحسب ما يظهر فعلياً:
+   - صورة ضبابية أو مجتزأة: "الصورة غير واضحة أو مجتزأة، يرجى التقاط صورة كاملة للشاشة تُظهر رسالة الخطأ."
+   - قائمة رئيسية بدلاً من إثبات الخروج: "المرفق يظهر القائمة الرئيسية ولا يُظهر صفحة الحساب أو تنفيذ تسجيل الخروج من الجهاز القديم."
+   - جهاز أو تطبيق غير مطابق: "المرفق لا يوضح جهاز Netflix أو التطبيق المطلوب ولا يظهر المشكلة المذكورة في الطلب."
+   استخدم هذه الأمثلة كأسلوب فقط، ولا تنسخها إلا إذا كانت مطابقة فعلاً للمرفق.
 
 أعد تقييماً واقعياً ودقيقاً. لا تفترض تفاصيل غير ظاهرة في المرفق.`;
 }
@@ -312,6 +344,7 @@ async function analyzeAttachment(supabase, request, customer, email) {
                 requestsSimultaneousDevices: { type: "boolean" },
                 confidence: { type: "number", minimum: 0, maximum: 1 },
                 summary: { type: "string" },
+                diagnosticRejectionReason: { type: "string" },
                 evidence: { type: "array", items: { type: "string" } },
               },
               required: [
@@ -325,6 +358,7 @@ async function analyzeAttachment(supabase, request, customer, email) {
                 "requestsSimultaneousDevices",
                 "confidence",
                 "summary",
+                "diagnosticRejectionReason",
                 "evidence",
               ],
             },

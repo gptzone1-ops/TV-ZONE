@@ -4870,7 +4870,10 @@ function ExtraCreditRequestAction({
       <div className="mt-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-center text-sm font-black leading-6 text-rose-700">
         <p>تم رفض طلبك للحصول على رصيد إضافي</p>
         {rejectionReason && (
-          <p className="mt-2 text-xs font-bold leading-6 text-rose-800">{rejectionReason}</p>
+          <div className="mt-3 rounded-xl border border-rose-200 bg-white/80 px-3 py-3 text-right">
+            <p className="text-[11px] font-black text-rose-600">سبب عدم قبول المرفق:</p>
+            <p className="mt-1 text-sm font-bold leading-7 text-zinc-800">{rejectionReason}</p>
+          </div>
         )}
         <button
           type="button"
@@ -5135,9 +5138,10 @@ function ExtraCreditRequestModal({
                 <CircleX className="h-8 w-8" />
               </div>
               <h2 className="mt-5 text-2xl font-black text-zinc-950">تم رفض الطلب</h2>
-              <p className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-bold leading-7 text-rose-800">
-                {rejectionReason}
-              </p>
+              <div className="mt-4 rounded-2xl border border-rose-200 bg-gradient-to-b from-rose-50 to-white px-5 py-4 text-right shadow-[0_10px_24px_rgba(225,29,72,0.08)]">
+                <p className="text-xs font-black text-rose-600">سبب عدم قبول المرفق:</p>
+                <p className="mt-2 text-sm font-bold leading-8 text-zinc-800">{rejectionReason}</p>
+              </div>
               <div className="mt-5 flex w-full flex-col gap-3">
                 <button
                   type="button"
