@@ -160,6 +160,30 @@ function normalizeEmail(email: string) {
   return email.trim().toLowerCase();
 }
 
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function syncEmailInLinkedUrl(url: string | null | undefined, previousEmail: string, nextEmail: string) {
+  const trimmedUrl = String(url || "").trim();
+  const normalizedPreviousEmail = normalizeEmail(previousEmail);
+  const normalizedNextEmail = normalizeEmail(nextEmail);
+
+  if (!trimmedUrl || !normalizedPreviousEmail || normalizedPreviousEmail === normalizedNextEmail) {
+    return trimmedUrl || null;
+  }
+
+  const replaceIgnoringCase = (value: string, search: string, replacement: string) =>
+    value.replace(new RegExp(escapeRegExp(search), "gi"), replacement);
+
+  const withPlainEmail = replaceIgnoringCase(trimmedUrl, normalizedPreviousEmail, normalizedNextEmail);
+  return replaceIgnoringCase(
+    withPlainEmail,
+    encodeURIComponent(normalizedPreviousEmail),
+    encodeURIComponent(normalizedNextEmail),
+  );
+}
+
 function processExtraCreditRequestInBackground(requestId: string) {
   void fetch("/api/notify-extra-credit", {
     method: "POST",
@@ -927,6 +951,11 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
   ): Promise<AccountFormResult> {
     const normalizedEmail = normalizeEmail(form.email);
     const currentAccount = accounts.find((account) => account.id === accountId);
+    const syncedSupplierCodeUrl = syncEmailInLinkedUrl(
+      form.supplier_code_url,
+      currentAccount?.email || normalizedEmail,
+      normalizedEmail,
+    );
     const currentProfileNames = links
       .filter((link) => link.account_id === accountId)
       .map((link) => link.profile_name);
@@ -961,7 +990,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
                 ...account,
                 ...form,
                 email: normalizedEmail,
-                supplier_code_url: form.supplier_code_url || null,
+                supplier_code_url: syncedSupplierCodeUrl,
                 created_at: form.created_at || account.created_at,
                 expires_at: form.expires_at || account.expires_at,
               }
@@ -981,7 +1010,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       .update({
         email: normalizedEmail,
         password: form.password,
-        supplier_code_url: form.supplier_code_url || null,
+        supplier_code_url: syncedSupplierCodeUrl,
         ...(form.created_at ? { created_at: form.created_at } : {}),
         ...(form.expires_at ? { expires_at: form.expires_at } : {}),
       })
@@ -1018,7 +1047,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
               ...account,
               ...form,
               email: normalizedEmail,
-              supplier_code_url: form.supplier_code_url || null,
+              supplier_code_url: syncedSupplierCodeUrl,
               created_at: form.created_at || account.created_at,
               expires_at: form.expires_at || account.expires_at,
             }
