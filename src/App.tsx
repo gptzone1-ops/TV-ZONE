@@ -2739,7 +2739,7 @@ function AccountForm({
                 : "سيتم إنشاء 8 روابط تلقائياً بدون رمز ملف."
               : accountType === "private"
                 ? "سيتم إنشاء 5 روابط تلقائياً."
-                : "سيتم إنشاء 10 روابط تلقائياً."}
+                : "سيتم إنشاء 8 روابط تلقائياً: رابطان لكل ملف من B إلى E، مع تجاوز الملف A."}
           </p>
         )}
 
@@ -2808,7 +2808,10 @@ function AccountDetail({
 }) {
   const expired = isExpired(account.expires_at);
   const service = serviceOf(account);
-  const generatedLimit = service === "shahid" ? (account.account_type === "private" ? 4 : 8) : account.account_type === "private" ? 5 : 10;
+  const fallbackGeneratedLimit = service === "shahid"
+    ? account.account_type === "private" ? 4 : 8
+    : account.account_type === "private" ? 5 : 8;
+  const generatedLimit = links.length || fallbackGeneratedLimit;
   const [selectedLinkIds, setSelectedLinkIds] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<"customers" | "twofa">("customers");
   const [startDate, setStartDate] = useState(() => new Date(account.created_at).toISOString().slice(0, 10));

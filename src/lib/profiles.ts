@@ -28,12 +28,34 @@ export const PROFILE_CODES: Record<string, string> = {
 export const PROFILE_NAMES = Object.keys(PROFILE_CODES);
 export const SHAHID_PROFILE_NAMES = ["A", "B", "C", "D"];
 
+// Applied only while creating new shared Netflix accounts. Existing links are never rewritten.
+export const NEW_SHARED_NETFLIX_PROFILE_CAPACITY: Record<string, number> = {
+  A: 0,
+  B: 2,
+  C: 2,
+  D: 2,
+  E: 2,
+};
+
 export function generateShortId(length = 4) {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
   return Array.from({ length }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("");
 }
 
 export function buildProfileSlots(accountType: "private" | "shared", serviceType: ServiceType = "netflix") {
+  if (accountType === "shared" && serviceType === "netflix") {
+    return Object.entries(NEW_SHARED_NETFLIX_PROFILE_CAPACITY).flatMap(([profileName, capacity]) =>
+      Array.from({ length: capacity }, (_, index) => ({
+        profile_name: `${profileName}${index + 1}`,
+        profile_label: profileName,
+        profile_code: PROFILE_CODES[profileName],
+        service_type: serviceType,
+        uuid: crypto.randomUUID(),
+        short_id: generateShortId(),
+      })),
+    );
+  }
+
   const repeats = accountType === "private" ? 1 : 2;
   const profileNames = serviceType === "shahid" ? SHAHID_PROFILE_NAMES : PROFILE_NAMES;
 
