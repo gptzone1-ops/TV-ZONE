@@ -91,6 +91,7 @@ type ServiceTheme = {
 
 const defaultCustomerVideoUrl = "https://www.youtube.com/embed/ALEeqFXBWjQ?playsinline=1&rel=0&modestbranding=1";
 const videoUrl = import.meta.env.VITE_CUSTOMER_VIDEO_URL || defaultCustomerVideoUrl;
+const defaultCompensationTutorialUrl = "https://www.youtube.com/embed/ga805aqXGH4?playsinline=1&rel=0&modestbranding=1";
 const netflixServiceOutage = ["1", "true", "yes", "on"].includes(
   String(import.meta.env.VITE_NETFLIX_SERVICE_OUTAGE ?? "true").trim().toLowerCase(),
 );
@@ -4701,7 +4702,7 @@ function CompensationAccountCustomerView({
   const theme = serviceThemes.netflix;
   const codeUrl = String(account.supplier_code_url || "").trim();
   const profileName = `ملف ${link.profile_label || link.profile_name}`;
-  const tutorialMedia = getTutorialMedia(account.compensation_tutorial_url || videoUrl);
+  const tutorialMedia = getTutorialMedia(account.compensation_tutorial_url || defaultCompensationTutorialUrl);
 
   return (
     <Shell toast={toast}>
