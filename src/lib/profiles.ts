@@ -42,6 +42,23 @@ export function generateShortId(length = 4) {
   return Array.from({ length }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("");
 }
 
+function generateUuid() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+
+  const bytes = new Uint8Array(16);
+  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+    crypto.getRandomValues(bytes);
+  } else {
+    for (let index = 0; index < bytes.length; index += 1) bytes[index] = Math.floor(Math.random() * 256);
+  }
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 export function buildProfileSlots(accountType: "private" | "shared", serviceType: ServiceType = "netflix") {
   if (accountType === "shared" && serviceType === "netflix") {
     return Object.entries(NEW_SHARED_NETFLIX_PROFILE_CAPACITY).flatMap(([profileName, capacity]) =>
@@ -50,7 +67,7 @@ export function buildProfileSlots(accountType: "private" | "shared", serviceType
         profile_label: profileName,
         profile_code: PROFILE_CODES[profileName],
         service_type: serviceType,
-        uuid: crypto.randomUUID(),
+        uuid: generateUuid(),
         short_id: generateShortId(),
       })),
     );
@@ -65,7 +82,7 @@ export function buildProfileSlots(accountType: "private" | "shared", serviceType
       profile_label: profileName,
       profile_code: serviceType === "shahid" ? "" : PROFILE_CODES[profileName],
       service_type: serviceType,
-      uuid: crypto.randomUUID(),
+      uuid: generateUuid(),
       short_id: generateShortId(),
     })),
   );

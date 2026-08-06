@@ -47,6 +47,7 @@ import {
 import { hasSupabaseConfig, supabase } from "./lib/supabase";
 import type {
   AccountType,
+  CompensationRequest,
   CustomerLink,
   ExtraCreditReason,
   ExtraCreditRequest,
@@ -55,7 +56,7 @@ import type {
   ServiceType,
 } from "./types";
 
-type Screen = "selector" | "netflix" | "account" | "credit-requests";
+type Screen = "selector" | "netflix" | "account" | "credit-requests" | "compensations";
 type DeviceView = "mobile" | "screen";
 type Toast = { label: string; at: number; tone?: "success" | "error" } | null;
 type StatTone = "neutral" | "green" | "red";
@@ -63,6 +64,7 @@ type AccountTypeFilter = "all" | AccountType;
 type SupportIssue = "general" | "unavailable" | "expired";
 type CustomerSearchResult = { link: CustomerLink; account: NetflixAccount };
 type AccountFormResult = boolean | { ok: boolean; error?: string };
+type PublicCompensationRequest = Omit<CompensationRequest, "id">;
 type ServiceTheme = {
   type: ServiceType;
   name: string;
@@ -475,7 +477,189 @@ export default function App() {
   const viewMatch = route.match(/^\/view\/([^/]+)$/);
   if (shortMatch) return <CustomerView identifier={shortMatch[1]} lookup="short" navigate={navigate} />;
   if (viewMatch) return <CustomerView identifier={viewMatch[1]} lookup="uuid" navigate={navigate} />;
+  if (route === "/compensation" || route === "/compensation/") return <CompensationPage />;
   return <AdminApp navigate={navigate} />;
+}
+
+function CompensationPage() {
+  const storageKey = "zone-compensation-client-code";
+  const [clientCode, setClientCode] = useState(() => localStorage.getItem(storageKey) || "");
+  const [request, setRequest] = useState<PublicCompensationRequest | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [copied, setCopied] = useState(false);
+  const [justCreated, setJustCreated] = useState(false);
+
+  async function checkCompensation(rawCode: string) {
+    const normalizedCode = rawCode.replace(/\s+/g, "").toUpperCase();
+    setClientCode(normalizedCode);
+    setError("");
+
+    if (!/^[A-Z][0-9][A-Z][0-9][A-Z][0-9]$/.test(normalizedCode)) {
+      setError("رقم العميل غير صحيح، يرجى التأكد وإدخال الرمز الصحيح الخاص بك.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const response = await fetch("/api/compensation", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ client_code: normalizedCode }),
+      });
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok || !payload?.success || !payload?.request) {
+        if (payload?.error === "invalid_client_code") {
+          setError("رقم العميل غير صحيح، يرجى التأكد وإدخال الرمز الصحيح الخاص بك.");
+          localStorage.removeItem(storageKey);
+        } else {
+          setError("تعذر التحقق من الطلب حالياً، يرجى المحاولة مرة أخرى بعد قليل.");
+        }
+        return;
+      }
+
+      localStorage.setItem(storageKey, normalizedCode);
+      setJustCreated(payload.created === true);
+      setRequest(payload.request as PublicCompensationRequest);
+    } catch (lookupError) {
+      console.error("Compensation lookup failed:", lookupError);
+      setError("تعذر الاتصال بالخادم، يرجى التحقق من الإنترنت والمحاولة مجدداً.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    const storedCode = localStorage.getItem(storageKey);
+    if (storedCode) void checkCompensation(storedCode);
+  }, []);
+
+  async function copyReplacementLink() {
+    if (!request?.replacement_link) return;
+    try {
+      await copyTextSilent(request.replacement_link);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch (copyError) {
+      console.error("Replacement link copy failed:", copyError);
+    }
+  }
+
+  return (
+    <main className="min-h-screen bg-gradient-to-b from-[#F7F3FF] via-[#FAFAFC] to-white px-4 py-8 text-[#17141F]" dir="rtl">
+      <div className="mx-auto w-full max-w-xl">
+        <header className="mb-6 flex items-center justify-between rounded-3xl border border-white bg-white px-5 py-4 shadow-[0_18px_55px_rgba(70,40,120,0.12)]">
+          <div>
+            <p className="text-xs font-black text-[#8B35F5]">Zone Store</p>
+            <h1 className="mt-1 text-xl font-black">نظام التعويضات</h1>
+          </div>
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#8B35F5] text-lg font-black text-white shadow-[0_12px_28px_rgba(139,53,245,0.28)]">زون</div>
+        </header>
+
+        <section className="overflow-hidden rounded-[2rem] border border-[#E7D9FC] bg-white shadow-[0_24px_70px_rgba(70,40,120,0.14)]">
+          <div className="border-b border-[#EEE7F8] bg-[#FCFAFF] p-6 text-center md:p-8">
+            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-[#F1E7FF] text-[#8B35F5]">
+              <RefreshCw className="h-8 w-8" />
+            </div>
+            <h2 className="mt-4 text-2xl font-black">طلب ومتابعة التعويض</h2>
+            <p className="mx-auto mt-2 max-w-md text-sm font-bold leading-7 text-zinc-500">
+              أدخل رمز العميل المكون من 6 خانات لتقديم طلبك أو متابعة حالة التعويض.
+            </p>
+          </div>
+
+          <div className="p-5 md:p-8">
+            {!request ? (
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void checkCompensation(clientCode);
+                }}
+                className="space-y-4"
+              >
+                <label className="block">
+                  <span className="mb-2 block text-sm font-black">رقم / رمز العميل</span>
+                  <input
+                    autoFocus
+                    maxLength={6}
+                    value={clientCode}
+                    onChange={(event) => {
+                      setClientCode(event.target.value.replace(/[^a-zA-Z0-9]/g, "").toUpperCase());
+                      setError("");
+                    }}
+                    placeholder="A2C4X9"
+                    dir="ltr"
+                    className="h-14 w-full rounded-2xl border-2 border-[#DCCBFA] bg-[#FCFAFF] px-4 text-center text-xl font-black uppercase tracking-[0.18em] outline-none transition focus:border-[#8B35F5] focus:bg-white focus:shadow-[0_0_0_4px_rgba(139,53,245,0.10)]"
+                  />
+                </label>
+                {error && <p className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-black leading-6 text-rose-700">{error}</p>}
+                <button
+                  type="submit"
+                  disabled={loading || clientCode.length !== 6}
+                  className="flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-[#8B35F5] px-5 text-base font-black text-white shadow-[0_14px_30px_rgba(139,53,245,0.28)] transition hover:bg-[#7626DD] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {loading ? <RefreshCw className="h-5 w-5 animate-spin" /> : <ArrowRight className="h-5 w-5 rotate-180" />}
+                  {loading ? "جاري التحقق..." : "إرسال / متابعة"}
+                </button>
+              </form>
+            ) : request.status === "pending" ? (
+              <div className="text-center">
+                <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-amber-100 text-amber-700">
+                  <Clock3 className="h-8 w-8" />
+                </div>
+                <h2 className="mt-4 text-xl font-black">طلبك قيد المراجعة</h2>
+                <p className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm font-bold leading-8 text-amber-900">
+                  {justCreated
+                    ? "تم استلام طلب التعويض الخاص بك بنجاح. بإذن الله سيتم التعويض خلال ساعة إلى 72 ساعة، يرجى تحديث هذه الصفحة لمتابعة واستلام رابط الحساب الجديد."
+                    : "طلب التعويض الخاص بك قيد المراجعة والمعالجة حالياً، يرجى إعادة تحديث الصفحة لاحقاً."}
+                </p>
+                <p className="mt-4 text-xs font-black text-zinc-500">رمز العميل: <span dir="ltr" className="text-[#8B35F5]">{request.client_code}</span></p>
+                <button
+                  type="button"
+                  onClick={() => void checkCompensation(request.client_code)}
+                  disabled={loading}
+                  className="mt-5 flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-[#DCCBFA] bg-[#F8F4FF] text-sm font-black text-[#7C2CE8] transition hover:bg-[#F1E7FF] disabled:opacity-50"
+                >
+                  <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
+                  تحديث حالة الطلب
+                </button>
+              </div>
+            ) : (
+              <div className="text-center">
+                <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-600">
+                  <CircleCheck className="h-8 w-8" />
+                </div>
+                <h2 className="mt-4 text-2xl font-black text-emerald-700">تم التعويض بنجاح!</h2>
+                <p className="mt-2 text-sm font-bold text-zinc-600">هذا هو رابط الحساب الجديد الخاص بك:</p>
+                <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+                  <p className="break-all text-sm font-black leading-7 text-emerald-900" dir="ltr">{request.replacement_link}</p>
+                </div>
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => void copyReplacementLink()}
+                    className="flex h-13 items-center justify-center gap-2 rounded-xl border border-[#DCCBFA] bg-white text-sm font-black text-[#7C2CE8] transition hover:bg-[#F8F4FF]"
+                  >
+                    {copied ? <Check className="h-4 w-4 text-emerald-600" /> : <Copy className="h-4 w-4" />}
+                    {copied ? "تم نسخ الرابط" : "نسخ الرابط"}
+                  </button>
+                  <a
+                    href={request.replacement_link || "#"}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex h-13 items-center justify-center gap-2 rounded-xl bg-[#8B35F5] text-sm font-black text-white shadow-[0_12px_26px_rgba(139,53,245,0.22)] transition hover:bg-[#7626DD]"
+                  >
+                    <ExternalLink className="h-4 w-4" />
+                    فتح الرابط الجديد
+                  </a>
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
+      </div>
+    </main>
+  );
 }
 
 function AdminApp({ navigate }: { navigate: (path: string) => void }) {
@@ -1380,6 +1564,19 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     );
   }
 
+  if (screen === "compensations") {
+    return (
+      <Shell toast={toast}>
+        <CompensationAdminPage
+          service={selectedService}
+          onBack={() => setScreen("netflix")}
+          onLogout={logout}
+          setToast={setToast}
+        />
+      </Shell>
+    );
+  }
+
   if (screen === "account" && selectedAccount) {
     return (
       <Shell toast={toast}>
@@ -1439,6 +1636,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
         onResetCustomerDevice={resetCustomerDevice}
         pendingCreditRequests={extraCreditRequests.filter((request) => request.status === "pending").length}
         onOpenCreditRequests={() => setScreen("credit-requests")}
+        onOpenCompensations={() => setScreen("compensations")}
         onLogout={logout}
       />
     </Shell>
@@ -1598,6 +1796,7 @@ function Dashboard({
   onResetCustomerDevice,
   pendingCreditRequests,
   onOpenCreditRequests,
+  onOpenCompensations,
   onBackToServices,
   onLogout,
 }: {
@@ -1625,6 +1824,7 @@ function Dashboard({
   onResetCustomerDevice: (linkId: string) => Promise<boolean>;
   pendingCreditRequests: number;
   onOpenCreditRequests: () => void;
+  onOpenCompensations: () => void;
   onBackToServices: () => void;
   onLogout: () => void;
 }) {
@@ -1703,6 +1903,15 @@ function Dashboard({
                   {pendingCreditRequests}
                 </span>
               )}
+            </button>
+
+            <button
+              type="button"
+              onClick={onOpenCompensations}
+              className="flex h-13 shrink-0 items-center justify-center gap-2 rounded-xl border border-[#D8C1FF] bg-white px-5 text-sm font-black text-[#7C2CE8] transition hover:border-[#8B35F5] hover:bg-[#8B35F5] hover:text-white"
+            >
+              <RefreshCw className="h-4 w-4" />
+              طلبات التعويض
             </button>
 
             <div className="relative shrink-0 md:w-36" data-filter-popover>
@@ -2317,6 +2526,290 @@ function AccountRow({
         </div>
       </td>
     </tr>
+  );
+}
+
+function CompensationAdminPage({
+  service,
+  onBack,
+  onLogout,
+  setToast,
+}: {
+  service: ServiceType;
+  onBack: () => void;
+  onLogout: () => void;
+  setToast: (toast: Toast) => void;
+}) {
+  const [requests, setRequests] = useState<CompensationRequest[]>([]);
+  const [availableCount, setAvailableCount] = useState(0);
+  const [linksInput, setLinksInput] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [processing, setProcessing] = useState<string | null>(null);
+
+  async function callAdminApi(action: string, body: Record<string, unknown> = {}) {
+    const response = await fetch("/api/admin-compensations", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-admin-password": adminPassword,
+      },
+      body: JSON.stringify({ action, ...body }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload?.success) {
+      const apiError = new Error(payload?.error || "operation_failed");
+      (apiError as Error & { code?: string }).code = payload?.error;
+      throw apiError;
+    }
+    return payload;
+  }
+
+  function applySnapshot(payload: { requests?: CompensationRequest[]; available_count?: number }) {
+    setRequests(Array.isArray(payload.requests) ? payload.requests : []);
+    setAvailableCount(Number(payload.available_count || 0));
+  }
+
+  async function loadRequests() {
+    setLoading(true);
+    try {
+      applySnapshot(await callAdminApi("list"));
+    } catch (loadError) {
+      console.error("Compensation dashboard loading failed:", loadError);
+      setToast({ label: "تعذر تحميل طلبات التعويض", tone: "error", at: Date.now() });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadRequests();
+  }, []);
+
+  async function importLinks() {
+    const links = linksInput
+      .split(/\r?\n|,/)
+      .map((link) => link.trim())
+      .filter(Boolean);
+    if (links.length === 0) {
+      setToast({ label: "أدخل رابطاً واحداً على الأقل", tone: "error", at: Date.now() });
+      return;
+    }
+
+    setProcessing("import");
+    try {
+      const payload = await callAdminApi("import_links", { links });
+      applySnapshot(payload);
+      setLinksInput("");
+      setToast({ label: `تمت إضافة ${Number(payload.imported_count || 0)} رابط جديد`, at: Date.now() });
+    } catch (importError) {
+      console.error("Compensation links import failed:", importError);
+      setToast({ label: "تعذر استيراد الروابط، تأكد من صحتها", tone: "error", at: Date.now() });
+    } finally {
+      setProcessing(null);
+    }
+  }
+
+  async function assignLink(requestId: string) {
+    setProcessing(requestId);
+    try {
+      applySnapshot(await callAdminApi("assign", { request_id: requestId }));
+      setToast({ label: "تم إسناد رابط التعويض بنجاح", at: Date.now() });
+    } catch (assignError) {
+      console.error("Compensation assignment failed:", assignError);
+      const noLinks = (assignError as Error & { code?: string }).code === "no_available_links";
+      setToast({
+        label: noLinks ? "لا توجد روابط تعويض متاحة في المخزن" : "تعذر إسناد رابط التعويض",
+        tone: "error",
+        at: Date.now(),
+      });
+    } finally {
+      setProcessing(null);
+    }
+  }
+
+  async function distributeLinks() {
+    setProcessing("distribute");
+    try {
+      const payload = await callAdminApi("distribute");
+      applySnapshot(payload);
+      setToast({ label: `تم توزيع ${Number(payload.assigned_count || 0)} رابط`, at: Date.now() });
+    } catch (distributionError) {
+      console.error("Compensation distribution failed:", distributionError);
+      setToast({ label: "تعذر توزيع الروابط", tone: "error", at: Date.now() });
+    } finally {
+      setProcessing(null);
+    }
+  }
+
+  const pendingCount = requests.filter((request) => request.status === "pending").length;
+  const completedCount = requests.length - pendingCount;
+
+  return (
+    <div className="min-h-screen bg-[#FAF9FC] text-[#17141F]">
+      <Header service={service} onBack={onBack} onLogout={onLogout} />
+      <div className="mx-auto w-full max-w-[1280px] px-4 py-7 md:px-8 md:py-10">
+        <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <p className="text-sm font-black text-[#8B35F5]">إدارة التعويضات</p>
+            <h1 className="mt-1 text-2xl font-black md:text-3xl">طلبات التعويض</h1>
+            <p className="mt-2 text-sm font-bold text-zinc-500">أدر مخزون الروابط ووزعه على الطلبات المعلقة بأمان.</p>
+          </div>
+          <div className="flex flex-wrap gap-3">
+            <a
+              href="/compensation"
+              target="_blank"
+              rel="noreferrer"
+              className="flex h-12 items-center justify-center gap-2 rounded-xl border border-[#DCCBFA] bg-white px-5 text-sm font-black text-[#7C2CE8] transition hover:bg-[#F5EEFF]"
+            >
+              <ExternalLink className="h-4 w-4" />
+              فتح صفحة العميل
+            </a>
+            <button
+              type="button"
+              onClick={onBack}
+              className="flex h-12 items-center justify-center gap-2 rounded-xl border border-[#DCCBFA] bg-white px-5 text-sm font-black text-[#7C2CE8] transition hover:bg-[#F5EEFF]"
+            >
+              <ArrowRight className="h-4 w-4" />
+              العودة للحسابات
+            </button>
+          </div>
+        </div>
+
+        <div className="mb-6 grid gap-4 sm:grid-cols-3">
+          {[
+            { label: "طلبات معلقة", value: pendingCount, tone: "text-amber-700 bg-amber-100" },
+            { label: "تم تعويضها", value: completedCount, tone: "text-emerald-700 bg-emerald-100" },
+            { label: "روابط متاحة", value: availableCount, tone: "text-[#7C2CE8] bg-[#F1E7FF]" },
+          ].map((item) => (
+            <div key={item.label} className="rounded-3xl border border-[#E8DCFF] bg-white p-5 shadow-[0_16px_44px_rgba(70,40,120,0.08)]">
+              <div className={cn("flex h-11 w-11 items-center justify-center rounded-xl", item.tone)}>
+                <Link2 className="h-5 w-5" />
+              </div>
+              <p className="mt-4 text-3xl font-black">{item.value}</p>
+              <p className="mt-1 text-sm font-black text-zinc-500">{item.label}</p>
+            </div>
+          ))}
+        </div>
+
+        <section className="mb-6 rounded-3xl border border-[#E8DCFF] bg-white p-5 shadow-[0_18px_50px_rgba(70,40,120,0.09)] md:p-6">
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-end">
+            <label className="min-w-0 flex-1">
+              <span className="mb-2 block text-sm font-black">مخزن الروابط التعويضية</span>
+              <textarea
+                value={linksInput}
+                onChange={(event) => setLinksInput(event.target.value)}
+                placeholder={"ألصق الروابط هنا، كل رابط في سطر منفصل\nhttps://tv-zone.vercel.app/v/example"}
+                dir="ltr"
+                className="min-h-32 w-full resize-y rounded-2xl border-2 border-[#DCCBFA] bg-[#FCFAFF] p-4 text-left text-sm font-bold leading-7 outline-none transition focus:border-[#8B35F5] focus:bg-white"
+              />
+            </label>
+            <div className="grid shrink-0 gap-3 sm:grid-cols-2 lg:w-[390px]">
+              <button
+                type="button"
+                onClick={() => void importLinks()}
+                disabled={processing !== null}
+                className="flex h-13 items-center justify-center gap-2 rounded-xl border border-[#DCCBFA] bg-[#F8F4FF] px-4 text-sm font-black text-[#7C2CE8] transition hover:bg-[#F1E7FF] disabled:opacity-50"
+              >
+                {processing === "import" ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                استيراد الروابط
+              </button>
+              <button
+                type="button"
+                onClick={() => void distributeLinks()}
+                disabled={processing !== null || pendingCount === 0 || availableCount === 0}
+                className="flex h-13 items-center justify-center gap-2 rounded-xl bg-[#8B35F5] px-4 text-sm font-black text-white shadow-[0_12px_28px_rgba(139,53,245,0.25)] transition hover:bg-[#7626DD] disabled:cursor-not-allowed disabled:opacity-45"
+              >
+                {processing === "distribute" ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />}
+                توزيع المتاح تلقائياً
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section className="overflow-hidden rounded-3xl border border-[#E8DCFF] bg-white shadow-[0_18px_50px_rgba(70,40,120,0.09)]">
+          <div className="flex items-center justify-between border-b border-[#EEE7F8] px-5 py-4 md:px-6">
+            <div>
+              <h2 className="text-lg font-black">سجل الطلبات</h2>
+              <p className="mt-1 text-xs font-bold text-zinc-500">{requests.length} طلب إجمالاً</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void loadRequests()}
+              disabled={loading}
+              title="تحديث"
+              className="flex h-10 w-10 items-center justify-center rounded-xl border border-[#DCCBFA] text-[#7C2CE8] transition hover:bg-[#F8F4FF] disabled:opacity-50"
+            >
+              <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
+            </button>
+          </div>
+
+          {loading && requests.length === 0 ? (
+            <div className="flex min-h-64 items-center justify-center"><RefreshCw className="h-7 w-7 animate-spin text-[#8B35F5]" /></div>
+          ) : requests.length === 0 ? (
+            <div className="flex min-h-64 flex-col items-center justify-center p-8 text-center">
+              <Inbox className="h-10 w-10 text-[#B58BEF]" />
+              <h3 className="mt-3 text-lg font-black">لا توجد طلبات تعويض حتى الآن</h3>
+            </div>
+          ) : (
+            <div className="divide-y divide-[#EEE7F8]">
+              {requests.map((request) => (
+                <article key={request.id} className="grid gap-4 p-5 transition hover:bg-[#FCFAFF] md:grid-cols-[150px_1fr_160px_190px] md:items-center md:px-6">
+                  <div>
+                    <p className="text-xs font-bold text-zinc-500">رمز العميل</p>
+                    <p className="mt-1 text-lg font-black text-[#7C2CE8]" dir="ltr">{request.client_code}</p>
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-bold text-zinc-500">تاريخ الطلب</p>
+                    <p className="mt-1 text-sm font-black">{formatDateTime(request.created_at)}</p>
+                    {request.replacement_link && (
+                      <button
+                        type="button"
+                        onClick={() => void copyTextSilent(request.replacement_link || "")}
+                        className="mt-2 flex max-w-full items-center gap-2 text-xs font-black text-[#7C2CE8]"
+                      >
+                        <Copy className="h-3.5 w-3.5 shrink-0" />
+                        <span className="truncate" dir="ltr">{request.replacement_link}</span>
+                      </button>
+                    )}
+                  </div>
+                  <div>
+                    <span className={cn(
+                      "inline-flex rounded-full px-3 py-1.5 text-xs font-black",
+                      request.status === "completed" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700",
+                    )}>
+                      {request.status === "completed" ? "تم التعويض" : "قيد المراجعة"}
+                    </span>
+                  </div>
+                  <div>
+                    {request.status === "pending" ? (
+                      <button
+                        type="button"
+                        onClick={() => void assignLink(request.id)}
+                        disabled={processing !== null || availableCount === 0}
+                        className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#8B35F5] px-4 text-sm font-black text-white transition hover:bg-[#7626DD] disabled:cursor-not-allowed disabled:opacity-45"
+                      >
+                        {processing === request.id ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />}
+                        إسناد تعويض
+                      </button>
+                    ) : (
+                      <a
+                        href={request.replacement_link || "#"}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 text-sm font-black text-emerald-700"
+                      >
+                        <ExternalLink className="h-4 w-4" />
+                        فتح الرابط
+                      </a>
+                    )}
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
+      </div>
+    </div>
   );
 }
 
@@ -3150,6 +3643,11 @@ function AccountDetail({
                           <p className="mt-2 inline-flex rounded-full bg-[#F3ECFF] px-3 py-1 text-xs font-black text-[#7C2CE8]">
                             عميل رقم #{link.link_number ?? "—"}
                           </p>
+                          {link.client_code && (
+                            <p className="mt-2 text-xs font-black text-zinc-600">
+                              رمز التعويض: <span className="text-[#7C2CE8]" dir="ltr">{link.client_code}</span>
+                            </p>
+                          )}
                         </div>
                       </label>
                       <button
@@ -4310,6 +4808,14 @@ function CustomerView({
                 <h1 className="mt-1 text-xl font-black md:text-2xl">اشتراك {theme.name}</h1>
                 {link?.link_number != null && (
                   <p className={cn("mt-1 text-xs font-black", theme.accent)}>عميل رقم #{link.link_number}</p>
+                )}
+                {link?.client_code && (
+                  <a
+                    href="/compensation"
+                    className="mt-1 inline-flex items-center gap-1 text-xs font-black text-[#7C2CE8] hover:underline"
+                  >
+                    رمز التعويض: <span dir="ltr">{link.client_code}</span>
+                  </a>
                 )}
               </div>
             </div>

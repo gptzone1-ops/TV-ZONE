@@ -29,6 +29,7 @@ export type NetflixAccount = {
 export type CustomerLink = {
   id: string;
   account_id: string;
+  client_code?: string | null;
   email?: string | null;
   link_number?: number | null;
   code_request_limit?: number | null;
@@ -49,6 +50,17 @@ export type CustomerLink = {
   service_type?: ServiceType | null;
   created_at: string;
   accounts?: NetflixAccount;
+};
+
+export type CompensationRequestStatus = "pending" | "completed";
+
+export type CompensationRequest = {
+  id: string;
+  client_code: string;
+  status: CompensationRequestStatus;
+  replacement_link: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 export type ExtraCreditRequest = {
