@@ -652,9 +652,13 @@ function CompensationPage() {
                 <h2 className="mt-4 text-xl font-black">طلبك قيد المراجعة</h2>
                 <p className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm font-bold leading-8 text-amber-900">
                   {justCreated
-                    ? "تم استلام طلب التعويض الخاص بك بنجاح. بإذن الله سيتم التعويض خلال ساعة إلى 72 ساعة، يرجى تحديث هذه الصفحة لمتابعة واستلام رابط الحساب الجديد."
-                    : "طلب التعويض الخاص بك قيد المراجعة والمعالجة حالياً، يرجى إعادة تحديث الصفحة لاحقاً."}
+                    ? "تم استلام طلب التعويض الخاص بك بنجاح. الوقت المتوقع لمعالجة الطلب من 24 إلى 72 ساعة، يرجى تحديث هذه الصفحة لاحقاً لمتابعة الطلب واستلام رابط الحساب الجديد."
+                    : "طلب التعويض الخاص بك قيد المراجعة والمعالجة حالياً. الوقت المتوقع للانتظار من 24 إلى 72 ساعة، يرجى إعادة تحديث الصفحة لاحقاً."}
                 </p>
+                <div className="mt-3 flex items-center justify-center gap-2 rounded-xl bg-[#FFF8E7] px-4 py-3 text-sm font-black text-amber-800">
+                  <Clock3 className="h-4 w-4" />
+                  مدة الانتظار المتوقعة: من 24 إلى 72 ساعة
+                </div>
                 <div className="mt-4">
                   <CompensationCodeCard code={request.client_code} compact />
                 </div>
