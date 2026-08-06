@@ -77,6 +77,9 @@ type ServiceTheme = {
 
 const defaultCustomerVideoUrl = "https://www.youtube.com/embed/ALEeqFXBWjQ?playsinline=1&rel=0&modestbranding=1";
 const videoUrl = import.meta.env.VITE_CUSTOMER_VIDEO_URL || defaultCustomerVideoUrl;
+const netflixServiceOutage = ["1", "true", "yes", "on"].includes(
+  String(import.meta.env.VITE_NETFLIX_SERVICE_OUTAGE ?? "true").trim().toLowerCase(),
+);
 const adminPassword = import.meta.env.VITE_ADMIN_PASSWORD || "Gpt123Gpt@@";
 const adminEmail = import.meta.env.VITE_ADMIN_EMAIL || "admin@zonestore.sa";
 const adminAuthKey = "zone-admin-auth";
@@ -3552,6 +3555,7 @@ function CustomerView({
   const storedVerificationCodeReceivedAt =
     link?.verification_code_received_at || account?.verification_code_received_at || null;
   const service = serviceOf(account);
+  const serviceOutageActive = service === "netflix" && netflixServiceOutage;
   const theme = serviceThemes[service];
   const customerCode = String(link?.link_number ?? link?.short_id ?? identifier);
   const supportEmail = account?.email || "غير متوفر";
@@ -3561,6 +3565,9 @@ function CustomerView({
     customerCode,
     deviceType: "mobile",
   });
+  const outageSupportWhatsAppUrl = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(
+    `مرحباً، أحتاج استفساراً بخصوص صيانة خدمة نتفليكس للحساب: ${supportEmail} - رقم العميل: ${customerCode}`,
+  )}`;
   const deviceLabel = (device: DeviceView) => (device === "mobile" ? "جوال / آيباد / بي سي / لابتوب" : "شاشة / سوني");
   const codeSecondsRemaining = codeDisplayExpiresAt
     ? Math.max(0, Math.ceil((codeDisplayExpiresAt - nowTick) / 1000))
@@ -4367,7 +4374,31 @@ function CustomerView({
 
                 <div className="space-y-5">
                   <LoginCopyCard label="البريد الإلكتروني" value={account.email} icon={Mail} setToast={setToast} theme={theme} />
-                  {!automatedCodeEnabled ? (
+                  {serviceOutageActive ? (
+                    <div
+                      className="overflow-hidden rounded-[1.75rem] border border-red-200 bg-gradient-to-b from-red-50 via-white to-zinc-50 p-5 text-center shadow-[0_18px_42px_rgba(229,9,20,0.12)]"
+                      role="status"
+                      aria-live="polite"
+                    >
+                      <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-red-100 text-[#E50914] shadow-[0_12px_28px_rgba(229,9,20,0.14)]">
+                        <Settings className="h-8 w-8" />
+                      </div>
+                      <p className="mt-4 text-xs font-black text-[#E50914]">الخدمة تحت الصيانة حالياً</p>
+                      <h3 className="mt-2 text-xl font-black leading-8 text-zinc-950">نعتذر عن التوقف الطارئ</h3>
+                      <p className="mt-3 text-sm font-bold leading-8 text-zinc-700">
+                        نعتذر منك جداً، توجد مشكلة صيانة حالية في الخدمة وجاري العمل على معالجتها. سيتم إرسال حسابات جديدة لكم كتعويض عبر الواتساب فوراً. شكراً لتفهمكم وصبركم معنا.
+                      </p>
+                      <a
+                        href={outageSupportWhatsAppUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="mt-5 flex min-h-13 w-full items-center justify-center gap-2 rounded-2xl bg-[#25D366] px-4 text-sm font-black text-white shadow-[0_14px_30px_rgba(37,211,102,0.24)] transition hover:-translate-y-0.5 hover:bg-[#1EBE5D]"
+                      >
+                        <WhatsAppLogo className="h-5 w-5" />
+                        تواصل مع خدمة العملاء عبر الواتساب
+                      </a>
+                    </div>
+                  ) : !automatedCodeEnabled ? (
                     <div className="rounded-[1.75rem] border border-[#E0D4F8] bg-gradient-to-l from-white to-[#F7F2FF] p-4 shadow-card">
                       <div className="flex items-center gap-4">
                         <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-[#F0E7FF] text-[#8B35F5]">
