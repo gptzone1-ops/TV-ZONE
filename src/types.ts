@@ -1,4 +1,5 @@
-export type AccountType = "private" | "shared" | "temporary";
+export type AccountType = "private" | "shared" | "temporary" | "compensation";
+export type CompensationDistribution = "private" | "shared";
 export type ServiceType = "netflix" | "shahid";
 export type ExtraCreditReason =
   | "كود خاطئ"
@@ -22,6 +23,7 @@ export type NetflixAccount = {
   email_provider?: "none" | "outlook" | null;
   imap_enabled?: boolean | null;
   normal_client_layout?: boolean | null;
+  compensation_distribution?: CompensationDistribution | null;
   verification_code?: string | null;
   verification_code_received_at?: string | null;
   service_type?: ServiceType | null;
@@ -61,6 +63,7 @@ export type CompensationRequestStatus = "pending" | "completed";
 export type CompensationRequest = {
   id: string;
   client_code: string;
+  account_type?: "private" | "shared" | null;
   status: CompensationRequestStatus;
   replacement_link: string | null;
   created_at: string;

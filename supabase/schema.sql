@@ -9,13 +9,21 @@ create table if not exists public.accounts (
   verification_code text,
   verification_code_received_at timestamptz,
   service_type text not null default 'netflix' check (service_type in ('netflix', 'shahid')),
-  account_type text not null check (account_type in ('private', 'shared', 'temporary')),
+  account_type text not null check (account_type in ('private', 'shared', 'temporary', 'compensation')),
+  compensation_distribution text check (compensation_distribution in ('private', 'shared')),
   temporary_short_id text unique,
   email_provider text not null default 'none' check (email_provider in ('none', 'outlook')),
   imap_enabled boolean not null default false,
   normal_client_layout boolean not null default false,
   expires_at date not null,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  constraint accounts_compensation_distribution_check check (
+    (account_type = 'compensation' and compensation_distribution in ('private', 'shared'))
+    or (account_type <> 'compensation' and compensation_distribution is null)
+  ),
+  constraint accounts_compensation_code_url_required check (
+    account_type <> 'compensation' or nullif(btrim(supplier_code_url), '') is not null
+  )
 );
 
 create table if not exists public.customer_links (

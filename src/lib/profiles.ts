@@ -1,4 +1,4 @@
-import type { AccountType, ServiceType } from "../types";
+import type { AccountType, CompensationDistribution, ServiceType } from "../types";
 
 export const LEGACY_PROFILE_CODES: Record<string, string> = {
   A: "2001",
@@ -59,8 +59,29 @@ function generateUuid() {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-export function buildProfileSlots(accountType: AccountType, serviceType: ServiceType = "netflix") {
+export function buildProfileSlots(
+  accountType: AccountType,
+  serviceType: ServiceType = "netflix",
+  compensationDistribution: CompensationDistribution = "private",
+) {
   if (accountType === "temporary") return [];
+
+  if (accountType === "compensation") {
+    const capacity = compensationDistribution === "shared"
+      ? NEW_SHARED_NETFLIX_PROFILE_CAPACITY
+      : Object.fromEntries(PROFILE_NAMES.map((profileName) => [profileName, 1]));
+
+    return Object.entries(capacity).flatMap(([profileName, profileCapacity]) =>
+      Array.from({ length: profileCapacity }, (_, index) => ({
+        profile_name: compensationDistribution === "private" ? profileName : `${profileName}${index + 1}`,
+        profile_label: profileName,
+        profile_code: PROFILE_CODES[profileName],
+        service_type: "netflix" as const,
+        uuid: generateUuid(),
+        short_id: generateShortId(),
+      })),
+    );
+  }
 
   if (accountType === "shared" && serviceType === "netflix") {
     return Object.entries(NEW_SHARED_NETFLIX_PROFILE_CAPACITY).flatMap(([profileName, capacity]) =>
@@ -92,5 +113,6 @@ export function buildProfileSlots(accountType: AccountType, serviceType: Service
 
 export function accountTypeLabel(type: AccountType) {
   if (type === "temporary") return "حساب مؤقت";
+  if (type === "compensation") return "التعويضات";
   return type === "private" ? "خاص" : "مشترك";
 }

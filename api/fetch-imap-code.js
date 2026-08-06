@@ -254,7 +254,7 @@ export default async function handler(req, res) {
     if (linkError) throw linkError;
 
     const account = link?.accounts;
-    if (!link || !account || account.account_type === "temporary" || !account.imap_enabled || account.email_provider !== "outlook") {
+    if (!link || !account || account.account_type === "temporary" || account.account_type === "compensation" || !account.imap_enabled || account.email_provider !== "outlook") {
       logImap(requestId, "account_validation_failed", { reason: "imap_not_enabled" });
       return failure(res, 400, "imap_not_enabled", { request_id: requestId });
     }

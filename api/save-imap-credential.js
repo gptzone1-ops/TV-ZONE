@@ -35,7 +35,7 @@ export default async function handler(req, res) {
       .eq("id", accountId)
       .maybeSingle();
     if (accountError) throw accountError;
-    if (!account || account.account_type === "temporary") {
+    if (!account || account.account_type === "temporary" || account.account_type === "compensation") {
       return send(res, 400, { success: false, error: "imap_not_allowed" });
     }
 

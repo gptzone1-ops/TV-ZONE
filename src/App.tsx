@@ -1,5 +1,6 @@
 import {
   ArrowRight,
+  ArrowLeft,
   CalendarDays,
   Check,
   ChevronLeft,
@@ -47,6 +48,7 @@ import {
 import { hasSupabaseConfig, supabase } from "./lib/supabase";
 import type {
   AccountType,
+  CompensationDistribution,
   CompensationRequest,
   CustomerLink,
   ExtraCreditReason,
@@ -71,6 +73,7 @@ type AccountCreateForm = {
   account_type: AccountType;
   supplier_code_url?: string;
   email_provider?: EmailProvider;
+  compensation_distribution?: CompensationDistribution;
 };
 type PublicCompensationRequest = Omit<CompensationRequest, "id">;
 type ServiceTheme = {
@@ -171,6 +174,15 @@ function isExpired(expiresAt: string) {
 
 function normalizeEmail(email: string) {
   return email.trim().toLowerCase();
+}
+
+function isValidHttpUrl(value: string) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:";
+  } catch {
+    return false;
+  }
 }
 
 function escapeRegExp(value: string) {
@@ -1088,7 +1100,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     profileNames: string[],
     exceptAccountId?: string,
   ): Promise<AccountFormResult> {
-    if (accountType === "private" || accountType === "temporary") {
+    if (accountType === "private" || accountType === "temporary" || accountType === "compensation") {
       if (await emailAlreadyExists(email, exceptAccountId)) {
         return { ok: false, error: duplicateEmailMessage };
       }
@@ -1173,7 +1185,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
 
   async function addAccount(form: AccountCreateForm): Promise<AccountFormResult> {
     const expires_at = defaultExpiryDate();
-    let slots = buildProfileSlots(form.account_type, selectedService);
+    let slots = buildProfileSlots(form.account_type, selectedService, form.compensation_distribution);
     const normalizedEmail = normalizeEmail(form.email);
     let temporaryShortId: string | null = null;
 
@@ -1200,12 +1212,13 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       account_type: form.account_type,
       supplier_code_url: form.supplier_code_url,
       temporary_short_id: temporaryShortId,
-      email_provider: form.account_type === "temporary" ? "none" : form.email_provider || "none",
-      imap_enabled: form.account_type !== "temporary" && form.email_provider === "outlook",
-      normal_client_layout: form.account_type !== "temporary",
+      email_provider: form.account_type === "temporary" || form.account_type === "compensation" ? "none" : form.email_provider || "none",
+      imap_enabled: form.account_type !== "temporary" && form.account_type !== "compensation" && form.email_provider === "outlook",
+      normal_client_layout: form.account_type !== "temporary" && form.account_type !== "compensation",
+      compensation_distribution: form.account_type === "compensation" ? form.compensation_distribution : null,
       expires_at,
       service_type: selectedService,
-      use_automated_code: true,
+      use_automated_code: form.account_type !== "compensation",
       created_at: new Date().toISOString(),
     };
     let optimisticAccountVisible = true;
@@ -1272,13 +1285,14 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
           email: normalizedEmail,
           expires_at,
           service_type: selectedService,
-          use_automated_code: form.account_type !== "temporary",
+          use_automated_code: form.account_type !== "temporary" && form.account_type !== "compensation",
           temporary_short_id: temporaryShortId,
-          email_provider: form.account_type === "temporary" ? "none" : form.email_provider || "none",
-          imap_enabled: form.account_type !== "temporary" && form.email_provider === "outlook",
-          normal_client_layout: form.account_type !== "temporary",
+          email_provider: form.account_type === "temporary" || form.account_type === "compensation" ? "none" : form.email_provider || "none",
+          imap_enabled: form.account_type !== "temporary" && form.account_type !== "compensation" && form.email_provider === "outlook",
+          normal_client_layout: form.account_type !== "temporary" && form.account_type !== "compensation",
+          compensation_distribution: form.account_type === "compensation" ? form.compensation_distribution : null,
         })
-        .select("id,email,password,account_type,expires_at,created_at,service_type,use_automated_code,supplier_code_url,temporary_short_id,email_provider,imap_enabled,normal_client_layout")
+        .select("id,email,password,account_type,compensation_distribution,expires_at,created_at,service_type,use_automated_code,supplier_code_url,temporary_short_id,email_provider,imap_enabled,normal_client_layout")
         .single();
 
       if (accountError) throw accountError;
@@ -2134,7 +2148,9 @@ function Dashboard({
         ? "مشترك"
         : accountTypeFilter === "temporary"
           ? "مؤقت"
-          : "فلترة";
+          : accountTypeFilter === "compensation"
+            ? "التعويضات"
+            : "فلترة";
 
   return (
     <div className="min-h-screen bg-white text-[#17141F]">
@@ -2212,6 +2228,7 @@ function Dashboard({
                     { key: "private", label: "خاص" },
                     { key: "shared", label: "مشترك" },
                     { key: "temporary", label: "حساب مؤقت" },
+                    { key: "compensation", label: "التعويضات" },
                   ].map((option) => (
                     <button
                       key={option.key}
@@ -2850,8 +2867,11 @@ function CompensationAdminPage({
   setToast: (toast: Toast) => void;
 }) {
   const [requests, setRequests] = useState<CompensationRequest[]>([]);
-  const [availableCount, setAvailableCount] = useState(0);
-  const [linksInput, setLinksInput] = useState("");
+  const [availableCounts, setAvailableCounts] = useState({ private: 0, shared: 0, unclassified: 0, total: 0 });
+  const [pendingCounts, setPendingCounts] = useState({ private: 0, shared: 0, unknown: 0 });
+  const [privateLinksInput, setPrivateLinksInput] = useState("");
+  const [sharedLinksInput, setSharedLinksInput] = useState("");
+  const [showDistributionModal, setShowDistributionModal] = useState(false);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState<string | null>(null);
 
@@ -2873,9 +2893,24 @@ function CompensationAdminPage({
     return payload;
   }
 
-  function applySnapshot(payload: { requests?: CompensationRequest[]; available_count?: number }) {
+  function applySnapshot(payload: {
+    requests?: CompensationRequest[];
+    available_count?: number;
+    available_counts?: { private?: number; shared?: number; unclassified?: number; total?: number };
+    pending_counts?: { private?: number; shared?: number; unknown?: number };
+  }) {
     setRequests(Array.isArray(payload.requests) ? payload.requests : []);
-    setAvailableCount(Number(payload.available_count || 0));
+    setAvailableCounts({
+      private: Number(payload.available_counts?.private || 0),
+      shared: Number(payload.available_counts?.shared || 0),
+      unclassified: Number(payload.available_counts?.unclassified || 0),
+      total: Number(payload.available_counts?.total || payload.available_count || 0),
+    });
+    setPendingCounts({
+      private: Number(payload.pending_counts?.private || 0),
+      shared: Number(payload.pending_counts?.shared || 0),
+      unknown: Number(payload.pending_counts?.unknown || 0),
+    });
   }
 
   async function loadRequests() {
@@ -2894,8 +2929,9 @@ function CompensationAdminPage({
     void loadRequests();
   }, []);
 
-  async function importLinks() {
-    const links = linksInput
+  async function importLinks(linkType: "private" | "shared") {
+    const input = linkType === "private" ? privateLinksInput : sharedLinksInput;
+    const links = input
       .split(/\r?\n|,/)
       .map((link) => link.trim())
       .filter(Boolean);
@@ -2904,12 +2940,16 @@ function CompensationAdminPage({
       return;
     }
 
-    setProcessing("import");
+    setProcessing(`import-${linkType}`);
     try {
-      const payload = await callAdminApi("import_links", { links });
+      const payload = await callAdminApi("import_links", { links, link_type: linkType });
       applySnapshot(payload);
-      setLinksInput("");
-      setToast({ label: `تمت إضافة ${Number(payload.imported_count || 0)} رابط جديد`, at: Date.now() });
+      if (linkType === "private") setPrivateLinksInput("");
+      else setSharedLinksInput("");
+      setToast({
+        label: `تمت إضافة ${Number(payload.imported_count || 0)} رابط ${linkType === "private" ? "خاص" : "مشترك"}`,
+        at: Date.now(),
+      });
     } catch (importError) {
       console.error("Compensation links import failed:", importError);
       setToast({ label: "تعذر استيراد الروابط، تأكد من صحتها", tone: "error", at: Date.now() });
@@ -2925,9 +2965,15 @@ function CompensationAdminPage({
       setToast({ label: "تم إسناد رابط التعويض بنجاح", at: Date.now() });
     } catch (assignError) {
       console.error("Compensation assignment failed:", assignError);
-      const noLinks = (assignError as Error & { code?: string }).code === "no_available_links";
+      const errorCode = (assignError as Error & { code?: string }).code;
+      const noLinks = errorCode === "no_available_links";
+      const unknownType = errorCode === "request_account_type_not_found";
       setToast({
-        label: noLinks ? "لا توجد روابط تعويض متاحة في المخزن" : "تعذر إسناد رابط التعويض",
+        label: noLinks
+          ? "لا توجد روابط تعويض متاحة من النوع المطابق"
+          : unknownType
+            ? "تعذر تحديد نوع الحساب؛ لم يتم تعديل الطلب"
+            : "تعذر إسناد رابط التعويض",
         tone: "error",
         at: Date.now(),
       });
@@ -2936,12 +2982,22 @@ function CompensationAdminPage({
     }
   }
 
-  async function distributeLinks() {
-    setProcessing("distribute");
+  async function distributeLinks(mode: "private" | "shared" | "all") {
+    setProcessing(`distribute-${mode}`);
     try {
-      const payload = await callAdminApi("distribute");
+      const payload = await callAdminApi("distribute", { mode });
       applySnapshot(payload);
-      setToast({ label: `تم توزيع ${Number(payload.assigned_count || 0)} رابط`, at: Date.now() });
+      setShowDistributionModal(false);
+      const remainingPrivate = Number(payload.remaining_counts?.private || 0);
+      const remainingShared = Number(payload.remaining_counts?.shared || 0);
+      const remainingText = remainingPrivate || remainingShared
+        ? `، المتبقي: ${remainingPrivate} خاص و${remainingShared} مشترك`
+        : "";
+      setToast({
+        label: `تم توزيع ${Number(payload.assigned_count || 0)} رابط${remainingText}`,
+        tone: remainingText ? "error" : "success",
+        at: Date.now(),
+      });
     } catch (distributionError) {
       console.error("Compensation distribution failed:", distributionError);
       setToast({ label: "تعذر توزيع الروابط", tone: "error", at: Date.now() });
@@ -2984,11 +3040,12 @@ function CompensationAdminPage({
           </div>
         </div>
 
-        <div className="mb-6 grid gap-4 sm:grid-cols-3">
+        <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           {[
             { label: "طلبات معلقة", value: pendingCount, tone: "text-amber-700 bg-amber-100" },
             { label: "تم تعويضها", value: completedCount, tone: "text-emerald-700 bg-emerald-100" },
-            { label: "روابط متاحة", value: availableCount, tone: "text-[#7C2CE8] bg-[#F1E7FF]" },
+            { label: "روابط خاصة متاحة", value: availableCounts.private, tone: "text-[#7C2CE8] bg-[#F1E7FF]" },
+            { label: "روابط مشتركة متاحة", value: availableCounts.shared, tone: "text-sky-700 bg-sky-100" },
           ].map((item) => (
             <div key={item.label} className="rounded-3xl border border-[#E8DCFF] bg-white p-5 shadow-[0_16px_44px_rgba(70,40,120,0.08)]">
               <div className={cn("flex h-11 w-11 items-center justify-center rounded-xl", item.tone)}>
@@ -3001,38 +3058,75 @@ function CompensationAdminPage({
         </div>
 
         <section className="mb-6 rounded-3xl border border-[#E8DCFF] bg-white p-5 shadow-[0_18px_50px_rgba(70,40,120,0.09)] md:p-6">
-          <div className="flex flex-col gap-5 lg:flex-row lg:items-end">
-            <label className="min-w-0 flex-1">
-              <span className="mb-2 block text-sm font-black">مخزن الروابط التعويضية</span>
-              <textarea
-                value={linksInput}
-                onChange={(event) => setLinksInput(event.target.value)}
-                placeholder={"ألصق الروابط هنا، كل رابط في سطر منفصل\nhttps://tv-zone.vercel.app/v/example"}
-                dir="ltr"
-                className="min-h-32 w-full resize-y rounded-2xl border-2 border-[#DCCBFA] bg-[#FCFAFF] p-4 text-left text-sm font-bold leading-7 outline-none transition focus:border-[#8B35F5] focus:bg-white"
-              />
-            </label>
-            <div className="grid shrink-0 gap-3 sm:grid-cols-2 lg:w-[390px]">
+          <div className="mb-5">
+            <h2 className="text-lg font-black">مخزن الروابط التعويضية</h2>
+            <p className="mt-1 text-xs font-bold leading-6 text-zinc-500">كل مخزن مستقل، ولن يُسند أي رابط إلا لطلب يطابق نوع حسابه.</p>
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            {([
+              {
+                type: "private" as const,
+                title: "روابط تعويض حسابات خاصة",
+                value: privateLinksInput,
+                setValue: setPrivateLinksInput,
+                count: availableCounts.private,
+              },
+              {
+                type: "shared" as const,
+                title: "روابط تعويض حسابات مشتركة",
+                value: sharedLinksInput,
+                setValue: setSharedLinksInput,
+                count: availableCounts.shared,
+              },
+            ]).map((pool) => (
+              <div key={pool.type} className="rounded-2xl border border-[#E8DCFF] bg-[#FCFAFF] p-4">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <p className="text-sm font-black">{pool.title}</p>
+                  <span className="rounded-full bg-white px-3 py-1 text-xs font-black text-[#7C2CE8] shadow-sm">متاح: {pool.count}</span>
+                </div>
+                <textarea
+                  value={pool.value}
+                  onChange={(event) => pool.setValue(event.target.value)}
+                  placeholder={"ألصق الروابط هنا، كل رابط في سطر منفصل\nhttps://tv-zone.vercel.app/v/example"}
+                  dir="ltr"
+                  className="min-h-32 w-full resize-y rounded-2xl border-2 border-[#DCCBFA] bg-white p-4 text-left text-sm font-bold leading-7 outline-none transition focus:border-[#8B35F5]"
+                />
+                <button
+                  type="button"
+                  onClick={() => void importLinks(pool.type)}
+                  disabled={processing !== null}
+                  className="mt-3 flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-[#DCCBFA] bg-[#F8F4FF] px-4 text-sm font-black text-[#7C2CE8] transition hover:bg-[#F1E7FF] disabled:opacity-50"
+                >
+                  {processing === `import-${pool.type}` ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                  استيراد {pool.type === "private" ? "الروابط الخاصة" : "الروابط المشتركة"}
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-5 flex flex-col gap-3 rounded-2xl border border-[#E8DCFF] bg-white p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-black">التوزيع المطابق لنوع الحساب</p>
+              <p className="mt-1 text-xs font-bold text-zinc-500">معلق: {pendingCounts.private} خاص، {pendingCounts.shared} مشترك</p>
+            </div>
+            <div className="shrink-0">
               <button
                 type="button"
-                onClick={() => void importLinks()}
-                disabled={processing !== null}
-                className="flex h-13 items-center justify-center gap-2 rounded-xl border border-[#DCCBFA] bg-[#F8F4FF] px-4 text-sm font-black text-[#7C2CE8] transition hover:bg-[#F1E7FF] disabled:opacity-50"
+                onClick={() => setShowDistributionModal(true)}
+                disabled={processing !== null || pendingCount === 0 || (availableCounts.private + availableCounts.shared) === 0}
+                className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#8B35F5] px-5 text-sm font-black text-white shadow-[0_12px_28px_rgba(139,53,245,0.25)] transition hover:bg-[#7626DD] disabled:cursor-not-allowed disabled:opacity-45 sm:w-auto"
               >
-                {processing === "import" ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-                استيراد الروابط
-              </button>
-              <button
-                type="button"
-                onClick={() => void distributeLinks()}
-                disabled={processing !== null || pendingCount === 0 || availableCount === 0}
-                className="flex h-13 items-center justify-center gap-2 rounded-xl bg-[#8B35F5] px-4 text-sm font-black text-white shadow-[0_12px_28px_rgba(139,53,245,0.25)] transition hover:bg-[#7626DD] disabled:cursor-not-allowed disabled:opacity-45"
-              >
-                {processing === "distribute" ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />}
+                <Link2 className="h-4 w-4" />
                 توزيع المتاح تلقائياً
               </button>
             </div>
           </div>
+          {availableCounts.unclassified > 0 && (
+            <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-black text-amber-800">
+              يوجد {availableCounts.unclassified} رابط قديم غير مصنف. لم يتم تغييره أو استخدامه حفاظاً على البيانات السابقة.
+            </p>
+          )}
         </section>
 
         <section className="overflow-hidden rounded-3xl border border-[#E8DCFF] bg-white shadow-[0_18px_50px_rgba(70,40,120,0.09)]">
@@ -3066,6 +3160,16 @@ function CompensationAdminPage({
                   <div>
                     <p className="text-xs font-bold text-zinc-500">رمز التعويض</p>
                     <p className="mt-1 text-lg font-black text-[#7C2CE8]" dir="ltr">{request.client_code}</p>
+                    <span className={cn(
+                      "mt-2 inline-flex rounded-full px-2.5 py-1 text-[11px] font-black",
+                      request.account_type === "private"
+                        ? "bg-violet-100 text-violet-700"
+                        : request.account_type === "shared"
+                          ? "bg-sky-100 text-sky-700"
+                          : "bg-zinc-100 text-zinc-500",
+                    )}>
+                      {request.account_type === "private" ? "حساب خاص" : request.account_type === "shared" ? "حساب مشترك" : "النوع غير معروف"}
+                    </span>
                   </div>
                   <div className="min-w-0">
                     <p className="text-xs font-bold text-zinc-500">تاريخ الطلب</p>
@@ -3094,7 +3198,11 @@ function CompensationAdminPage({
                       <button
                         type="button"
                         onClick={() => void assignLink(request.id)}
-                        disabled={processing !== null || availableCount === 0}
+                        disabled={
+                          processing !== null ||
+                          !request.account_type ||
+                          (request.account_type === "private" ? availableCounts.private : availableCounts.shared) === 0
+                        }
                         className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#8B35F5] px-4 text-sm font-black text-white transition hover:bg-[#7626DD] disabled:cursor-not-allowed disabled:opacity-45"
                       >
                         {processing === request.id ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />}
@@ -3117,6 +3225,86 @@ function CompensationAdminPage({
             </div>
           )}
         </section>
+
+        {showDistributionModal && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-[#17141F]/70 px-4 py-6 backdrop-blur-sm"
+            role="dialog"
+            aria-modal="true"
+            aria-label="اختيار نوع توزيع التعويضات"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget && !processing) setShowDistributionModal(false);
+            }}
+          >
+            <div className="w-full max-w-lg rounded-3xl border border-[#DCCBFA] bg-white p-5 shadow-[0_30px_90px_rgba(20,10,35,0.28)] md:p-6">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-xs font-black text-[#8B35F5]">توزيع مطابق وآمن</p>
+                  <h2 className="mt-1 text-xl font-black">اختر نوع التعويضات</h2>
+                  <p className="mt-2 text-xs font-bold leading-6 text-zinc-500">يتم فحص نوع الحساب للطلبات المعلقة بالقراءة فقط، ثم يُسند رابط من المخزن المطابق.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowDistributionModal(false)}
+                  disabled={processing !== null}
+                  title="إغلاق"
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[#E8DCFF] text-zinc-500 hover:bg-[#F8F4FF]"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              <div className="mt-5 grid gap-3">
+                {([
+                  {
+                    mode: "private" as const,
+                    title: "توزيع التعويضات الخاصة",
+                    detail: `${pendingCounts.private} طلب معلق / ${availableCounts.private} رابط متاح`,
+                    disabled: pendingCounts.private === 0 || availableCounts.private === 0,
+                  },
+                  {
+                    mode: "shared" as const,
+                    title: "توزيع التعويضات المشتركة",
+                    detail: `${pendingCounts.shared} طلب معلق / ${availableCounts.shared} رابط متاح`,
+                    disabled: pendingCounts.shared === 0 || availableCounts.shared === 0,
+                  },
+                  {
+                    mode: "all" as const,
+                    title: "توزيع الكل بشرط مطابقة النوع",
+                    detail: "الخاص للخاص والمشترك للمشترك فقط",
+                    disabled:
+                      (pendingCounts.private === 0 || availableCounts.private === 0) &&
+                      (pendingCounts.shared === 0 || availableCounts.shared === 0),
+                  },
+                ]).map((option) => (
+                  <button
+                    key={option.mode}
+                    type="button"
+                    onClick={() => void distributeLinks(option.mode)}
+                    disabled={processing !== null || option.disabled}
+                    className="flex min-h-16 items-center justify-between gap-4 rounded-2xl border border-[#DCCBFA] bg-[#FCFAFF] px-4 py-3 text-right transition hover:border-[#8B35F5] hover:bg-[#F6F0FF] disabled:cursor-not-allowed disabled:opacity-45"
+                  >
+                    <span>
+                      <span className="block text-sm font-black">{option.title}</span>
+                      <span className="mt-1 block text-xs font-bold text-zinc-500">{option.detail}</span>
+                    </span>
+                    {processing === `distribute-${option.mode}` ? (
+                      <RefreshCw className="h-5 w-5 shrink-0 animate-spin text-[#8B35F5]" />
+                    ) : (
+                      <ArrowLeft className="h-5 w-5 shrink-0 text-[#8B35F5]" />
+                    )}
+                  </button>
+                ))}
+              </div>
+
+              {pendingCounts.unknown > 0 && (
+                <p className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-black leading-6 text-amber-800">
+                  يوجد {pendingCounts.unknown} طلب تعذر تحديد نوعه. لن يتم تغييره أو إسناد رابط له تلقائياً.
+                </p>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -3393,6 +3581,7 @@ function AccountForm({
   const [supplierCodeUrl, setSupplierCodeUrl] = useState(initialAccount?.supplier_code_url || "");
   const [emailProvider, setEmailProvider] = useState<EmailProvider>("none");
   const [formError, setFormError] = useState("");
+  const [showCompensationDistribution, setShowCompensationDistribution] = useState(false);
   const calculatedExpiry = defaultExpiryDate();
   const theme = serviceThemes[service];
 
@@ -3407,15 +3596,21 @@ function AccountForm({
       return;
     }
 
+    if (accountType === "compensation" && !supplier_code_url) {
+      setFormError("أدخل رابط جلب الكود قبل متابعة إنشاء حساب التعويضات.");
+      return;
+    }
+    if (accountType === "compensation" && supplier_code_url && !isValidHttpUrl(supplier_code_url)) {
+      setFormError("رابط جلب الكود غير صحيح. يجب أن يبدأ بـ https:// أو http://.");
+      return;
+    }
+
     if (!initialAccount) {
-      onClose();
-      void onAdd({
-        email: cleanEmail,
-        password,
-        account_type: accountType,
-        supplier_code_url,
-        email_provider: accountType === "temporary" ? "none" : emailProvider,
-      });
+      if (accountType === "compensation") {
+        setShowCompensationDistribution(true);
+        return;
+      }
+      submitNewAccount();
       return;
     }
 
@@ -3426,6 +3621,20 @@ function AccountForm({
     } else {
       setFormError(accountFormError(result) || "تعذر حفظ الحساب، حاول مرة أخرى");
     }
+  }
+
+  function submitNewAccount(compensationDistribution?: CompensationDistribution) {
+    const cleanEmail = normalizeEmail(email);
+    const supplier_code_url = supplierCodeUrl.trim() || undefined;
+    onClose();
+    void onAdd({
+      email: cleanEmail,
+      password,
+      account_type: accountType,
+      supplier_code_url,
+      email_provider: accountType === "temporary" || accountType === "compensation" ? "none" : emailProvider,
+      compensation_distribution: accountType === "compensation" ? compensationDistribution : undefined,
+    });
   }
 
   return (
@@ -3467,10 +3676,10 @@ function AccountForm({
           <p className="mb-2 text-sm font-black text-zinc-700">نوع الحساب</p>
           <div className={cn(
             "grid rounded-2xl border-2 border-[#E0D0FB] bg-[#F8F4FF] p-1.5",
-            service === "netflix" ? "sm:grid-cols-3" : "sm:grid-cols-2",
+            "sm:grid-cols-2",
           )}>
             {(service === "netflix"
-              ? (["private", "shared", "temporary"] as AccountType[])
+              ? (["private", "shared", "temporary", "compensation"] as AccountType[])
               : (["private", "shared"] as AccountType[])
             ).map((type) => (
               <button
@@ -3525,7 +3734,7 @@ function AccountForm({
 
         {accountType !== "temporary" && (
           <>
-            {!editing && service === "netflix" && (
+            {!editing && service === "netflix" && accountType !== "compensation" && (
               <div className="mb-4 rounded-2xl border border-[#E0D4F8] bg-[#FAF8FD] p-4">
                 <p className="mb-2 text-sm font-black text-zinc-700">مزود البريد وجلب الكود</p>
                 <div className="grid grid-cols-2 gap-2 rounded-xl bg-[#F1E9FF] p-1.5">
@@ -3570,13 +3779,18 @@ function AccountForm({
 
             <Field icon={Link2} label="رابط جلب الأكواد">
               <input
+                required={accountType === "compensation"}
                 value={supplierCodeUrl}
                 onChange={(event) => setSupplierCodeUrl(event.target.value)}
                 placeholder="https://example.com"
                 className="admin-modal-input"
                 dir="ltr"
               />
-              <p className="mt-2 text-[11px] font-bold text-zinc-400">خاص بالمسؤول فقط ولا يظهر في صفحة العميل.</p>
+              <p className="mt-2 text-[11px] font-bold text-zinc-400">
+                {accountType === "compensation"
+                  ? "سيظهر للعميل كزر جلب الكود ويفتح هذا الرابط مباشرة."
+                  : "خاص بالمسؤول فقط ولا يظهر في صفحة العميل."}
+              </p>
             </Field>
           </>
         )}
@@ -3600,6 +3814,8 @@ function AccountForm({
           <p className="mb-5 rounded-xl bg-[#F4EDFF] px-4 py-3 text-xs font-bold text-[#6F22D6]">
             {accountType === "temporary"
               ? "سيتم إنشاء رابط مباشر واحد يعرض البريد الإلكتروني وكلمة المرور وتعليمات الدخول فقط."
+              : accountType === "compensation"
+                ? "بعد الضغط على الإضافة ستختار توزيعاً خاصاً (5 روابط) أو مشتركاً (8 روابط من B إلى E)."
               : service === "shahid"
               ? accountType === "private"
                 ? "سيتم إنشاء 4 روابط تلقائياً بدون رمز ملف."
@@ -3628,6 +3844,66 @@ function AccountForm({
           </button>
         </div>
       </form>
+
+      {showCompensationDistribution && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-[#17141F]/75 px-4 py-6 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-label="اختيار توزيع حساب التعويضات"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !loading) setShowCompensationDistribution(false);
+          }}
+        >
+          <div className="w-full max-w-lg rounded-3xl border border-[#DCC9FA] bg-white p-5 shadow-[0_30px_90px_rgba(20,10,35,0.30)] md:p-7">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-black text-[#8B35F5]">الخطوة الأخيرة</p>
+                <h3 className="mt-1 text-2xl font-black">اختر نوع توزيع التعويضات</h3>
+                <p className="mt-2 text-sm font-bold leading-7 text-zinc-500">
+                  سيُنشئ النظام روابط العملاء الآن وفق التوزيع الذي تختاره فقط.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCompensationDistribution(false)}
+                disabled={loading}
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[#E7DDF5] text-zinc-500 transition hover:bg-[#F5EEFF]"
+                title="إغلاق"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="mt-6 grid gap-3 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCompensationDistribution(false);
+                  submitNewAccount("private");
+                }}
+                disabled={loading}
+                className="rounded-2xl border-2 border-[#DCC9FA] bg-[#FCFAFF] p-5 text-right transition hover:border-[#8B35F5] hover:bg-[#F5EEFF] disabled:opacity-50"
+              >
+                <span className="block text-lg font-black text-[#6F22D6]">خاص</span>
+                <span className="mt-2 block text-xs font-bold leading-6 text-zinc-500">5 روابط منفصلة للملفات A وB وC وD وE.</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCompensationDistribution(false);
+                  submitNewAccount("shared");
+                }}
+                disabled={loading}
+                className="rounded-2xl border-2 border-[#DCC9FA] bg-[#FCFAFF] p-5 text-right transition hover:border-[#8B35F5] hover:bg-[#F5EEFF] disabled:opacity-50"
+              >
+                <span className="block text-lg font-black text-[#6F22D6]">مشترك</span>
+                <span className="mt-2 block text-xs font-bold leading-6 text-zinc-500">8 روابط: رابطان لكل ملف من B إلى E، والملف A محجوز.</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -3677,6 +3953,8 @@ function AccountDetail({
   const service = serviceOf(account);
   const fallbackGeneratedLimit = account.account_type === "temporary"
     ? 0
+    : account.account_type === "compensation"
+      ? account.compensation_distribution === "shared" ? 8 : 5
     : service === "shahid"
       ? account.account_type === "private" ? 4 : 8
       : account.account_type === "private" ? 5 : 8;
@@ -3842,7 +4120,12 @@ function AccountDetail({
         <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
           {[
             { label: "اسم الحساب", value: account.email, valueClass: "text-sm" },
-            { label: "نوع الحساب", value: accountTypeLabel(account.account_type) },
+            {
+              label: "نوع الحساب",
+              value: account.account_type === "compensation"
+                ? `التعويضات - ${account.compensation_distribution === "shared" ? "مشترك" : "خاص"}`
+                : accountTypeLabel(account.account_type),
+            },
             { label: "الخطة", value: `${generatedLimit} روابط` },
             { label: "الحالة", value: expired ? "منتهي" : "فعال", valueClass: expired ? "text-amber-700" : "text-emerald-600" },
             { label: "تاريخ الانتهاء", value: formatDate(account.expires_at) },
@@ -4277,6 +4560,103 @@ function AccountDetail({
   );
 }
 
+function CompensationAccountCustomerView({
+  link,
+  account,
+  navigate,
+}: {
+  link: CustomerLink;
+  account: NetflixAccount;
+  navigate: (path: string) => void;
+}) {
+  const [toast, setToast] = useState<Toast>(null);
+  const theme = serviceThemes.netflix;
+  const codeUrl = String(account.supplier_code_url || "").trim();
+
+  return (
+    <Shell toast={toast}>
+      <div className="min-h-screen bg-gradient-to-b from-[#F3F4F6] via-[#F9FAFB] to-white px-4 py-7 md:py-12" dir="rtl">
+        <main className="mx-auto w-full max-w-[680px] space-y-6">
+          <header className="rounded-[2rem] border border-white bg-white/90 p-5 shadow-premium backdrop-blur md:p-6">
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="flex h-13 w-13 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-[#E50914] to-[#B20710] text-lg font-black text-white shadow-[0_12px_28px_rgba(229,9,20,0.22)]">
+                  زون
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-black text-[#E50914]">Zone Store</p>
+                  <h1 className="mt-1 text-xl font-black text-zinc-950 md:text-2xl">بيانات حساب التعويض</h1>
+                  <p className="mt-1 text-xs font-bold text-zinc-500">الملف {link.profile_label || link.profile_name}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => navigate("/")}
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-red-50 text-[#E50914] transition hover:bg-[#E50914] hover:text-white"
+                title="العودة"
+              >
+                <UserRound className="h-5 w-5" />
+              </button>
+            </div>
+          </header>
+
+          <section className="rounded-[2rem] border border-white bg-white p-6 shadow-premium-lg md:p-8">
+            <div className="mb-6 text-center">
+              <div className="mx-auto flex h-13 w-13 items-center justify-center rounded-2xl bg-red-50 text-[#E50914]">
+                <KeyRound className="h-6 w-6" />
+              </div>
+              <h2 className="mt-3 text-2xl font-black text-zinc-950 md:text-3xl">بيانات تسجيل الدخول</h2>
+            </div>
+
+            <div className="space-y-4">
+              <LoginCopyCard label="البريد الإلكتروني" value={account.email} icon={Mail} setToast={setToast} theme={theme} />
+              <LoginCopyCard label="كلمة المرور" value={account.password} icon={KeyRound} setToast={setToast} theme={theme} />
+            </div>
+
+            {codeUrl ? (
+              <a
+                href={codeUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-6 flex min-h-14 w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-l from-[#E50914] to-[#B20710] px-5 text-base font-black text-white shadow-[0_16px_36px_rgba(229,9,20,0.25)] transition hover:-translate-y-0.5 hover:shadow-[0_20px_42px_rgba(229,9,20,0.32)]"
+              >
+                <ExternalLink className="h-5 w-5" />
+                جلب الكود
+              </a>
+            ) : (
+              <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-center text-sm font-black text-amber-800">
+                رابط جلب الكود غير متوفر حالياً، يرجى التواصل مع المتجر.
+              </div>
+            )}
+          </section>
+
+          <section className="rounded-[2rem] border border-white bg-white p-6 shadow-premium md:p-8">
+            <div className="mb-5 flex items-center gap-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-red-50 text-[#E50914]">
+                <MonitorPlay className="h-5 w-5" />
+              </div>
+              <h2 className="text-2xl font-black text-zinc-950">شرح طريقة الدخول</h2>
+            </div>
+            <div className="space-y-3">
+              {[
+                "أدخل البريد الإلكتروني في تطبيق أو موقع الخدمة.",
+                "اضغط على المزيد من المساعدة.",
+                "اختر استخدام كلمة مرور وأدخل كلمة السر الموضحة أعلى الشاشة.",
+                "في حال طلب رمز التفعيل، اضغط على زر جلب الكود وسيتم تحويلك مباشرة إلى صفحة الحصول على الكود.",
+              ].map((step, index) => (
+                <div key={step} className="flex items-start gap-3 rounded-2xl border border-zinc-100 bg-[#FAFAFB] p-4">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#E50914] text-sm font-black text-white">{index + 1}</span>
+                  <p className="pt-1 text-sm font-bold leading-7 text-zinc-700">{step}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+        </main>
+      </div>
+    </Shell>
+  );
+}
+
 function CustomerView({
   identifier,
   lookup,
@@ -4338,7 +4718,7 @@ function CustomerView({
       const { data, error } = await supabase
         .from("customer_links")
         .select(
-          "*,accounts(id,email,password,use_automated_code,verification_code,verification_code_received_at,service_type,account_type,expires_at,created_at,email_provider,imap_enabled,normal_client_layout)",
+          "*,accounts(id,email,password,use_automated_code,supplier_code_url,verification_code,verification_code_received_at,service_type,account_type,compensation_distribution,expires_at,created_at,email_provider,imap_enabled,normal_client_layout)",
         )
         .eq(queryColumn, identifier)
         .single();
@@ -4399,17 +4779,18 @@ function CustomerView({
 
   useEffect(() => {
     const shouldLock =
-      showDisclaimer ||
-      showReminder ||
-      Boolean(pendingDeviceView) ||
-      showTvRequestModal ||
-      showExtraCreditModal;
+      link?.accounts?.account_type !== "compensation" &&
+      (showDisclaimer ||
+        showReminder ||
+        Boolean(pendingDeviceView) ||
+        showTvRequestModal ||
+        showExtraCreditModal);
     const previous = document.body.style.overflow;
     if (shouldLock) document.body.style.overflow = "hidden";
     return () => {
       document.body.style.overflow = previous;
     };
-  }, [showDisclaimer, showReminder, pendingDeviceView, showTvRequestModal, showExtraCreditModal]);
+  }, [link?.accounts?.account_type, showDisclaimer, showReminder, pendingDeviceView, showTvRequestModal, showExtraCreditModal]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNowTick(Date.now()), 1000);
@@ -4500,7 +4881,7 @@ function CustomerView({
     setAgreeTvRequest(false);
     setTvSearchDeadlineAt(null);
 
-    if (deviceView !== "screen" || !tvAttemptUsed) {
+    if (!link || deviceView !== "screen" || !tvAttemptUsed) {
       setTvRequestState("idle");
       setTvDisplayExpiresAt(null);
       setVisibleTvApprovalUrl(null);
@@ -4945,7 +5326,7 @@ function CustomerView({
       const { data: refreshedLink, error: refreshError } = await supabase
         .from("customer_links")
         .select(
-          "*,accounts(id,email,password,use_automated_code,verification_code,verification_code_received_at,service_type,account_type,expires_at,created_at,email_provider,imap_enabled,normal_client_layout)",
+          "*,accounts(id,email,password,use_automated_code,supplier_code_url,verification_code,verification_code_received_at,service_type,account_type,compensation_distribution,expires_at,created_at,email_provider,imap_enabled,normal_client_layout)",
         )
         .eq("id", link.id)
         .maybeSingle();
@@ -5169,6 +5550,10 @@ function CustomerView({
     timeoutRef.current = window.setTimeout(() => {
       void finishCodeSearch(accountId);
     }, 15_000);
+  }
+
+  if (link && account?.account_type === "compensation") {
+    return <CompensationAccountCustomerView link={link} account={account} navigate={navigate} />;
   }
 
   return (
@@ -6233,6 +6618,7 @@ function ExtraCreditRequestModal({
           </button>
         </div>
       </form>
+
     </div>
   );
 }
