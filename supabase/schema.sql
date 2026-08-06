@@ -9,7 +9,8 @@ create table if not exists public.accounts (
   verification_code text,
   verification_code_received_at timestamptz,
   service_type text not null default 'netflix' check (service_type in ('netflix', 'shahid')),
-  account_type text not null check (account_type in ('private', 'shared')),
+  account_type text not null check (account_type in ('private', 'shared', 'temporary')),
+  temporary_short_id text unique,
   expires_at date not null,
   created_at timestamptz not null default now()
 );

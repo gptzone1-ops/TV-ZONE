@@ -1,4 +1,4 @@
-export type AccountType = "private" | "shared";
+export type AccountType = "private" | "shared" | "temporary";
 export type ServiceType = "netflix" | "shahid";
 export type ExtraCreditReason =
   | "كود خاطئ"
@@ -18,6 +18,7 @@ export type NetflixAccount = {
   password: string;
   use_automated_code?: boolean | null;
   supplier_code_url?: string | null;
+  temporary_short_id?: string | null;
   verification_code?: string | null;
   verification_code_received_at?: string | null;
   service_type?: ServiceType | null;

@@ -1,4 +1,4 @@
-import type { ServiceType } from "../types";
+import type { AccountType, ServiceType } from "../types";
 
 export const LEGACY_PROFILE_CODES: Record<string, string> = {
   A: "2001",
@@ -59,7 +59,9 @@ function generateUuid() {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-export function buildProfileSlots(accountType: "private" | "shared", serviceType: ServiceType = "netflix") {
+export function buildProfileSlots(accountType: AccountType, serviceType: ServiceType = "netflix") {
+  if (accountType === "temporary") return [];
+
   if (accountType === "shared" && serviceType === "netflix") {
     return Object.entries(NEW_SHARED_NETFLIX_PROFILE_CAPACITY).flatMap(([profileName, capacity]) =>
       Array.from({ length: capacity }, (_, index) => ({
@@ -88,6 +90,7 @@ export function buildProfileSlots(accountType: "private" | "shared", serviceType
   );
 }
 
-export function accountTypeLabel(type: "private" | "shared") {
+export function accountTypeLabel(type: AccountType) {
+  if (type === "temporary") return "حساب مؤقت";
   return type === "private" ? "خاص" : "مشترك";
 }

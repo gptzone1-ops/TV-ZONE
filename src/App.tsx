@@ -290,6 +290,10 @@ function getCustomerUrl(link: CustomerLink) {
   return link.short_id ? `${getBaseUrl()}/v/${link.short_id}` : `${getBaseUrl()}/view/${link.uuid}`;
 }
 
+function getTemporaryAccountUrl(account: NetflixAccount) {
+  return account.temporary_short_id ? `${getBaseUrl()}/t/${account.temporary_short_id}` : "";
+}
+
 function getProfilePin(link: CustomerLink) {
   const storedPin = `${link.profile_code ?? ""}`.trim();
   if (STORED_PROFILE_PINS.has(storedPin)) return storedPin;
@@ -492,10 +496,145 @@ export default function App() {
 
   const shortMatch = route.match(/^\/v\/([^/]+)$/);
   const viewMatch = route.match(/^\/view\/([^/]+)$/);
+  const temporaryMatch = route.match(/^\/t\/([^/]+)$/);
   if (shortMatch) return <CustomerView identifier={shortMatch[1]} lookup="short" navigate={navigate} />;
   if (viewMatch) return <CustomerView identifier={viewMatch[1]} lookup="uuid" navigate={navigate} />;
+  if (temporaryMatch) return <TemporaryAccountView identifier={temporaryMatch[1]} />;
   if (route === "/compensation" || route === "/compensation/") return <CompensationPage />;
   return <AdminApp navigate={navigate} />;
+}
+
+function TemporaryAccountView({ identifier }: { identifier: string }) {
+  const [account, setAccount] = useState<{ email: string; password: string } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [copied, setCopied] = useState<"email" | "password" | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    async function loadTemporaryAccount() {
+      setLoading(true);
+      setError("");
+      try {
+        const response = await fetch("/api/temporary-account", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: identifier }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload?.success || !payload?.account) {
+          throw new Error(payload?.error || "temporary_account_not_found");
+        }
+        if (active) setAccount(payload.account);
+      } catch (loadError) {
+        console.error("Temporary account page load failed:", loadError);
+        if (active) setError("الرابط غير صحيح أو لم يعد متاحاً");
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+    void loadTemporaryAccount();
+    return () => {
+      active = false;
+    };
+  }, [identifier]);
+
+  async function copyValue(value: string, field: "email" | "password") {
+    try {
+      await writeClipboardText(value);
+      setCopied(field);
+      window.setTimeout(() => setCopied(null), 1800);
+    } catch (copyError) {
+      console.error("Temporary account copy failed:", copyError);
+    }
+  }
+
+  return (
+    <main
+      className="min-h-screen bg-[linear-gradient(180deg,#F3F4F6_0%,#FFFFFF_70%)] px-4 py-6 font-cairo text-zinc-950 sm:py-10"
+      dir="rtl"
+    >
+      <div className="mx-auto w-full max-w-2xl">
+        <header className="mb-6 flex items-center justify-between rounded-3xl border border-red-100 bg-white px-5 py-4 shadow-[0_18px_55px_rgba(40,20,25,0.10)] sm:px-7">
+          <div className="flex items-center gap-3">
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-netflix text-xl font-black text-white shadow-red">
+              زون
+            </div>
+            <div>
+              <p className="text-xs font-black text-netflix">ZONE STORE</p>
+              <h1 className="text-xl font-black sm:text-2xl">حساب نتفليكس المؤقت</h1>
+            </div>
+          </div>
+          <LockKeyhole className="h-6 w-6 text-netflix" />
+        </header>
+
+        <section className="overflow-hidden rounded-3xl border border-red-100 bg-white p-5 shadow-[0_24px_70px_rgba(40,20,25,0.12)] sm:p-8">
+          {loading && (
+            <div className="flex min-h-72 flex-col items-center justify-center gap-4 text-center">
+              <RefreshCw className="h-8 w-8 animate-spin text-netflix" />
+              <p className="text-sm font-black text-zinc-600">جاري تحميل بيانات الحساب...</p>
+            </div>
+          )}
+
+          {!loading && error && (
+            <div className="flex min-h-72 flex-col items-center justify-center gap-4 text-center">
+              <CircleX className="h-12 w-12 text-netflix" />
+              <p className="text-base font-black text-zinc-700">{error}</p>
+            </div>
+          )}
+
+          {!loading && account && (
+            <div className="animate-rise">
+              <div className="mb-7 text-center">
+                <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-red-50 text-netflix">
+                  <KeyRound className="h-7 w-7" />
+                </div>
+                <h2 className="mt-4 text-2xl font-black sm:text-3xl">بيانات تسجيل الدخول</h2>
+                <p className="mt-2 text-sm font-bold text-zinc-500">انسخ البيانات التالية واستخدمها داخل تطبيق نتفليكس.</p>
+              </div>
+
+              <div className="space-y-4">
+                {[
+                  { field: "email" as const, label: "البريد الإلكتروني", value: account.email, icon: Mail },
+                  { field: "password" as const, label: "كلمة المرور", value: account.password, icon: KeyRound },
+                ].map((item) => (
+                  <div key={item.field} className="rounded-2xl border border-zinc-200 bg-[#FAFAFA] p-4 sm:p-5">
+                    <div className="mb-3 flex items-center gap-2 text-sm font-black text-netflix">
+                      <item.icon className="h-4 w-4" />
+                      {item.label}
+                    </div>
+                    <div className="flex min-w-0 items-center gap-3">
+                      <p className="min-w-0 flex-1 break-all text-left text-base font-black text-zinc-950 sm:text-lg" dir="ltr">
+                        {item.value}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => void copyValue(item.value, item.field)}
+                        className="flex h-11 shrink-0 items-center gap-2 rounded-xl bg-netflix px-4 text-sm font-black text-white transition hover:bg-red-700"
+                      >
+                        {copied === item.field ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                        {copied === item.field ? "تم النسخ" : "نسخ"}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-6 rounded-2xl border border-red-100 bg-red-50/70 p-5">
+                <div className="mb-3 flex items-center gap-2 text-netflix">
+                  <MonitorPlay className="h-5 w-5" />
+                  <h3 className="text-lg font-black">شرح طريقة الدخول</h3>
+                </div>
+                <p className="text-sm font-bold leading-8 text-zinc-800 sm:text-base">
+                  ضع الإيميل في نتفليكس ثم اضغط الحصول على مساعدة واختار المتابعة بكلمة مرور وحط كلمة المرور الموجودة عندك
+                </p>
+              </div>
+            </div>
+          )}
+        </section>
+      </div>
+    </main>
+  );
 }
 
 function CompensationPage() {
@@ -883,18 +1022,25 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
 
     if (!supabase) return false;
 
-    const { data, error } = await supabase
-      .from("customer_links")
-      .select("id,account_id")
-      .eq("email", normalized);
+    const [{ data, error }, { data: accountRows, error: accountError }] = await Promise.all([
+      supabase
+        .from("customer_links")
+        .select("id,account_id")
+        .eq("email", normalized),
+      supabase
+        .from("accounts")
+        .select("id")
+        .eq("email", normalized),
+    ]);
 
-    if (error) {
-      console.error("Supabase duplicate email validation error:", error);
+    if (error || accountError) {
+      console.error("Supabase duplicate email validation error:", error || accountError);
       throw new Error("duplicate_email_lookup_failed");
     }
 
     const existing = (data || []).filter((link) => link.account_id !== exceptAccountId);
-    return existing.length > 0;
+    const existingAccounts = (accountRows || []).filter((account) => account.id !== exceptAccountId);
+    return existing.length > 0 || existingAccounts.length > 0;
   }
 
   async function duplicateProfileForEmail(email: string, profileNames: string[], exceptAccountId?: string) {
@@ -933,7 +1079,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     profileNames: string[],
     exceptAccountId?: string,
   ): Promise<AccountFormResult> {
-    if (accountType === "private") {
+    if (accountType === "private" || accountType === "temporary") {
       if (await emailAlreadyExists(email, exceptAccountId)) {
         return { ok: false, error: duplicateEmailMessage };
       }
@@ -995,14 +1141,46 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     return generated;
   }
 
+  async function createUniqueTemporaryId() {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const candidate = generateShortId(7);
+      const localMatch = accounts.some((account) => account.temporary_short_id === candidate);
+      if (localMatch) continue;
+      if (!supabase) return candidate;
+
+      const { data, error } = await supabase
+        .from("accounts")
+        .select("id")
+        .eq("temporary_short_id", candidate)
+        .limit(1);
+      if (error) {
+        console.error("Supabase temporary ID uniqueness check error:", error);
+        throw new Error("temporary_id_lookup_failed");
+      }
+      if (!data?.length) return candidate;
+    }
+    throw new Error("temporary_id_generation_failed");
+  }
+
   async function addAccount(form: { email: string; password: string; account_type: AccountType; supplier_code_url?: string }): Promise<AccountFormResult> {
     const expires_at = defaultExpiryDate();
     let slots = buildProfileSlots(form.account_type, selectedService);
     const normalizedEmail = normalizeEmail(form.email);
+    let temporaryShortId: string | null = null;
 
     if (!normalizedEmail) {
       setToast({ label: emptyEmailMessage, at: Date.now(), tone: "error" });
       return { ok: false, error: emptyEmailMessage };
+    }
+
+    if (form.account_type === "temporary") {
+      try {
+        temporaryShortId = await createUniqueTemporaryId();
+      } catch (error) {
+        console.error("Temporary account ID generation failed:", error);
+        setToast({ label: "تعذر توليد رابط الحساب المؤقت، حاول مرة أخرى", at: Date.now(), tone: "error" });
+        return { ok: false, error: "تعذر توليد رابط الحساب المؤقت، حاول مرة أخرى" };
+      }
     }
 
     const optimisticId = `optimistic-${crypto.randomUUID()}`;
@@ -1012,6 +1190,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       password: form.password,
       account_type: form.account_type,
       supplier_code_url: form.supplier_code_url,
+      temporary_short_id: temporaryShortId,
       expires_at,
       service_type: selectedService,
       use_automated_code: true,
@@ -1076,8 +1255,15 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     try {
       const { data, error: accountError } = await supabase
         .from("accounts")
-        .insert({ ...form, email: normalizedEmail, expires_at, service_type: selectedService, use_automated_code: true })
-        .select("id,email,password,account_type,expires_at,created_at,service_type,use_automated_code,supplier_code_url")
+        .insert({
+          ...form,
+          email: normalizedEmail,
+          expires_at,
+          service_type: selectedService,
+          use_automated_code: form.account_type !== "temporary",
+          temporary_short_id: temporaryShortId,
+        })
+        .select("id,email,password,account_type,expires_at,created_at,service_type,use_automated_code,supplier_code_url,temporary_short_id")
         .single();
 
       if (accountError) throw accountError;
@@ -1099,6 +1285,17 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       rollbackOptimisticAccount();
       setToast({ label: "تعذر إنشاء الحساب", at: Date.now(), tone: "error" });
       return false;
+    }
+
+    if (form.account_type === "temporary") {
+      optimisticAccountVisible = false;
+      setAccounts((current) => [
+        account,
+        ...current.filter((item) => item.id !== optimisticId && item.id !== account?.id),
+      ].slice(0, adminAccountsPageSize));
+      setLoading(false);
+      setToast({ label: "تم حفظ الحساب المؤقت وأصبح رابطه جاهزاً للنسخ", at: Date.now() });
+      return true;
     }
 
     let linksError: unknown = null;
@@ -1683,6 +1880,10 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
           setScreen("account");
         }}
         onDelete={deleteAccount}
+        onCopyTemporaryLink={(account) => {
+          const url = getTemporaryAccountUrl(account);
+          if (url) void copyText(url, setToast);
+        }}
         onUpdateCustomerCodeBalance={updateCustomerCodeBalance}
         onResetCustomerDevice={resetCustomerDevice}
         pendingCreditRequests={extraCreditRequests.filter((request) => request.status === "pending").length}
@@ -1843,6 +2044,7 @@ function Dashboard({
   onUpdate,
   onSelect,
   onDelete,
+  onCopyTemporaryLink,
   onUpdateCustomerCodeBalance,
   onResetCustomerDevice,
   pendingCreditRequests,
@@ -1867,6 +2069,7 @@ function Dashboard({
   onUpdate: Parameters<typeof AccountForm>[0]["onUpdate"];
   onSelect: (id: string) => void;
   onDelete: (id: string) => Promise<void>;
+  onCopyTemporaryLink: (account: NetflixAccount) => void;
   onUpdateCustomerCodeBalance: (
     linkId: string,
     codeRequestLimit: number,
@@ -1910,7 +2113,13 @@ function Dashboard({
   }, []);
 
   const filterLabel =
-    accountTypeFilter === "private" ? "خاص" : accountTypeFilter === "shared" ? "مشترك" : "فلترة";
+    accountTypeFilter === "private"
+      ? "خاص"
+      : accountTypeFilter === "shared"
+        ? "مشترك"
+        : accountTypeFilter === "temporary"
+          ? "مؤقت"
+          : "فلترة";
 
   return (
     <div className="min-h-screen bg-white text-[#17141F]">
@@ -1987,6 +2196,7 @@ function Dashboard({
                     { key: "all", label: "جميع الحسابات" },
                     { key: "private", label: "خاص" },
                     { key: "shared", label: "مشترك" },
+                    { key: "temporary", label: "حساب مؤقت" },
                   ].map((option) => (
                     <button
                       key={option.key}
@@ -2123,6 +2333,7 @@ function Dashboard({
                     onSelect={onSelect}
                     onEdit={openEditForm}
                     onDelete={onDelete}
+                    onCopyTemporaryLink={onCopyTemporaryLink}
                     onOpenSupplierCode={(url) => window.open(url, "_blank", "noopener,noreferrer")}
                   />
                 ))}
@@ -2139,6 +2350,7 @@ function Dashboard({
                 onSelect={onSelect}
                 onEdit={openEditForm}
                 onDelete={onDelete}
+                onCopyTemporaryLink={onCopyTemporaryLink}
                 onOpenSupplierCode={(url) => window.open(url, "_blank", "noopener,noreferrer")}
               />
             ))}
@@ -2331,6 +2543,7 @@ function AccountCard({
   onSelect,
   onEdit,
   onDelete,
+  onCopyTemporaryLink,
   onOpenSupplierCode,
 }: {
   account: NetflixAccount;
@@ -2338,6 +2551,7 @@ function AccountCard({
   onSelect: (id: string) => void;
   onEdit: (account: NetflixAccount) => void;
   onDelete: (id: string) => Promise<void>;
+  onCopyTemporaryLink: (account: NetflixAccount) => void;
   onOpenSupplierCode: (url: string) => void;
 }) {
   const expired = isExpired(account.expires_at);
@@ -2409,11 +2623,27 @@ function AccountCard({
       </div>
 
       <div className="mt-3 flex items-center gap-2">
+        {account.account_type === "temporary" && account.temporary_short_id && (
+          <button
+            type="button"
+            onClick={() => onCopyTemporaryLink(account)}
+            title="نسخ رابط الحساب المؤقت"
+            className="flex h-11 min-w-0 flex-1 items-center justify-center gap-2 rounded-xl bg-[#8B35F5] px-3 text-xs font-black text-white transition hover:bg-[#7626DD]"
+          >
+            <Link2 className="h-4 w-4" />
+            نسخ الرابط
+          </button>
+        )}
         <button
           type="button"
           onClick={() => void onSelect(account.id)}
           title="فتح تفاصيل الحساب"
-          className="flex h-11 min-w-0 flex-1 items-center justify-center gap-2 rounded-xl bg-[#8B35F5] text-xs font-black text-white transition hover:bg-[#7626DD]"
+          className={cn(
+            "flex h-11 min-w-0 items-center justify-center gap-2 rounded-xl text-xs font-black transition",
+            account.account_type === "temporary"
+              ? "w-11 shrink-0 border border-[#DDCEF4] text-[#7C2CE8] hover:bg-[#F4EDFF]"
+              : "flex-1 bg-[#8B35F5] text-white hover:bg-[#7626DD]",
+          )}
         >
           <Eye className="h-4 w-4" />
           التفاصيل
@@ -2454,6 +2684,7 @@ function AccountRow({
   onSelect,
   onEdit,
   onDelete,
+  onCopyTemporaryLink,
   onOpenSupplierCode,
 }: {
   account: NetflixAccount;
@@ -2461,6 +2692,7 @@ function AccountRow({
   onSelect: (id: string) => void;
   onEdit: (account: NetflixAccount) => void;
   onDelete: (id: string) => Promise<void>;
+  onCopyTemporaryLink: (account: NetflixAccount) => void;
   onOpenSupplierCode: (url: string) => void;
 }) {
   const expired = isExpired(account.expires_at);
@@ -2541,6 +2773,17 @@ function AccountRow({
       </td>
       <td className="px-5 py-5">
         <div className="flex items-center justify-center gap-1.5">
+          {account.account_type === "temporary" && account.temporary_short_id && (
+            <button
+              type="button"
+              onClick={() => onCopyTemporaryLink(account)}
+              title="نسخ رابط الحساب المؤقت"
+              className="flex h-9 items-center justify-center gap-1.5 rounded-lg bg-[#8B35F5] px-3 text-xs font-black text-white transition hover:bg-[#7626DD]"
+            >
+              <Link2 className="h-4 w-4" />
+              نسخ الرابط
+            </button>
+          )}
           <button
             type="button"
             onClick={() => onSelect(account.id)}
@@ -3200,8 +3443,14 @@ function AccountForm({
 
         <div className="mb-5">
           <p className="mb-2 text-sm font-black text-zinc-700">نوع الحساب</p>
-          <div className="grid rounded-2xl border-2 border-[#E0D0FB] bg-[#F8F4FF] p-1.5 sm:grid-cols-2">
-            {(["private", "shared"] as AccountType[]).map((type) => (
+          <div className={cn(
+            "grid rounded-2xl border-2 border-[#E0D0FB] bg-[#F8F4FF] p-1.5",
+            service === "netflix" ? "sm:grid-cols-3" : "sm:grid-cols-2",
+          )}>
+            {(service === "netflix"
+              ? (["private", "shared", "temporary"] as AccountType[])
+              : (["private", "shared"] as AccountType[])
+            ).map((type) => (
               <button
                 key={type}
                 type="button"
@@ -3252,16 +3501,18 @@ function AccountForm({
           </p>
         )}
 
-        <Field icon={Link2} label="رابط جلب الأكواد">
-          <input
-            value={supplierCodeUrl}
-            onChange={(event) => setSupplierCodeUrl(event.target.value)}
-            placeholder="https://example.com"
-            className="admin-modal-input"
-            dir="ltr"
-          />
-          <p className="mt-2 text-[11px] font-bold text-zinc-400">خاص بالمسؤول فقط ولا يظهر في صفحة العميل.</p>
-        </Field>
+        {accountType !== "temporary" && (
+          <Field icon={Link2} label="رابط جلب الأكواد">
+            <input
+              value={supplierCodeUrl}
+              onChange={(event) => setSupplierCodeUrl(event.target.value)}
+              placeholder="https://example.com"
+              className="admin-modal-input"
+              dir="ltr"
+            />
+            <p className="mt-2 text-[11px] font-bold text-zinc-400">خاص بالمسؤول فقط ولا يظهر في صفحة العميل.</p>
+          </Field>
+        )}
 
         <div className="mb-6 flex items-center justify-between gap-4 rounded-2xl border border-[#E8DDF8] bg-[#FAF8FD] p-4">
           <div>
@@ -3280,7 +3531,9 @@ function AccountForm({
 
         {!editing && (
           <p className="mb-5 rounded-xl bg-[#F4EDFF] px-4 py-3 text-xs font-bold text-[#6F22D6]">
-            {service === "shahid"
+            {accountType === "temporary"
+              ? "سيتم إنشاء رابط مباشر واحد يعرض البريد الإلكتروني وكلمة المرور وتعليمات الدخول فقط."
+              : service === "shahid"
               ? accountType === "private"
                 ? "سيتم إنشاء 4 روابط تلقائياً بدون رمز ملف."
                 : "سيتم إنشاء 8 روابط تلقائياً بدون رمز ملف."
@@ -3355,9 +3608,11 @@ function AccountDetail({
 }) {
   const expired = isExpired(account.expires_at);
   const service = serviceOf(account);
-  const fallbackGeneratedLimit = service === "shahid"
-    ? account.account_type === "private" ? 4 : 8
-    : account.account_type === "private" ? 5 : 8;
+  const fallbackGeneratedLimit = account.account_type === "temporary"
+    ? 0
+    : service === "shahid"
+      ? account.account_type === "private" ? 4 : 8
+      : account.account_type === "private" ? 5 : 8;
   const generatedLimit = links.length || fallbackGeneratedLimit;
   const [selectedLinkIds, setSelectedLinkIds] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<"customers" | "twofa">("customers");
