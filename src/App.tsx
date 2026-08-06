@@ -513,7 +513,7 @@ function CompensationPage() {
     setError("");
 
     if (!/^[A-Z][0-9][A-Z][0-9][A-Z][0-9]$/.test(normalizedCode)) {
-      setError("رقم العميل غير صحيح، يرجى التأكد وإدخال الرمز الصحيح الخاص بك.");
+      setError("رمز التعويض غير صحيح، يرجى نسخه من صفحة بيانات اشتراكك والمحاولة مجدداً.");
       return;
     }
 
@@ -528,7 +528,7 @@ function CompensationPage() {
 
       if (!response.ok || !payload?.success || !payload?.request) {
         if (payload?.error === "invalid_client_code") {
-          setError("رقم العميل غير صحيح، يرجى التأكد وإدخال الرمز الصحيح الخاص بك.");
+          setError("رمز التعويض غير صحيح، يرجى نسخه من صفحة بيانات اشتراكك والمحاولة مجدداً.");
           localStorage.removeItem(storageKey);
         } else {
           setError("تعذر التحقق من الطلب حالياً، يرجى المحاولة مرة أخرى بعد قليل.");
@@ -581,11 +581,36 @@ function CompensationPage() {
             </div>
             <h2 className="mt-4 text-2xl font-black">طلب ومتابعة التعويض</h2>
             <p className="mx-auto mt-2 max-w-md text-sm font-bold leading-7 text-zinc-500">
-              أدخل رمز العميل المكون من 6 خانات لتقديم طلبك أو متابعة حالة التعويض.
+              أدخل رمز التعويض المكون من 6 خانات لتقديم طلبك ومتابعة حالته حتى استلام رابط الحساب الجديد.
             </p>
           </div>
 
           <div className="p-5 md:p-8">
+            {!request && (
+              <div className="mb-5 rounded-2xl border border-[#DCCBFA] bg-[#F8F4FF] p-4 text-right md:p-5">
+                <h3 className="flex items-center gap-2 text-base font-black text-[#6E25CF]">
+                  <KeyRound className="h-5 w-5" />
+                  كيف تحصل على رمز التعويض؟
+                </h3>
+                <ol className="mt-3 space-y-3 text-sm font-bold leading-7 text-zinc-700">
+                  <li className="flex gap-3">
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#8B35F5] text-xs font-black text-white">1</span>
+                    <span>افتح رابط بيانات الاشتراك الذي استلمته من المتجر.</span>
+                  </li>
+                  <li className="flex gap-3">
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#8B35F5] text-xs font-black text-white">2</span>
+                    <span>ستجد بطاقة واضحة باسم «رمز التعويض الخاص بك» أعلى الصفحة وتحت البريد الإلكتروني. اضغط زر «نسخ الرمز».</span>
+                  </li>
+                  <li className="flex gap-3">
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#8B35F5] text-xs font-black text-white">3</span>
+                    <span>الصق الرمز في الحقل أدناه واضغط «إرسال / متابعة» لتقديم الطلب أو معرفة حالته.</span>
+                  </li>
+                </ol>
+                <p className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-black leading-6 text-emerald-800">
+                  عند اكتمال التعويض سيظهر لك رابط الحساب الجديد في هذه الصفحة مع زر لنسخه وفتحه مباشرة.
+                </p>
+              </div>
+            )}
             {!request ? (
               <form
                 onSubmit={(event) => {
@@ -595,7 +620,7 @@ function CompensationPage() {
                 className="space-y-4"
               >
                 <label className="block">
-                  <span className="mb-2 block text-sm font-black">رقم / رمز العميل</span>
+                  <span className="mb-2 block text-sm font-black">رمز التعويض</span>
                   <input
                     autoFocus
                     maxLength={6}
@@ -630,7 +655,9 @@ function CompensationPage() {
                     ? "تم استلام طلب التعويض الخاص بك بنجاح. بإذن الله سيتم التعويض خلال ساعة إلى 72 ساعة، يرجى تحديث هذه الصفحة لمتابعة واستلام رابط الحساب الجديد."
                     : "طلب التعويض الخاص بك قيد المراجعة والمعالجة حالياً، يرجى إعادة تحديث الصفحة لاحقاً."}
                 </p>
-                <p className="mt-4 text-xs font-black text-zinc-500">رمز العميل: <span dir="ltr" className="text-[#8B35F5]">{request.client_code}</span></p>
+                <div className="mt-4">
+                  <CompensationCodeCard code={request.client_code} compact />
+                </div>
                 <button
                   type="button"
                   onClick={() => void checkCompensation(request.client_code)}
@@ -648,6 +675,9 @@ function CompensationPage() {
                 </div>
                 <h2 className="mt-4 text-2xl font-black text-emerald-700">تم التعويض بنجاح!</h2>
                 <p className="mt-2 text-sm font-bold text-zinc-600">هذا هو رابط الحساب الجديد الخاص بك:</p>
+                <div className="mt-4 text-right">
+                  <CompensationCodeCard code={request.client_code} compact />
+                </div>
                 <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
                   <p className="break-all text-sm font-black leading-7 text-emerald-900" dir="ltr">{request.replacement_link}</p>
                 </div>
@@ -2772,7 +2802,7 @@ function CompensationAdminPage({
               {requests.map((request) => (
                 <article key={request.id} className="grid gap-4 p-5 transition hover:bg-[#FCFAFF] md:grid-cols-[150px_1fr_160px_190px] md:items-center md:px-6">
                   <div>
-                    <p className="text-xs font-bold text-zinc-500">رمز العميل</p>
+                    <p className="text-xs font-bold text-zinc-500">رمز التعويض</p>
                     <p className="mt-1 text-lg font-black text-[#7C2CE8]" dir="ltr">{request.client_code}</p>
                   </div>
                   <div className="min-w-0">
