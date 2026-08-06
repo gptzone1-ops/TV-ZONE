@@ -21,7 +21,7 @@ const apiMessages = {
   imap_credentials_invalid: "تعذر قراءة كلمة مرور تطبيق Outlook المحفوظة. أعد حفظ كلمة مرور التطبيق من لوحة التحكم.",
   netflix_code_not_found: "تم الاتصال بالبريد بنجاح وفحص أحدث الرسائل، لكن لم يتم العثور على رسالة Netflix تحتوي على رمز من 4 إلى 6 أرقام في INBOX أو Junk.",
   code_already_used: "تم العثور على أحدث رمز، لكنه سبق عرضه واستخدامه. اطلب رمزاً جديداً من Netflix ثم أعد المحاولة.",
-  imap_authentication_failed: "فشل تسجيل الدخول إلى Outlook. تحقق من البريد وكلمة مرور التطبيق App Password.",
+  imap_authentication_failed: "تم الاتصال بخادم Outlook، لكن Microsoft رفض تسجيل الدخول باستخدام البريد وكلمة مرور التطبيق. هذا الحساب يتطلب OAuth2 / Modern Auth؛ إعادة إنشاء App Password لن تحل المشكلة.",
   imap_connection_timeout: "انتهت مهلة الاتصال بخادم Outlook. أعد المحاولة بعد لحظات.",
   imap_network_failed: "تعذر فتح اتصال شبكي بخادم Outlook على المنفذ 993.",
   imap_tls_failed: "فشل إنشاء الاتصال الآمن TLS مع خادم Outlook.",
@@ -466,6 +466,7 @@ export default async function handler(req, res) {
     return failure(res, classified.status, classified.error, {
       request_id: requestId,
       technical_detail: classified.detail,
+      action_required: classified.error === "imap_authentication_failed" ? "microsoft_oauth2" : undefined,
     });
   } finally {
     if (imap) {
