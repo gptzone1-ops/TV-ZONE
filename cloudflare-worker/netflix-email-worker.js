@@ -156,6 +156,11 @@ export default {
       message,
       env.ACCOUNT_EMAIL_OVERRIDE,
     );
+    const forwardedTo = normalizeEmail(message.to);
+    const configuredAccountEmail = normalizeEmail(env.ACCOUNT_EMAIL_OVERRIDE);
+    const accountEmail = configuredAccountEmail
+      || emailCandidates.find((candidate) => candidate !== forwardedTo)
+      || null;
     const messageKey = await createMessageKey(rawEmail, message);
     const headers = { "Content-Type": "application/json" };
     if (env.RECEIVE_CODE_WEBHOOK_SECRET) {
@@ -166,9 +171,10 @@ export default {
       method: "POST",
       headers,
       body: JSON.stringify({
-        email: emailCandidates[0] || normalizeEmail(message.to),
+        accountEmail,
+        email: forwardedTo,
         original_email_candidates: emailCandidates,
-        forwarded_to: normalizeEmail(message.to),
+        forwarded_to: forwardedTo,
         code,
         tv_approval_url: tvApprovalUrl,
         source_key: messageKey,
@@ -182,7 +188,8 @@ export default {
     }
 
     console.log("Netflix forwarding webhook accepted", {
-      email: emailCandidates[0] || message.to,
+      accountEmail,
+      forwardedTo,
       candidateCount: emailCandidates.length,
       hasCode: Boolean(code),
       hasTvApprovalUrl: Boolean(tvApprovalUrl),

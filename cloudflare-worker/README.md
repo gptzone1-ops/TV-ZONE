@@ -13,4 +13,4 @@ Required Vercel variable:
 
 Do not set `ACCOUNT_EMAIL_OVERRIDE` for a shared routing address. It is only intended for a route permanently dedicated to one account; otherwise it prevents automatic matching of each forwarded message to its original Outlook recipient.
 
-The Worker sends all plausible original-recipient addresses to the Vercel endpoint. The endpoint uses the first address that matches `customer_links.email` or the related `accounts.email`, stores the code in `verification_messages`, ignores consumed messages, and removes unused messages older than 30 minutes.
+The Worker sends the original Outlook recipient as `accountEmail` and the Cloudflare routing address as legacy `email`. New payloads are matched strictly by `accountEmail`. If an older Worker does not send `accountEmail`, the endpoint preserves the legacy `email` and candidate fallback. Codes are stored in `verification_messages`; consumed messages are ignored and unused messages older than 30 minutes are removed.

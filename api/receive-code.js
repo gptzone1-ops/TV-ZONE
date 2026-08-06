@@ -91,12 +91,24 @@ export default async function handler(req, res) {
   }
 
   const body = readBody(req.body);
-  const candidates = uniqueValidEmails([
-    body.email,
-    body.original_email,
-    ...(Array.isArray(body.original_email_candidates) ? body.original_email_candidates : []),
-    body.forwarded_to,
-  ]);
+  const rawAccountEmail = String(body.accountEmail || body.account_email || "").trim();
+  const accountEmail = normalizeEmail(rawAccountEmail);
+  const hasAccountEmail = rawAccountEmail.length > 0;
+
+  if (hasAccountEmail && !validEmailPattern.test(accountEmail)) {
+    return send(res, 400, { success: false, error: "invalid_account_email" });
+  }
+
+  // New Cloudflare payloads are matched strictly by accountEmail. Legacy payloads
+  // keep the previous email/candidate fallback without changing old records.
+  const candidates = hasAccountEmail
+    ? [accountEmail]
+    : uniqueValidEmails([
+      body.email,
+      body.original_email,
+      ...(Array.isArray(body.original_email_candidates) ? body.original_email_candidates : []),
+      body.forwarded_to,
+    ]);
   const code = String(body.code || "").replace(/\s+/g, "").trim();
   const rawEmail = String(body.raw_email || body.rawEmail || "");
   const explicitTvApprovalUrl = String(body.tv_approval_url || "").trim();
@@ -238,6 +250,8 @@ export default async function handler(req, res) {
 
   return send(res, 200, {
     success: true,
+    account_email: matchedEmail,
+    used_account_email: hasAccountEmail,
     matched_email: matchedEmail,
     code_saved: Boolean(code),
     tv_approval_url_saved: Boolean(tvApprovalUrl),
