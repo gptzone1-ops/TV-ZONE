@@ -11,6 +11,8 @@ create table if not exists public.accounts (
   service_type text not null default 'netflix' check (service_type in ('netflix', 'shahid')),
   account_type text not null check (account_type in ('private', 'shared', 'temporary')),
   temporary_short_id text unique,
+  email_provider text not null default 'none' check (email_provider in ('none', 'outlook')),
+  imap_enabled boolean not null default false,
   expires_at date not null,
   created_at timestamptz not null default now()
 );

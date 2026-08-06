@@ -64,6 +64,15 @@ type AccountTypeFilter = "all" | AccountType;
 type SupportIssue = "general" | "unavailable" | "expired";
 type CustomerSearchResult = { link: CustomerLink; account: NetflixAccount };
 type AccountFormResult = boolean | { ok: boolean; error?: string };
+type EmailProvider = "none" | "outlook";
+type AccountCreateForm = {
+  email: string;
+  password: string;
+  account_type: AccountType;
+  supplier_code_url?: string;
+  email_provider?: EmailProvider;
+  imap_app_password?: string;
+};
 type PublicCompensationRequest = Omit<CompensationRequest, "id">;
 type ServiceTheme = {
   type: ServiceType;
@@ -1162,7 +1171,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     throw new Error("temporary_id_generation_failed");
   }
 
-  async function addAccount(form: { email: string; password: string; account_type: AccountType; supplier_code_url?: string }): Promise<AccountFormResult> {
+  async function addAccount(form: AccountCreateForm): Promise<AccountFormResult> {
     const expires_at = defaultExpiryDate();
     let slots = buildProfileSlots(form.account_type, selectedService);
     const normalizedEmail = normalizeEmail(form.email);
@@ -1191,6 +1200,8 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       account_type: form.account_type,
       supplier_code_url: form.supplier_code_url,
       temporary_short_id: temporaryShortId,
+      email_provider: form.account_type === "temporary" ? "none" : form.email_provider || "none",
+      imap_enabled: form.account_type !== "temporary" && form.email_provider === "outlook",
       expires_at,
       service_type: selectedService,
       use_automated_code: true,
@@ -1253,17 +1264,20 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     setLoading(true);
     let account: NetflixAccount | null = null;
     try {
+      const { imap_app_password: _imapAppPassword, ...persistedForm } = form;
       const { data, error: accountError } = await supabase
         .from("accounts")
         .insert({
-          ...form,
+          ...persistedForm,
           email: normalizedEmail,
           expires_at,
           service_type: selectedService,
           use_automated_code: form.account_type !== "temporary",
           temporary_short_id: temporaryShortId,
+          email_provider: form.account_type === "temporary" ? "none" : form.email_provider || "none",
+          imap_enabled: false,
         })
-        .select("id,email,password,account_type,expires_at,created_at,service_type,use_automated_code,supplier_code_url,temporary_short_id")
+        .select("id,email,password,account_type,expires_at,created_at,service_type,use_automated_code,supplier_code_url,temporary_short_id,email_provider,imap_enabled")
         .single();
 
       if (accountError) throw accountError;
@@ -1285,6 +1299,32 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       rollbackOptimisticAccount();
       setToast({ label: "تعذر إنشاء الحساب", at: Date.now(), tone: "error" });
       return false;
+    }
+
+    if (form.account_type !== "temporary" && form.email_provider === "outlook") {
+      try {
+        const response = await fetch("/api/save-imap-credential", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-admin-password": adminPassword,
+          },
+          body: JSON.stringify({
+            account_id: account.id,
+            app_password: form.imap_app_password,
+          }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload?.success) throw new Error(payload?.error || "imap_credential_save_failed");
+        account = { ...account, email_provider: "outlook", imap_enabled: true };
+      } catch (error) {
+        console.error("IMAP account setup failed:", error);
+        await supabase.from("accounts").delete().eq("id", account.id);
+        rollbackOptimisticAccount();
+        setLoading(false);
+        setToast({ label: "تعذر حفظ ربط Outlook، تحقق من كلمة مرور التطبيق وحاول مجدداً", at: Date.now(), tone: "error" });
+        return { ok: false, error: "تعذر حفظ ربط Outlook، تحقق من كلمة مرور التطبيق وحاول مجدداً" };
+      }
     }
 
     if (form.account_type === "temporary") {
@@ -3361,7 +3401,7 @@ function AccountForm({
   initialAccount,
   onClose,
 }: {
-  onAdd: (form: { email: string; password: string; account_type: AccountType; supplier_code_url?: string }) => Promise<AccountFormResult>;
+  onAdd: (form: AccountCreateForm) => Promise<AccountFormResult>;
   onUpdate: (
     accountId: string,
     form: { email: string; password: string; supplier_code_url?: string },
@@ -3376,6 +3416,8 @@ function AccountForm({
   const [email, setEmail] = useState(initialAccount?.email || "");
   const [password, setPassword] = useState(initialAccount?.password || "");
   const [supplierCodeUrl, setSupplierCodeUrl] = useState(initialAccount?.supplier_code_url || "");
+  const [emailProvider, setEmailProvider] = useState<EmailProvider>("none");
+  const [imapAppPassword, setImapAppPassword] = useState("");
   const [formError, setFormError] = useState("");
   const calculatedExpiry = defaultExpiryDate();
   const theme = serviceThemes[service];
@@ -3385,15 +3427,28 @@ function AccountForm({
     setFormError("");
     const supplier_code_url = supplierCodeUrl.trim() || undefined;
     const cleanEmail = normalizeEmail(email);
+    const cleanImapAppPassword = imapAppPassword.replace(/\s+/g, "");
 
     if (!cleanEmail) {
       setFormError(emptyEmailMessage);
       return;
     }
 
+    if (!initialAccount && accountType !== "temporary" && emailProvider === "outlook" && !/^[A-Za-z0-9]{16}$/.test(cleanImapAppPassword)) {
+      setFormError("أدخل كلمة مرور تطبيق Outlook المكونة من 16 حرفاً أو رقماً");
+      return;
+    }
+
     if (!initialAccount) {
       onClose();
-      void onAdd({ email: cleanEmail, password, account_type: accountType, supplier_code_url });
+      void onAdd({
+        email: cleanEmail,
+        password,
+        account_type: accountType,
+        supplier_code_url,
+        email_provider: accountType === "temporary" ? "none" : emailProvider,
+        imap_app_password: emailProvider === "outlook" ? cleanImapAppPassword : undefined,
+      });
       return;
     }
 
@@ -3502,16 +3557,68 @@ function AccountForm({
         )}
 
         {accountType !== "temporary" && (
-          <Field icon={Link2} label="رابط جلب الأكواد">
-            <input
-              value={supplierCodeUrl}
-              onChange={(event) => setSupplierCodeUrl(event.target.value)}
-              placeholder="https://example.com"
-              className="admin-modal-input"
-              dir="ltr"
-            />
-            <p className="mt-2 text-[11px] font-bold text-zinc-400">خاص بالمسؤول فقط ولا يظهر في صفحة العميل.</p>
-          </Field>
+          <>
+            {!editing && service === "netflix" && (
+              <div className="mb-4 rounded-2xl border border-[#E0D4F8] bg-[#FAF8FD] p-4">
+                <p className="mb-2 text-sm font-black text-zinc-700">مزود البريد وجلب الكود</p>
+                <div className="grid grid-cols-2 gap-2 rounded-xl bg-[#F1E9FF] p-1.5">
+                  {([
+                    { value: "none", label: "بدون ربط" },
+                    { value: "outlook", label: "Outlook" },
+                  ] as Array<{ value: EmailProvider; label: string }>).map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => {
+                        setEmailProvider(option.value);
+                        setFormError("");
+                      }}
+                      className={cn(
+                        "h-11 rounded-lg text-sm font-black transition",
+                        emailProvider === option.value
+                          ? "bg-[#8B35F5] text-white shadow-[0_8px_20px_rgba(139,53,245,0.22)]"
+                          : "bg-white text-zinc-600 hover:text-[#7C2CE8]",
+                      )}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+
+                {emailProvider === "outlook" && (
+                  <div className="mt-4">
+                    <label className="mb-2 flex items-center gap-2 text-sm font-black text-zinc-700">
+                      <LockKeyhole className="h-4 w-4 text-[#8B35F5]" />
+                      كلمة مرور تطبيق Outlook
+                    </label>
+                    <input
+                      required
+                      value={imapAppPassword}
+                      onChange={(event) => setImapAppPassword(event.target.value)}
+                      placeholder="16 حرفاً أو رقماً"
+                      className="admin-modal-input"
+                      dir="ltr"
+                      autoComplete="new-password"
+                    />
+                    <p className="mt-2 text-[11px] font-bold leading-6 text-zinc-500">
+                      تُشفّر وتحفظ في مساحة خادم خاصة، ولا تظهر للعميل أو ضمن بيانات لوحة التحكم.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <Field icon={Link2} label="رابط جلب الأكواد">
+              <input
+                value={supplierCodeUrl}
+                onChange={(event) => setSupplierCodeUrl(event.target.value)}
+                placeholder="https://example.com"
+                className="admin-modal-input"
+                dir="ltr"
+              />
+              <p className="mt-2 text-[11px] font-bold text-zinc-400">خاص بالمسؤول فقط ولا يظهر في صفحة العميل.</p>
+            </Field>
+          </>
         )}
 
         <div className="mb-6 flex items-center justify-between gap-4 rounded-2xl border border-[#E8DDF8] bg-[#FAF8FD] p-4">
@@ -4270,7 +4377,7 @@ function CustomerView({
       const { data, error } = await supabase
         .from("customer_links")
         .select(
-          "*,accounts(id,email,use_automated_code,verification_code,verification_code_received_at,service_type,account_type,expires_at,created_at)",
+          "*,accounts(id,email,use_automated_code,verification_code,verification_code_received_at,service_type,account_type,expires_at,created_at,email_provider,imap_enabled)",
         )
         .eq(queryColumn, identifier)
         .single();
@@ -4381,6 +4488,7 @@ function CustomerView({
       codeDisplayExpiresAt > nowTick,
   );
   const automatedCodeEnabled = account?.use_automated_code !== false;
+  const imapCodeEnabled = account?.imap_enabled === true && account?.email_provider === "outlook";
   const codeRequestLimit = Math.max(0, link?.code_request_limit ?? 1);
   const codeRequestedCount = Math.max(0, link?.code_requested_count ?? 0);
   const hasCodeRequestCredit = codeRequestedCount < codeRequestLimit;
@@ -4875,7 +4983,7 @@ function CustomerView({
       const { data: refreshedLink, error: refreshError } = await supabase
         .from("customer_links")
         .select(
-          "*,accounts(id,email,use_automated_code,verification_code,verification_code_received_at,service_type,account_type,expires_at,created_at)",
+          "*,accounts(id,email,use_automated_code,verification_code,verification_code_received_at,service_type,account_type,expires_at,created_at,email_provider,imap_enabled)",
         )
         .eq("id", link.id)
         .maybeSingle();
@@ -5039,6 +5147,23 @@ function CustomerView({
     setCodeRequestState("loading");
     setCodeRequestSeconds(15);
     setCodeDisplayExpiresAt(null);
+
+    if (imapCodeEnabled && link?.id) {
+      void fetch("/api/fetch-imap-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ customer_link_id: link.id }),
+      }).then(async (response) => {
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok && payload?.error !== "no_recent_code" && payload?.error !== "code_already_used") {
+          console.error("Outlook IMAP code request failed:", payload?.error || response.status);
+        }
+        if (response.ok) void pollVerificationCode(accountId);
+      }).catch((error) => {
+        console.error("Outlook IMAP code request failed:", error);
+      });
+    }
+
     try {
       const latestCode = await readLatestVerificationCode(accountId, link?.id, true);
       const latestTime = latestCode.receivedAt
@@ -5501,9 +5626,11 @@ function CustomerView({
                           <LockKeyhole className="h-7 w-7" />
                         </div>
                         <div className="min-w-0 flex-1">
-                          <p className="text-lg font-black">طلب كود التحقق</p>
+                          <p className="text-lg font-black">{imapCodeEnabled ? "جلب كود نتفليكس" : "طلب كود التحقق"}</p>
                           <p className="mt-1 text-xs font-bold leading-6 text-zinc-500">
-                            اضغط للبحث تلقائياً داخل قاعدة البيانات لمدة 15 ثانية.
+                            {imapCodeEnabled
+                              ? "اضغط للبحث في أحدث رسائل Netflix الواردة إلى Outlook خلال آخر 15 دقيقة."
+                              : "اضغط للبحث تلقائياً داخل قاعدة البيانات لمدة 15 ثانية."}
                           </p>
                         </div>
                       </div>
@@ -5513,7 +5640,7 @@ function CustomerView({
                         className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#8B35F5] text-sm font-black text-white shadow-[0_14px_32px_rgba(139,53,245,0.24)] transition hover:bg-[#7626DD]"
                       >
                         <KeyRound className="h-4 w-4" />
-                        طلب كود التحقق
+                        {imapCodeEnabled ? "جلب كود نتفليكس / Fetch Code" : "طلب كود التحقق"}
                       </button>
                     </div>
                   )}

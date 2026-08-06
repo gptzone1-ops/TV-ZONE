@@ -10,6 +10,7 @@ create table if not exists public.verification_messages (
   is_used boolean not null default false,
   used_by_customer_link_id uuid references public.customer_links(id) on delete set null,
   used_at timestamptz,
+  source_key text,
   created_at timestamptz not null default now(),
   constraint verification_messages_payload_check check (
     (message_type = 'code' and code is not null and tv_approval_url is null)
@@ -20,6 +21,10 @@ create table if not exists public.verification_messages (
 
 create index if not exists verification_messages_lookup_idx
   on public.verification_messages (lower(email), message_type, is_used, received_at desc);
+
+create unique index if not exists verification_messages_source_key_unique
+  on public.verification_messages (source_key)
+  where source_key is not null;
 
 alter table public.verification_messages enable row level security;
 
