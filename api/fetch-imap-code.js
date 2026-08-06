@@ -8,8 +8,47 @@ export const config = { maxDuration: 30 };
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY;
 const recentRequests = new Map();
-const messagesPerFolder = 30;
-const noCodeMessage = "تم الاتصال بالبريد بنجاح لكن لم تصل رسالة جديدة من نتفليكس بعد، يرجى إعادة المحاولة خلال ثوانٍ";
+const messagesPerFolder = 5;
+
+const apiMessages = {
+  method_not_allowed: "نوع الطلب غير مدعوم. يجب استخدام POST.",
+  supabase_not_configured: "خادم Supabase غير مكتمل الإعداد.",
+  invalid_customer_link: "معرّف رابط العميل غير موجود أو غير صحيح.",
+  imap_not_enabled: "جلب الكود عبر Outlook غير مفعّل لهذا الحساب.",
+  code_credit_exhausted: "لا يوجد رصيد متاح لطلب كود جديد لهذا العميل.",
+  request_too_frequent: "تم إرسال طلب قبل لحظات. انتظر 5 ثوانٍ ثم أعد المحاولة.",
+  imap_credentials_not_found: "بيانات ربط Outlook غير محفوظة لهذا الحساب.",
+  imap_credentials_invalid: "تعذر قراءة كلمة مرور تطبيق Outlook المحفوظة. أعد حفظ كلمة مرور التطبيق من لوحة التحكم.",
+  netflix_code_not_found: "تم الاتصال بالبريد بنجاح وفحص أحدث الرسائل، لكن لم يتم العثور على رسالة Netflix تحتوي على رمز من 4 إلى 6 أرقام في INBOX أو Junk.",
+  code_already_used: "تم العثور على أحدث رمز، لكنه سبق عرضه واستخدامه. اطلب رمزاً جديداً من Netflix ثم أعد المحاولة.",
+  imap_authentication_failed: "فشل تسجيل الدخول إلى Outlook. تحقق من البريد وكلمة مرور التطبيق App Password.",
+  imap_connection_timeout: "انتهت مهلة الاتصال بخادم Outlook. أعد المحاولة بعد لحظات.",
+  imap_connection_failed: "تعذر الاتصال أو قراءة بريد Outlook.",
+  backend_processing_failed: "تم الاتصال بالخادم، لكن حدث خطأ أثناء قراءة أو حفظ بيانات الكود.",
+};
+
+function send(res, status, payload) {
+  res.setHeader("Cache-Control", "no-store, max-age=0");
+  return res.status(status).json(payload);
+}
+
+function failure(res, status, error, extra = {}) {
+  return send(res, status, {
+    success: false,
+    error,
+    message: apiMessages[error] || apiMessages.imap_connection_failed,
+    ...extra,
+  });
+}
+
+function logImap(requestId, stage, details = {}) {
+  console.log("[Outlook IMAP]", {
+    request_id: requestId,
+    stage,
+    at: new Date().toISOString(),
+    ...details,
+  });
+}
 
 function isJunkMailbox(mailbox) {
   const searchableName = `${mailbox?.path || ""} ${mailbox?.name || ""}`.toLowerCase();
@@ -26,7 +65,6 @@ function normalizeDigits(value) {
     .replace(/[٠-٩]/g, (digit) => String(arabicDigits.indexOf(digit)))
     .replace(/[۰-۹]/g, (digit) => String(persianDigits.indexOf(digit)));
 
-  // Outlook HTML can insert spaces or non-breaking spaces between code digits.
   for (let index = 0; index < 6; index += 1) {
     normalized = normalized.replace(/(\d)[\s\u00a0]+(?=\d)/g, "$1");
   }
@@ -35,9 +73,11 @@ function normalizeDigits(value) {
 
 function extractNetflixCode(content) {
   const normalized = normalizeDigits(content);
-  const contextualCode = normalized.match(/(?:sign[\s-]*in\s+code|security\s+code|verification\s+code|code|كود|رمز)[^0-9]{0,100}(\d{4,6})/i)?.[1];
+  const contextualCode = normalized.match(
+    /(?:sign[\s-]*in\s+code|security\s+code|verification\s+code|code|كود|رمز)[^0-9]{0,100}(\d{4,6})/i,
+  )?.[1];
   if (contextualCode) return contextualCode;
-  return normalized.match(/\b\d{4,6}\b/g)?.[0] || null;
+  return normalized.match(/\b\d{4,6}\b/)?.[0] || null;
 }
 
 function mailboxSourceKey(accountId, mailboxPath, uid) {
@@ -45,46 +85,55 @@ function mailboxSourceKey(accountId, mailboxPath, uid) {
   return `outlook:${accountId}:${encodedPath}:${uid}`;
 }
 
-async function scanMailbox(imap, mailboxPath) {
+function safeErrorDetail(error) {
+  const message = error instanceof Error ? error.message : String(error || "Unknown IMAP error");
+  return message.replace(/[\r\n]+/g, " ").slice(0, 500);
+}
+
+function classifyImapError(error) {
+  const detail = safeErrorDetail(error);
+  const searchable = `${error?.code || ""} ${error?.responseCode || ""} ${detail}`.toLowerCase();
+  if (/pgrst|postgres|supabase|relation|column|row-level|permission denied|23505|22p02/.test(searchable)) {
+    return { error: "backend_processing_failed", detail };
+  }
+  if (/auth|login|credentials|password/.test(searchable)) {
+    return { error: "imap_authentication_failed", detail };
+  }
+  if (/timeout|timedout|etimedout/.test(searchable)) {
+    return { error: "imap_connection_timeout", detail };
+  }
+  return { error: "imap_connection_failed", detail };
+}
+
+function maskCodes(value) {
+  return String(value || "").replace(/\b\d{4,6}\b/g, "[CODE]");
+}
+
+async function scanLatestMessages(imap, mailboxPath, requestId) {
   let mailboxLock = null;
-  const scanned = [];
-  let scannedCount = 0;
+  const parsedMessages = [];
 
   try {
+    logImap(requestId, "mailbox_open_started", { mailbox: mailboxPath });
     mailboxLock = await imap.getMailboxLock(mailboxPath);
     const messageCount = Number(imap.mailbox?.exists || 0);
-    if (!messageCount) return { candidates: scanned, scannedCount };
+    const firstSequence = Math.max(1, messageCount - messagesPerFolder + 1);
 
-    let fetchRange;
-    try {
-      // IMAP SEARCH runs against the complete mailbox. Outlook's Focused/Other
-      // split is only a client-side category and does not exclude either tab here.
-      const matchingUids = await imap.search({
-        or: [
-          { from: "info@account.netflix.com" },
-          { text: "Netflix" },
-          { text: "نتفليكس" },
-        ],
-      }, { uid: true });
-      const recentMatchingUids = (Array.isArray(matchingUids) ? matchingUids : [])
-        .slice(-messagesPerFolder);
-      fetchRange = recentMatchingUids.length ? recentMatchingUids : null;
-    } catch (searchError) {
-      console.error("Outlook IMAP server search failed; using recent-message fallback:", {
-        mailbox: mailboxPath,
-        error: searchError instanceof Error ? searchError.message : String(searchError),
-      });
-      const firstSequence = Math.max(1, messageCount - messagesPerFolder + 1);
-      fetchRange = `${firstSequence}:*`;
+    logImap(requestId, "mailbox_open_succeeded", {
+      mailbox: mailboxPath,
+      total_messages: messageCount,
+      requested_latest_messages: Math.min(messageCount, messagesPerFolder),
+      includes_read_and_unread: true,
+    });
+
+    if (!messageCount) {
+      return { candidates: [], scannedCount: 0, keywordMatches: 0, latestMessageAt: null };
     }
 
-    if (!fetchRange) return { candidates: scanned, scannedCount };
     for await (const message of imap.fetch(
-      fetchRange,
-      { source: true, internalDate: true },
-      Array.isArray(fetchRange) ? { uid: true } : undefined,
+      `${firstSequence}:*`,
+      { source: true, internalDate: true, envelope: true },
     )) {
-      scannedCount += 1;
       if (!message?.source) continue;
 
       try {
@@ -96,57 +145,85 @@ async function scanMailbox(imap, mailboxPath) {
           parsed.text || "",
           html.replace(/<[^>]*>/g, " "),
         ].join("\n");
-        const hasNetflixKeyword = /netflix|نتفليكس/i.test(decodedContent);
-        if (!hasNetflixKeyword) continue;
-
-        const code = extractNetflixCode(decodedContent);
-        if (!code) continue;
-
-        const parsedDate = parsed.date ? new Date(parsed.date) : null;
         const internalDate = message.internalDate ? new Date(message.internalDate) : null;
+        const parsedDate = parsed.date ? new Date(parsed.date) : null;
         const receivedAtDate = internalDate && Number.isFinite(internalDate.getTime())
           ? internalDate
           : parsedDate && Number.isFinite(parsedDate.getTime())
             ? parsedDate
-            : new Date();
+            : new Date(0);
+        const hasKeyword = /netflix|نتفليكس|\bcode\b|كود|رمز/i.test(decodedContent);
+        const code = hasKeyword ? extractNetflixCode(decodedContent) : null;
 
-        scanned.push({
+        parsedMessages.push({
           code,
+          hasKeyword,
           uid: message.uid,
           mailboxPath,
           receivedAtDate,
+          subject: maskCodes(parsed.subject || message.envelope?.subject || "بدون عنوان").slice(0, 160),
         });
       } catch (parseError) {
-        console.error("Outlook IMAP message parsing failed:", {
+        console.error("[Outlook IMAP] Message parsing failed", {
+          request_id: requestId,
           mailbox: mailboxPath,
           uid: message.uid,
-          error: parseError instanceof Error ? parseError.message : String(parseError),
+          error: safeErrorDetail(parseError),
         });
       }
     }
-    return { candidates: scanned, scannedCount };
+
+    parsedMessages.sort((first, second) => second.receivedAtDate.getTime() - first.receivedAtDate.getTime());
+    const candidates = parsedMessages.filter((message) => Boolean(message.code));
+    const keywordMatches = parsedMessages.filter((message) => message.hasKeyword).length;
+
+    logImap(requestId, "mailbox_scan_completed", {
+      mailbox: mailboxPath,
+      scanned_messages: parsedMessages.length,
+      keyword_matches: keywordMatches,
+      code_matches: candidates.length,
+      latest_message_at: parsedMessages[0]?.receivedAtDate?.toISOString() || null,
+      messages: parsedMessages.map((message) => ({
+        uid: message.uid,
+        subject: message.subject,
+        received_at: message.receivedAtDate.toISOString(),
+        keyword_match: message.hasKeyword,
+        code_match: Boolean(message.code),
+      })),
+    });
+
+    return {
+      candidates,
+      scannedCount: parsedMessages.length,
+      keywordMatches,
+      latestMessageAt: parsedMessages[0]?.receivedAtDate || null,
+    };
   } finally {
     try {
       mailboxLock?.release();
     } catch (releaseError) {
-      console.error("IMAP mailbox lock release failed:", releaseError);
+      console.error("[Outlook IMAP] Mailbox lock release failed", {
+        request_id: requestId,
+        mailbox: mailboxPath,
+        error: safeErrorDetail(releaseError),
+      });
     }
   }
 }
 
-function send(res, status, payload) {
-  res.setHeader("Cache-Control", "no-store, max-age=0");
-  return res.status(status).json(payload);
-}
-
 export default async function handler(req, res) {
-  if (req.method !== "POST") return send(res, 405, { success: false, error: "method_not_allowed" });
+  const requestId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const startedAt = Date.now();
+
+  if (req.method !== "POST") return failure(res, 405, "method_not_allowed", { request_id: requestId });
   if (!supabaseUrl || !serviceRoleKey) {
-    return send(res, 500, { success: false, error: "supabase_not_configured" });
+    return failure(res, 500, "supabase_not_configured", { request_id: requestId });
   }
 
   const customerLinkId = String(req.body?.customer_link_id || "").trim();
-  if (!customerLinkId) return send(res, 400, { success: false, error: "invalid_customer_link" });
+  if (!customerLinkId) return failure(res, 400, "invalid_customer_link", { request_id: requestId });
+
+  logImap(requestId, "request_received", { customer_link_id: customerLinkId });
 
   const supabase = createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
@@ -163,15 +240,17 @@ export default async function handler(req, res) {
 
     const account = link?.accounts;
     if (!link || !account || account.account_type === "temporary" || !account.imap_enabled || account.email_provider !== "outlook") {
-      return send(res, 400, { success: false, error: "imap_not_enabled" });
+      logImap(requestId, "account_validation_failed", { reason: "imap_not_enabled" });
+      return failure(res, 400, "imap_not_enabled", { request_id: requestId });
     }
     if (Math.max(0, Number(link.code_requested_count || 0)) >= Math.max(0, Number(link.code_request_limit ?? 1))) {
-      return send(res, 409, { success: false, error: "code_credit_exhausted" });
+      logImap(requestId, "account_validation_failed", { account_id: account.id, reason: "code_credit_exhausted" });
+      return failure(res, 409, "code_credit_exhausted", { request_id: requestId });
     }
 
     const lastRequestAt = Number(recentRequests.get(customerLinkId) || 0);
     if (Date.now() - lastRequestAt < 5_000) {
-      return send(res, 429, { success: false, error: "request_too_frequent" });
+      return failure(res, 429, "request_too_frequent", { request_id: requestId });
     }
     recentRequests.set(customerLinkId, Date.now());
     if (recentRequests.size > 500) {
@@ -187,13 +266,37 @@ export default async function handler(req, res) {
       .eq("account_id", account.id)
       .maybeSingle();
     if (credentialError) throw credentialError;
-    if (!credential) return send(res, 404, { success: false, error: "imap_credentials_not_found" });
+    if (!credential) {
+      return failure(res, 404, "imap_credentials_not_found", { request_id: requestId });
+    }
+
+    logImap(requestId, "connection_started", {
+      account_id: account.id,
+      host: "outlook.office365.com",
+      port: 993,
+      secure: true,
+    });
+
+    let appPassword;
+    try {
+      appPassword = decryptImapPassword(credential);
+    } catch (credentialDecryptError) {
+      console.error("[Outlook IMAP] Credential decryption failed", {
+        request_id: requestId,
+        account_id: account.id,
+        error: safeErrorDetail(credentialDecryptError),
+      });
+      return failure(res, 500, "imap_credentials_invalid", {
+        request_id: requestId,
+        technical_detail: safeErrorDetail(credentialDecryptError),
+      });
+    }
 
     imap = new ImapFlow({
       host: "outlook.office365.com",
       port: 993,
       secure: true,
-      auth: { user: account.email, pass: decryptImapPassword(credential) },
+      auth: { user: account.email, pass: appPassword },
       logger: false,
       connectionTimeout: 10_000,
       greetingTimeout: 10_000,
@@ -201,44 +304,80 @@ export default async function handler(req, res) {
     });
 
     await imap.connect();
-    const mailboxes = await imap.list();
-    const inboxPath = mailboxes.find((mailbox) => mailbox.specialUse === "\\Inbox" || mailbox.path.toUpperCase() === "INBOX")?.path || "INBOX";
-    const junkPaths = mailboxes
-      .filter(isJunkMailbox)
-      .map((mailbox) => mailbox.path)
-      .filter((path) => path && path !== inboxPath);
-    const mailboxPaths = [...new Set([inboxPath, ...junkPaths])];
+    logImap(requestId, "connection_succeeded", {
+      account_id: account.id,
+      elapsed_ms: Date.now() - startedAt,
+    });
 
-    const candidates = [];
-    let scannedMessages = 0;
-    for (const mailboxPath of mailboxPaths) {
-      try {
-        const mailboxResult = await scanMailbox(imap, mailboxPath);
-        scannedMessages += mailboxResult.scannedCount;
-        candidates.push(...mailboxResult.candidates);
-      } catch (mailboxError) {
-        console.error("Outlook IMAP mailbox scan failed:", {
-          mailbox: mailboxPath,
-          error: mailboxError instanceof Error ? mailboxError.message : String(mailboxError),
-        });
+    const mailboxes = await imap.list();
+    const inboxPath = mailboxes.find(
+      (mailbox) => mailbox.specialUse === "\\Inbox" || mailbox.path.toUpperCase() === "INBOX",
+    )?.path || "INBOX";
+    const junkPaths = [...new Set(mailboxes.filter(isJunkMailbox).map((mailbox) => mailbox.path))]
+      .filter((path) => path && path !== inboxPath);
+
+    logImap(requestId, "mailboxes_discovered", {
+      inbox: inboxPath,
+      junk_folders: junkPaths,
+      available_mailbox_count: mailboxes.length,
+    });
+
+    const scanTotals = { scannedMessages: 0, keywordMatches: 0 };
+    const folderErrors = [];
+    const inboxResult = await scanLatestMessages(imap, inboxPath, requestId);
+    scanTotals.scannedMessages += inboxResult.scannedCount;
+    scanTotals.keywordMatches += inboxResult.keywordMatches;
+    let candidates = [...inboxResult.candidates];
+    const scannedFolders = [inboxPath];
+
+    // Junk is a fallback only. INBOX includes both Outlook Focused and Other tabs.
+    if (!candidates.length) {
+      for (const junkPath of junkPaths) {
+        try {
+          const junkResult = await scanLatestMessages(imap, junkPath, requestId);
+          scannedFolders.push(junkPath);
+          scanTotals.scannedMessages += junkResult.scannedCount;
+          scanTotals.keywordMatches += junkResult.keywordMatches;
+          candidates.push(...junkResult.candidates);
+        } catch (junkError) {
+          folderErrors.push({ mailbox: junkPath, error: safeErrorDetail(junkError) });
+          console.error("[Outlook IMAP] Junk mailbox scan failed", {
+            request_id: requestId,
+            mailbox: junkPath,
+            error: safeErrorDetail(junkError),
+          });
+        }
       }
     }
+
     candidates.sort((first, second) => second.receivedAtDate.getTime() - first.receivedAtDate.getTime());
     const latestMessage = candidates[0] || null;
 
-    console.log("Outlook IMAP Netflix scan completed:", {
+    logImap(requestId, "search_completed", {
       account_id: account.id,
-      folders: mailboxPaths,
-      scanned_messages: scannedMessages,
-      matching_messages: candidates.length,
-      latest_message_at: latestMessage?.receivedAtDate?.toISOString() || null,
+      folders: scannedFolders,
+      scanned_messages: scanTotals.scannedMessages,
+      keyword_matches: scanTotals.keywordMatches,
+      code_matches: candidates.length,
+      latest_code_message_at: latestMessage?.receivedAtDate?.toISOString() || null,
+      elapsed_ms: Date.now() - startedAt,
     });
 
     if (!latestMessage) {
-      return send(res, 404, {
-        success: false,
-        error: "netflix_code_not_found",
-        message: noCodeMessage,
+      const responseMessage = folderErrors.length
+        ? `تم فحص INBOX، لكن تعذر فحص مجلد البريد غير الهام: ${folderErrors[0].error}`
+        : junkPaths.length
+          ? apiMessages.netflix_code_not_found
+          : "تم فحص آخر 5 رسائل في INBOX ولم يتم العثور على كود. لم يظهر مجلد Junk ضمن مجلدات Outlook المتاحة لهذا البريد.";
+      return failure(res, 404, "netflix_code_not_found", {
+        request_id: requestId,
+        message: responseMessage,
+        details: {
+          scanned_folders: scannedFolders,
+          scanned_messages: scanTotals.scannedMessages,
+          keyword_matches: scanTotals.keywordMatches,
+          folder_errors: folderErrors,
+        },
       });
     }
 
@@ -253,7 +392,10 @@ export default async function handler(req, res) {
       .maybeSingle();
     if (existingError) throw existingError;
     if (existingMessage?.is_used) {
-      return send(res, 409, { success: false, error: "code_already_used" });
+      return failure(res, 409, "code_already_used", {
+        request_id: requestId,
+        details: { mailbox: mailboxPath, received_at: receivedAtDate.toISOString() },
+      });
     }
 
     if (!existingMessage) {
@@ -281,13 +423,46 @@ export default async function handler(req, res) {
     ]);
     if (accountUpdateError || linkUpdateError) throw accountUpdateError || linkUpdateError;
 
-    return send(res, 200, { success: true, code, received_at: receivedAt });
+    logImap(requestId, "code_saved", {
+      account_id: account.id,
+      mailbox: mailboxPath,
+      uid,
+      received_at: receivedAt,
+      code_length: code.length,
+      elapsed_ms: Date.now() - startedAt,
+    });
+
+    return send(res, 200, {
+      success: true,
+      code,
+      received_at: receivedAt,
+      request_id: requestId,
+      message: "تم العثور على كود Netflix بنجاح.",
+    });
   } catch (error) {
-    console.error("Outlook IMAP code fetch failed:", error);
-    return send(res, 500, { success: false, error: "imap_fetch_failed" });
+    const classified = classifyImapError(error);
+    console.error("[Outlook IMAP] Request failed", {
+      request_id: requestId,
+      error: classified.error,
+      technical_detail: classified.detail,
+      elapsed_ms: Date.now() - startedAt,
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    return failure(res, 500, classified.error, {
+      request_id: requestId,
+      technical_detail: classified.detail,
+    });
   } finally {
     if (imap) {
-      try { await imap.logout(); } catch (error) { console.error("IMAP logout failed:", error); }
+      try {
+        await imap.logout();
+        logImap(requestId, "connection_closed", { elapsed_ms: Date.now() - startedAt });
+      } catch (logoutError) {
+        console.error("[Outlook IMAP] Logout failed", {
+          request_id: requestId,
+          error: safeErrorDetail(logoutError),
+        });
+      }
     }
   }
 }

@@ -4335,6 +4335,7 @@ function CustomerView({
   const [showReminder, setShowReminder] = useState(false);
   const [agreeDisclaimer, setAgreeDisclaimer] = useState(false);
   const [codeRequestState, setCodeRequestState] = useState<"idle" | "loading" | "ready" | "failed" | "expired">("idle");
+  const [codeRequestErrorMessage, setCodeRequestErrorMessage] = useState<string | null>(null);
   const [codeRequestSeconds, setCodeRequestSeconds] = useState(0);
   const [codeDisplayExpiresAt, setCodeDisplayExpiresAt] = useState<number | null>(null);
   const [nowTick, setNowTick] = useState(() => Date.now());
@@ -5148,29 +5149,71 @@ function CustomerView({
     clearCodeSearchTimers();
     codeSearchActiveRef.current = true;
     setCodeRequestState("loading");
+    setCodeRequestErrorMessage(null);
     setCodeRequestSeconds(15);
     setCodeDisplayExpiresAt(null);
 
     if (imapCodeEnabled && link?.id) {
-      void fetch("/api/fetch-imap-code", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ customer_link_id: link.id }),
-      }).then(async (response) => {
+      try {
+        const response = await fetch("/api/fetch-imap-code", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ customer_link_id: link.id }),
+        });
         const payload = await response.json().catch(() => ({}));
-        if (!response.ok && payload?.error === "netflix_code_not_found") {
+        if (!response.ok) {
+          const detailedMessage = payload?.message
+            || payload?.technical_detail
+            || `تعذر جلب كود Netflix (${payload?.error || response.status})`;
+          codeSearchActiveRef.current = false;
+          clearCodeSearchTimers();
+          setCodeRequestSeconds(0);
+          setCodeRequestErrorMessage(
+            payload?.request_id ? `${detailedMessage} (رقم التتبع: ${payload.request_id})` : detailedMessage,
+          );
+          setCodeRequestState("failed");
           setToast({
-            label: payload?.message || "تم الاتصال بالبريد بنجاح لكن لم تصل رسالة جديدة من نتفليكس بعد، يرجى إعادة المحاولة خلال ثوانٍ",
+            label: detailedMessage,
             at: Date.now(),
             tone: "error",
           });
-        } else if (!response.ok && payload?.error !== "code_already_used") {
-          console.error("Outlook IMAP code request failed:", payload?.error || response.status);
+          console.error("Outlook IMAP code request failed:", {
+            status: response.status,
+            error: payload?.error,
+            message: payload?.message,
+            technicalDetail: payload?.technical_detail,
+            requestId: payload?.request_id,
+            details: payload?.details,
+          });
+          return;
         }
-        if (response.ok) void pollVerificationCode(accountId);
-      }).catch((error) => {
+
+        const latestCode = await readLatestVerificationCode(accountId, link.id, true);
+        if (await showVerificationCode(latestCode, payload?.message || "تم العثور على كود Netflix بنجاح")) return;
+
+        const syncMessage = "تم العثور على الكود في البريد، لكن تعذرت مزامنته مع صفحة العميل. أعد المحاولة خلال ثوانٍ.";
+        codeSearchActiveRef.current = false;
+        clearCodeSearchTimers();
+        setCodeRequestSeconds(0);
+        setCodeRequestErrorMessage(syncMessage);
+        setCodeRequestState("failed");
+        setToast({ label: syncMessage, at: Date.now(), tone: "error" });
+        return;
+      } catch (error) {
         console.error("Outlook IMAP code request failed:", error);
-      });
+        const networkMessage = `تعذر الوصول إلى خادم جلب الكود: ${error instanceof Error ? error.message : "خطأ شبكة غير معروف"}`;
+        codeSearchActiveRef.current = false;
+        clearCodeSearchTimers();
+        setCodeRequestSeconds(0);
+        setCodeRequestErrorMessage(networkMessage);
+        setCodeRequestState("failed");
+        setToast({
+          label: networkMessage,
+          at: Date.now(),
+          tone: "error",
+        });
+        return;
+      }
     }
 
     try {
@@ -5588,7 +5631,8 @@ function CustomerView({
                         <div className="min-w-0 flex-1">
                           <p className="text-lg font-black">لم يصل الرمز أو الرابط بعد؟</p>
                           <p className="mt-1 text-xs font-bold leading-6 text-zinc-500">
-                            يرجى متابعة الشرح جيداً لكي تفهم هذه الخطوة وتتأكد من تطبيقها بالشكل الصحيح على نتفليكس، ثم اضغط على إعادة المحاولة.
+                            {codeRequestErrorMessage
+                              || "يرجى متابعة الشرح جيداً لكي تفهم هذه الخطوة وتتأكد من تطبيقها بالشكل الصحيح على نتفليكس، ثم اضغط على إعادة المحاولة."}
                           </p>
                         </div>
                       </div>
