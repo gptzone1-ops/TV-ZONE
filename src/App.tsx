@@ -1202,6 +1202,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       temporary_short_id: temporaryShortId,
       email_provider: form.account_type === "temporary" ? "none" : form.email_provider || "none",
       imap_enabled: form.account_type !== "temporary" && form.email_provider === "outlook",
+      normal_client_layout: form.account_type !== "temporary",
       expires_at,
       service_type: selectedService,
       use_automated_code: true,
@@ -1276,8 +1277,9 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
           temporary_short_id: temporaryShortId,
           email_provider: form.account_type === "temporary" ? "none" : form.email_provider || "none",
           imap_enabled: false,
+          normal_client_layout: form.account_type !== "temporary",
         })
-        .select("id,email,password,account_type,expires_at,created_at,service_type,use_automated_code,supplier_code_url,temporary_short_id,email_provider,imap_enabled")
+        .select("id,email,password,account_type,expires_at,created_at,service_type,use_automated_code,supplier_code_url,temporary_short_id,email_provider,imap_enabled,normal_client_layout")
         .single();
 
       if (accountError) throw accountError;
@@ -4377,7 +4379,7 @@ function CustomerView({
       const { data, error } = await supabase
         .from("customer_links")
         .select(
-          "*,accounts(id,email,use_automated_code,verification_code,verification_code_received_at,service_type,account_type,expires_at,created_at,email_provider,imap_enabled)",
+          "*,accounts(id,email,password,use_automated_code,verification_code,verification_code_received_at,service_type,account_type,expires_at,created_at,email_provider,imap_enabled,normal_client_layout)",
         )
         .eq(queryColumn, identifier)
         .single();
@@ -4467,7 +4469,8 @@ function CustomerView({
   const storedVerificationCodeReceivedAt =
     link?.verification_code_received_at || account?.verification_code_received_at || null;
   const service = serviceOf(account);
-  const serviceOutageActive = service === "netflix" && netflixServiceOutage;
+  const normalClientLayout = account?.normal_client_layout === true && account?.account_type !== "temporary";
+  const serviceOutageActive = service === "netflix" && netflixServiceOutage && !normalClientLayout;
   const theme = serviceThemes[service];
   const customerCode = String(link?.link_number ?? link?.short_id ?? identifier);
   const supportEmail = account?.email || "غير متوفر";
@@ -4983,7 +4986,7 @@ function CustomerView({
       const { data: refreshedLink, error: refreshError } = await supabase
         .from("customer_links")
         .select(
-          "*,accounts(id,email,use_automated_code,verification_code,verification_code_received_at,service_type,account_type,expires_at,created_at,email_provider,imap_enabled)",
+          "*,accounts(id,email,password,use_automated_code,verification_code,verification_code_received_at,service_type,account_type,expires_at,created_at,email_provider,imap_enabled,normal_client_layout)",
         )
         .eq("id", link.id)
         .maybeSingle();
@@ -5249,7 +5252,7 @@ function CustomerView({
                 <UserRound className="h-6 w-6" />
               </button>
             </div>
-            {link?.client_code && (
+            {!normalClientLayout && link?.client_code && (
               <div className="mt-4 border-t border-[#EEE7F8] pt-4">
                 <CompensationCodeCard code={link.client_code} compact showPageLink />
               </div>
@@ -5308,7 +5311,10 @@ function CustomerView({
 
                 <div className="space-y-5">
                   <LoginCopyCard label="البريد الإلكتروني" value={account.email} icon={Mail} setToast={setToast} theme={theme} />
-                  {link.client_code && <CompensationCodeCard code={link.client_code} showPageLink />}
+                  {normalClientLayout && account.password && (
+                    <LoginCopyCard label="كلمة المرور" value={account.password} icon={KeyRound} setToast={setToast} theme={theme} />
+                  )}
+                  {!normalClientLayout && link.client_code && <CompensationCodeCard code={link.client_code} showPageLink />}
                   {serviceOutageActive ? (
                     <div
                       className="overflow-hidden rounded-[1.75rem] border border-red-200 bg-gradient-to-b from-red-50 via-white to-zinc-50 p-5 text-center shadow-[0_18px_42px_rgba(229,9,20,0.12)]"

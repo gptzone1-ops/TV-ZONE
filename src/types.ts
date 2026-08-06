@@ -21,6 +21,7 @@ export type NetflixAccount = {
   temporary_short_id?: string | null;
   email_provider?: "none" | "outlook" | null;
   imap_enabled?: boolean | null;
+  normal_client_layout?: boolean | null;
   verification_code?: string | null;
   verification_code_received_at?: string | null;
   service_type?: ServiceType | null;

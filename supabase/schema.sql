@@ -13,6 +13,7 @@ create table if not exists public.accounts (
   temporary_short_id text unique,
   email_provider text not null default 'none' check (email_provider in ('none', 'outlook')),
   imap_enabled boolean not null default false,
+  normal_client_layout boolean not null default false,
   expires_at date not null,
   created_at timestamptz not null default now()
 );
