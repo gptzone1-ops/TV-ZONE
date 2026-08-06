@@ -11,6 +11,7 @@ create table if not exists public.accounts (
   service_type text not null default 'netflix' check (service_type in ('netflix', 'shahid')),
   account_type text not null check (account_type in ('private', 'shared', 'temporary', 'compensation')),
   compensation_distribution text check (compensation_distribution in ('private', 'shared')),
+  compensation_tutorial_url text,
   temporary_short_id text unique,
   email_provider text not null default 'none' check (email_provider in ('none', 'outlook')),
   imap_enabled boolean not null default false,

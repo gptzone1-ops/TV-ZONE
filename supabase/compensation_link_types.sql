@@ -22,6 +22,12 @@ $$;
 create index if not exists compensation_link_pool_type_status_idx
   on public.compensation_link_pool (account_type, status, created_at, id);
 
+-- PostgreSQL cannot change a function's return type with CREATE OR REPLACE.
+-- Drop only the routines (not tables or data) so this migration is rerunnable.
+drop function if exists public.distribute_compensation_links_by_type(text);
+drop function if exists public.distribute_compensation_links();
+drop function if exists public.assign_compensation_link(uuid);
+
 create or replace function public.assign_compensation_link(p_request_id uuid)
 returns table (
   request_id uuid,

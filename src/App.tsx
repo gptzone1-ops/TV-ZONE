@@ -72,6 +72,7 @@ type AccountCreateForm = {
   password: string;
   account_type: AccountType;
   supplier_code_url?: string;
+  compensation_tutorial_url?: string;
   email_provider?: EmailProvider;
   compensation_distribution?: CompensationDistribution;
 };
@@ -182,6 +183,40 @@ function isValidHttpUrl(value: string) {
     return url.protocol === "https:" || url.protocol === "http:";
   } catch {
     return false;
+  }
+}
+
+function getTutorialMedia(value: string | null | undefined) {
+  const rawValue = String(value || "").trim();
+  if (!rawValue || !isValidHttpUrl(rawValue)) return null;
+
+  try {
+    const url = new URL(rawValue);
+    const hostname = url.hostname.replace(/^www\./, "").toLowerCase();
+    let youtubeId = "";
+
+    if (hostname === "youtu.be") {
+      youtubeId = url.pathname.split("/").filter(Boolean)[0] || "";
+    } else if (hostname === "youtube.com" || hostname === "m.youtube.com") {
+      const parts = url.pathname.split("/").filter(Boolean);
+      if (parts[0] === "embed" || parts[0] === "shorts") youtubeId = parts[1] || "";
+      if (url.pathname === "/watch") youtubeId = url.searchParams.get("v") || "";
+    }
+
+    if (youtubeId && /^[A-Za-z0-9_-]{6,}$/.test(youtubeId)) {
+      return {
+        kind: "embed" as const,
+        src: `https://www.youtube.com/embed/${youtubeId}?playsinline=1&rel=0&modestbranding=1`,
+      };
+    }
+
+    if (/\.(mp4|webm|ogg|mov)(?:$|[?#])/i.test(rawValue)) {
+      return { kind: "video" as const, src: rawValue };
+    }
+
+    return { kind: "embed" as const, src: rawValue };
+  } catch {
+    return null;
   }
 }
 
@@ -1211,6 +1246,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       password: form.password,
       account_type: form.account_type,
       supplier_code_url: form.supplier_code_url,
+      compensation_tutorial_url: form.account_type === "compensation" ? form.compensation_tutorial_url || null : null,
       temporary_short_id: temporaryShortId,
       email_provider: form.account_type === "temporary" || form.account_type === "compensation" ? "none" : form.email_provider || "none",
       imap_enabled: form.account_type !== "temporary" && form.account_type !== "compensation" && form.email_provider === "outlook",
@@ -1291,8 +1327,9 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
           imap_enabled: form.account_type !== "temporary" && form.account_type !== "compensation" && form.email_provider === "outlook",
           normal_client_layout: form.account_type !== "temporary" && form.account_type !== "compensation",
           compensation_distribution: form.account_type === "compensation" ? form.compensation_distribution : null,
+          compensation_tutorial_url: form.account_type === "compensation" ? form.compensation_tutorial_url || null : null,
         })
-        .select("id,email,password,account_type,compensation_distribution,expires_at,created_at,service_type,use_automated_code,supplier_code_url,temporary_short_id,email_provider,imap_enabled,normal_client_layout")
+        .select("id,email,password,account_type,compensation_distribution,compensation_tutorial_url,expires_at,created_at,service_type,use_automated_code,supplier_code_url,temporary_short_id,email_provider,imap_enabled,normal_client_layout")
         .single();
 
       if (accountError) throw accountError;
@@ -1411,7 +1448,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
 
   async function updateAccount(
     accountId: string,
-    form: { email: string; password: string; supplier_code_url?: string; created_at?: string; expires_at?: string },
+    form: { email: string; password: string; supplier_code_url?: string; compensation_tutorial_url?: string | null; created_at?: string; expires_at?: string },
   ): Promise<AccountFormResult> {
     const normalizedEmail = normalizeEmail(form.email);
     const currentAccount = accounts.find((account) => account.id === accountId);
@@ -1481,6 +1518,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
           email: normalizedEmail,
           password: form.password,
           supplier_code_url: syncedSupplierCodeUrl,
+          compensation_tutorial_url: form.compensation_tutorial_url,
           created_at: form.created_at,
           expires_at: form.expires_at,
         }),
@@ -1692,6 +1730,43 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       console.error("Extra credit request review error:", error);
       setToast({ label: "تعذر تحديث طلب الرصيد الإضافي", tone: "error", at: Date.now() });
       return false;
+    }
+  }
+
+  async function copyAllCustomerLinksForAccount(accountId: string) {
+    let accountLinks = links.filter((link) => link.account_id === accountId);
+
+    if (!accountLinks.length && supabase) {
+      const { data, error } = await supabase
+        .from("customer_links")
+        .select("*")
+        .eq("account_id", accountId)
+        .order("profile_name", { ascending: true });
+
+      if (error) {
+        console.error("Customer links bulk copy fetch failed:", error);
+        setToast({ label: "تعذر جلب روابط هذا الحساب", at: Date.now(), tone: "error" });
+        return;
+      }
+      accountLinks = (data || []) as CustomerLink[];
+    }
+
+    if (!accountLinks.length) {
+      setToast({ label: "لا توجد روابط مرتبطة بهذا الحساب", at: Date.now(), tone: "error" });
+      return;
+    }
+
+    const linksText = [...accountLinks]
+      .sort((first, second) => first.profile_name.localeCompare(second.profile_name, "en", { numeric: true }))
+      .map(getCustomerUrl)
+      .join("\n");
+
+    try {
+      await writeClipboardText(linksText);
+      setToast({ label: `تم نسخ جميع الروابط بنجاح (${accountLinks.length} روابط)`, at: Date.now() });
+    } catch (error) {
+      console.error("Customer links bulk copy failed:", error);
+      setToast({ label: "تعذر نسخ الروابط، حاول مرة أخرى", at: Date.now(), tone: "error" });
     }
   }
 
@@ -1913,6 +1988,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
           const url = getTemporaryAccountUrl(account);
           if (url) void copyText(url, setToast);
         }}
+        onCopyAllLinks={copyAllCustomerLinksForAccount}
         onUpdateCustomerCodeBalance={updateCustomerCodeBalance}
         onResetCustomerDevice={resetCustomerDevice}
         pendingCreditRequests={extraCreditRequests.filter((request) => request.status === "pending").length}
@@ -2074,6 +2150,7 @@ function Dashboard({
   onSelect,
   onDelete,
   onCopyTemporaryLink,
+  onCopyAllLinks,
   onUpdateCustomerCodeBalance,
   onResetCustomerDevice,
   pendingCreditRequests,
@@ -2099,6 +2176,7 @@ function Dashboard({
   onSelect: (id: string) => void;
   onDelete: (id: string) => Promise<void>;
   onCopyTemporaryLink: (account: NetflixAccount) => void;
+  onCopyAllLinks: (accountId: string) => Promise<void>;
   onUpdateCustomerCodeBalance: (
     linkId: string,
     codeRequestLimit: number,
@@ -2366,6 +2444,7 @@ function Dashboard({
                     onEdit={openEditForm}
                     onDelete={onDelete}
                     onCopyTemporaryLink={onCopyTemporaryLink}
+                    onCopyAllLinks={onCopyAllLinks}
                     onOpenSupplierCode={(url) => window.open(url, "_blank", "noopener,noreferrer")}
                   />
                 ))}
@@ -2383,6 +2462,7 @@ function Dashboard({
                 onEdit={openEditForm}
                 onDelete={onDelete}
                 onCopyTemporaryLink={onCopyTemporaryLink}
+                onCopyAllLinks={onCopyAllLinks}
                 onOpenSupplierCode={(url) => window.open(url, "_blank", "noopener,noreferrer")}
               />
             ))}
@@ -2576,6 +2656,7 @@ function AccountCard({
   onEdit,
   onDelete,
   onCopyTemporaryLink,
+  onCopyAllLinks,
   onOpenSupplierCode,
 }: {
   account: NetflixAccount;
@@ -2584,6 +2665,7 @@ function AccountCard({
   onEdit: (account: NetflixAccount) => void;
   onDelete: (id: string) => Promise<void>;
   onCopyTemporaryLink: (account: NetflixAccount) => void;
+  onCopyAllLinks: (accountId: string) => Promise<void>;
   onOpenSupplierCode: (url: string) => void;
 }) {
   const expired = isExpired(account.expires_at);
@@ -2654,7 +2736,7 @@ function AccountCard({
         </div>
       </div>
 
-      <div className="mt-3 flex items-center gap-2">
+      <div className="mt-3 flex flex-wrap items-center gap-2">
         {account.account_type === "temporary" && account.temporary_short_id && (
           <button
             type="button"
@@ -2690,6 +2772,15 @@ function AccountCard({
         </button>
         <button
           type="button"
+          onClick={() => void onCopyAllLinks(account.id)}
+          title="نسخ جميع الروابط"
+          aria-label="نسخ جميع الروابط"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[#DDCEF4] text-[#7C2CE8] transition hover:bg-[#F4EDFF]"
+        >
+          <Clipboard className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
           onClick={() => onOpenSupplierCode(account.supplier_code_url || "")}
           disabled={!canOpenSupplierCode}
           title="فتح رابط الأكواد"
@@ -2717,6 +2808,7 @@ function AccountRow({
   onEdit,
   onDelete,
   onCopyTemporaryLink,
+  onCopyAllLinks,
   onOpenSupplierCode,
 }: {
   account: NetflixAccount;
@@ -2725,6 +2817,7 @@ function AccountRow({
   onEdit: (account: NetflixAccount) => void;
   onDelete: (id: string) => Promise<void>;
   onCopyTemporaryLink: (account: NetflixAccount) => void;
+  onCopyAllLinks: (accountId: string) => Promise<void>;
   onOpenSupplierCode: (url: string) => void;
 }) {
   const expired = isExpired(account.expires_at);
@@ -2823,6 +2916,15 @@ function AccountRow({
             className="flex h-9 w-9 items-center justify-center rounded-lg text-[#7C2CE8] transition hover:bg-[#F2E9FF]"
           >
             <Eye className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => void onCopyAllLinks(account.id)}
+            title="نسخ جميع الروابط"
+            aria-label="نسخ جميع الروابط"
+            className="flex h-9 w-9 items-center justify-center rounded-lg text-[#7C2CE8] transition hover:bg-[#F2E9FF]"
+          >
+            <Clipboard className="h-4 w-4" />
           </button>
           <button
             type="button"
@@ -3567,7 +3669,7 @@ function AccountForm({
   onAdd: (form: AccountCreateForm) => Promise<AccountFormResult>;
   onUpdate: (
     accountId: string,
-    form: { email: string; password: string; supplier_code_url?: string },
+    form: { email: string; password: string; supplier_code_url?: string; compensation_tutorial_url?: string | null },
   ) => Promise<AccountFormResult>;
   loading: boolean;
   service: ServiceType;
@@ -3579,6 +3681,7 @@ function AccountForm({
   const [email, setEmail] = useState(initialAccount?.email || "");
   const [password, setPassword] = useState(initialAccount?.password || "");
   const [supplierCodeUrl, setSupplierCodeUrl] = useState(initialAccount?.supplier_code_url || "");
+  const [compensationTutorialUrl, setCompensationTutorialUrl] = useState(initialAccount?.compensation_tutorial_url || "");
   const [emailProvider, setEmailProvider] = useState<EmailProvider>("none");
   const [formError, setFormError] = useState("");
   const [showCompensationDistribution, setShowCompensationDistribution] = useState(false);
@@ -3604,6 +3707,10 @@ function AccountForm({
       setFormError("رابط جلب الكود غير صحيح. يجب أن يبدأ بـ https:// أو http://.");
       return;
     }
+    if (accountType === "compensation" && compensationTutorialUrl.trim() && !isValidHttpUrl(compensationTutorialUrl.trim())) {
+      setFormError("رابط فيديو الشرح غير صحيح. يجب أن يبدأ بـ https:// أو http://.");
+      return;
+    }
 
     if (!initialAccount) {
       if (accountType === "compensation") {
@@ -3614,7 +3721,12 @@ function AccountForm({
       return;
     }
 
-    const result = await onUpdate(initialAccount.id, { email: cleanEmail, password, supplier_code_url });
+    const result = await onUpdate(initialAccount.id, {
+      email: cleanEmail,
+      password,
+      supplier_code_url,
+      compensation_tutorial_url: accountType === "compensation" ? compensationTutorialUrl.trim() || null : undefined,
+    });
 
     if (accountFormSucceeded(result)) {
       onClose();
@@ -3632,6 +3744,7 @@ function AccountForm({
       password,
       account_type: accountType,
       supplier_code_url,
+      compensation_tutorial_url: accountType === "compensation" ? compensationTutorialUrl.trim() || undefined : undefined,
       email_provider: accountType === "temporary" || accountType === "compensation" ? "none" : emailProvider,
       compensation_distribution: accountType === "compensation" ? compensationDistribution : undefined,
     });
@@ -3792,6 +3905,21 @@ function AccountForm({
                   : "خاص بالمسؤول فقط ولا يظهر في صفحة العميل."}
               </p>
             </Field>
+
+            {accountType === "compensation" && (
+              <Field icon={MonitorPlay} label="رابط فيديو شرح الدخول">
+                <input
+                  value={compensationTutorialUrl}
+                  onChange={(event) => setCompensationTutorialUrl(event.target.value)}
+                  placeholder="https://youtube.com/shorts/... أو رابط MP4"
+                  className="admin-modal-input"
+                  dir="ltr"
+                />
+                <p className="mt-2 text-[11px] font-bold leading-6 text-zinc-400">
+                  يقبل روابط YouTube وShorts وملفات MP4. عند تركه فارغاً سيظهر فيديو الشرح الافتراضي.
+                </p>
+              </Field>
+            )}
           </>
         )}
 
@@ -4572,6 +4700,8 @@ function CompensationAccountCustomerView({
   const [toast, setToast] = useState<Toast>(null);
   const theme = serviceThemes.netflix;
   const codeUrl = String(account.supplier_code_url || "").trim();
+  const profileName = `ملف ${link.profile_label || link.profile_name}`;
+  const tutorialMedia = getTutorialMedia(account.compensation_tutorial_url || videoUrl);
 
   return (
     <Shell toast={toast}>
@@ -4586,7 +4716,7 @@ function CompensationAccountCustomerView({
                 <div className="min-w-0">
                   <p className="text-xs font-black text-[#E50914]">Zone Store</p>
                   <h1 className="mt-1 text-xl font-black text-zinc-950 md:text-2xl">بيانات حساب التعويض</h1>
-                  <p className="mt-1 text-xs font-bold text-zinc-500">الملف {link.profile_label || link.profile_name}</p>
+                  <p className="mt-1 text-xs font-bold text-zinc-500">{profileName}</p>
                 </div>
               </div>
               <button
@@ -4611,6 +4741,10 @@ function CompensationAccountCustomerView({
             <div className="space-y-4">
               <LoginCopyCard label="البريد الإلكتروني" value={account.email} icon={Mail} setToast={setToast} theme={theme} />
               <LoginCopyCard label="كلمة المرور" value={account.password} icon={KeyRound} setToast={setToast} theme={theme} />
+              <div className="grid gap-4 pt-1 sm:grid-cols-2">
+                <LoginCopyCard label="اسم الملف" value={profileName} icon={UserRound} setToast={setToast} theme={theme} />
+                <LoginCopyCard label="الرقم السري للملف" value={link.profile_code} icon={LockKeyhole} setToast={setToast} theme={theme} />
+              </div>
             </div>
 
             {codeUrl ? (
@@ -4637,12 +4771,36 @@ function CompensationAccountCustomerView({
               </div>
               <h2 className="text-2xl font-black text-zinc-950">شرح طريقة الدخول</h2>
             </div>
+
+            {tutorialMedia && (
+              <div className="mx-auto mb-6 w-full max-w-[360px] overflow-hidden rounded-[1.75rem] border border-red-100 bg-black shadow-[0_18px_48px_rgba(229,9,20,0.16)]">
+                <div className="aspect-[9/16] w-full">
+                  {tutorialMedia.kind === "video" ? (
+                    <video
+                      src={tutorialMedia.src}
+                      controls
+                      playsInline
+                      preload="metadata"
+                      className="h-full w-full object-contain"
+                    />
+                  ) : (
+                    <iframe
+                      src={tutorialMedia.src}
+                      title="فيديو شرح الدخول لحساب التعويض"
+                      className="h-full w-full border-0"
+                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                      allowFullScreen
+                    />
+                  )}
+                </div>
+              </div>
+            )}
+
             <div className="space-y-3">
               {[
-                "أدخل البريد الإلكتروني في تطبيق أو موقع الخدمة.",
-                "اضغط على المزيد من المساعدة.",
-                "اختر استخدام كلمة مرور وأدخل كلمة السر الموضحة أعلى الشاشة.",
-                "في حال طلب رمز التفعيل، اضغط على زر جلب الكود وسيتم تحويلك مباشرة إلى صفحة الحصول على الكود.",
+                "أدخل البريد الإلكتروني الموضح أعلى الصفحة.",
+                `حدد ${profileName} واستخدم الرقم السري الخاص به (${link.profile_code}).`,
+                "عند طلب رمز التفعيل، اضغط على زر جلب الكود للانتقال مباشرة إلى صفحة الكود.",
               ].map((step, index) => (
                 <div key={step} className="flex items-start gap-3 rounded-2xl border border-zinc-100 bg-[#FAFAFB] p-4">
                   <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#E50914] text-sm font-black text-white">{index + 1}</span>
@@ -4718,7 +4876,7 @@ function CustomerView({
       const { data, error } = await supabase
         .from("customer_links")
         .select(
-          "*,accounts(id,email,password,use_automated_code,supplier_code_url,verification_code,verification_code_received_at,service_type,account_type,compensation_distribution,expires_at,created_at,email_provider,imap_enabled,normal_client_layout)",
+          "*,accounts(id,email,password,use_automated_code,supplier_code_url,compensation_tutorial_url,verification_code,verification_code_received_at,service_type,account_type,compensation_distribution,expires_at,created_at,email_provider,imap_enabled,normal_client_layout)",
         )
         .eq(queryColumn, identifier)
         .single();
@@ -5326,7 +5484,7 @@ function CustomerView({
       const { data: refreshedLink, error: refreshError } = await supabase
         .from("customer_links")
         .select(
-          "*,accounts(id,email,password,use_automated_code,supplier_code_url,verification_code,verification_code_received_at,service_type,account_type,compensation_distribution,expires_at,created_at,email_provider,imap_enabled,normal_client_layout)",
+          "*,accounts(id,email,password,use_automated_code,supplier_code_url,compensation_tutorial_url,verification_code,verification_code_received_at,service_type,account_type,compensation_distribution,expires_at,created_at,email_provider,imap_enabled,normal_client_layout)",
         )
         .eq("id", link.id)
         .maybeSingle();

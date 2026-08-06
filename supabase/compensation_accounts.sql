@@ -5,6 +5,9 @@ alter table public.accounts
   add column if not exists compensation_distribution text;
 
 alter table public.accounts
+  add column if not exists compensation_tutorial_url text;
+
+alter table public.accounts
   drop constraint if exists accounts_account_type_check;
 
 alter table public.accounts

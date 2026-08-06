@@ -8,6 +8,17 @@ function normalizeEmail(email) {
   return String(email || "").trim().toLowerCase();
 }
 
+function normalizeOptionalHttpUrl(value) {
+  const normalized = String(value || "").trim();
+  if (!normalized) return null;
+  try {
+    const url = new URL(normalized);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.toString() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -85,6 +96,14 @@ export default async function handler(req, res) {
     supplier_code_url: supplierCodeUrl,
   };
 
+  if (Object.prototype.hasOwnProperty.call(req.body || {}, "compensation_tutorial_url")) {
+    const tutorialUrl = normalizeOptionalHttpUrl(req.body?.compensation_tutorial_url);
+    if (tutorialUrl === undefined) {
+      return send(res, 400, { success: false, error: "invalid_compensation_tutorial_url" });
+    }
+    updatePayload.compensation_tutorial_url = tutorialUrl;
+  }
+
   if (req.body?.created_at) updatePayload.created_at = req.body.created_at;
   if (req.body?.expires_at) updatePayload.expires_at = req.body.expires_at;
 
@@ -121,6 +140,7 @@ export default async function handler(req, res) {
         email: existingAccount.email,
         password: existingAccount.password,
         supplier_code_url: existingAccount.supplier_code_url,
+        compensation_tutorial_url: existingAccount.compensation_tutorial_url,
         created_at: existingAccount.created_at,
         expires_at: existingAccount.expires_at,
       })
