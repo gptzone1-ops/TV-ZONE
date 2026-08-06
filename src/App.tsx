@@ -5162,9 +5162,12 @@ function CustomerView({
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
-          const detailedMessage = payload?.message
-            || payload?.technical_detail
+          const baseMessage = payload?.message
             || `تعذر جلب كود Netflix (${payload?.error || response.status})`;
+          const technicalDetail = String(payload?.technical_detail || "").trim();
+          const detailedMessage = technicalDetail && !baseMessage.includes(technicalDetail)
+            ? `${baseMessage} السبب التقني: ${technicalDetail}`
+            : baseMessage;
           codeSearchActiveRef.current = false;
           clearCodeSearchTimers();
           setCodeRequestSeconds(0);

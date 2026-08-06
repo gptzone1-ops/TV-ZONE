@@ -23,6 +23,8 @@ const apiMessages = {
   code_already_used: "تم العثور على أحدث رمز، لكنه سبق عرضه واستخدامه. اطلب رمزاً جديداً من Netflix ثم أعد المحاولة.",
   imap_authentication_failed: "فشل تسجيل الدخول إلى Outlook. تحقق من البريد وكلمة مرور التطبيق App Password.",
   imap_connection_timeout: "انتهت مهلة الاتصال بخادم Outlook. أعد المحاولة بعد لحظات.",
+  imap_network_failed: "تعذر فتح اتصال شبكي بخادم Outlook على المنفذ 993.",
+  imap_tls_failed: "فشل إنشاء الاتصال الآمن TLS مع خادم Outlook.",
   imap_connection_failed: "تعذر الاتصال أو قراءة بريد Outlook.",
   backend_processing_failed: "تم الاتصال بالخادم، لكن حدث خطأ أثناء قراءة أو حفظ بيانات الكود.",
 };
@@ -87,22 +89,35 @@ function mailboxSourceKey(accountId, mailboxPath, uid) {
 
 function safeErrorDetail(error) {
   const message = error instanceof Error ? error.message : String(error || "Unknown IMAP error");
-  return message.replace(/[\r\n]+/g, " ").slice(0, 500);
+  const diagnosticParts = [
+    error?.name && error.name !== "Error" ? `name=${error.name}` : null,
+    error?.code ? `code=${error.code}` : null,
+    error?.responseCode ? `responseCode=${error.responseCode}` : null,
+    error?.authenticationFailed ? "authenticationFailed=true" : null,
+    message,
+  ].filter(Boolean);
+  return [...new Set(diagnosticParts)].join(" | ").replace(/[\r\n]+/g, " ").slice(0, 700);
 }
 
 function classifyImapError(error) {
   const detail = safeErrorDetail(error);
   const searchable = `${error?.code || ""} ${error?.responseCode || ""} ${detail}`.toLowerCase();
   if (/pgrst|postgres|supabase|relation|column|row-level|permission denied|23505|22p02/.test(searchable)) {
-    return { error: "backend_processing_failed", detail };
+    return { error: "backend_processing_failed", detail, status: 500 };
   }
-  if (/auth|login|credentials|password/.test(searchable)) {
-    return { error: "imap_authentication_failed", detail };
+  if (/auth|login|credentials|password|authenticationfailed/.test(searchable)) {
+    return { error: "imap_authentication_failed", detail, status: 401 };
   }
   if (/timeout|timedout|etimedout/.test(searchable)) {
-    return { error: "imap_connection_timeout", detail };
+    return { error: "imap_connection_timeout", detail, status: 504 };
   }
-  return { error: "imap_connection_failed", detail };
+  if (/certificate|ssl|tls|secure connection/.test(searchable)) {
+    return { error: "imap_tls_failed", detail, status: 502 };
+  }
+  if (/econnreset|econnrefused|enotfound|enetunreach|ehostunreach|socket|connection closed|network/.test(searchable)) {
+    return { error: "imap_network_failed", detail, status: 502 };
+  }
+  return { error: "imap_connection_failed", detail, status: 500 };
 }
 
 function maskCodes(value) {
@@ -448,7 +463,7 @@ export default async function handler(req, res) {
       elapsed_ms: Date.now() - startedAt,
       stack: error instanceof Error ? error.stack : undefined,
     });
-    return failure(res, 500, classified.error, {
+    return failure(res, classified.status, classified.error, {
       request_id: requestId,
       technical_detail: classified.detail,
     });
