@@ -298,13 +298,30 @@ function getProfilePin(link: CustomerLink) {
   return profileKey ? LEGACY_PROFILE_CODES[profileKey] : "";
 }
 
+async function writeClipboardText(text: string) {
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  textarea.remove();
+}
+
 async function copyText(text: string, setToast: (toast: Toast) => void) {
-  await navigator.clipboard.writeText(text);
+  await writeClipboardText(text);
   setToast({ label: "تم النسخ بنجاح", at: Date.now() });
 }
 
 async function copyTextSilent(text: string) {
-  await navigator.clipboard.writeText(text);
+  await writeClipboardText(text);
 }
 
 type VerificationCodeResult = {
@@ -3643,11 +3660,6 @@ function AccountDetail({
                           <p className="mt-2 inline-flex rounded-full bg-[#F3ECFF] px-3 py-1 text-xs font-black text-[#7C2CE8]">
                             عميل رقم #{link.link_number ?? "—"}
                           </p>
-                          {link.client_code && (
-                            <p className="mt-2 text-xs font-black text-zinc-600">
-                              رمز التعويض: <span className="text-[#7C2CE8]" dir="ltr">{link.client_code}</span>
-                            </p>
-                          )}
                         </div>
                       </label>
                       <button
@@ -3662,6 +3674,12 @@ function AccountDetail({
                         <Trash2 className="h-4 w-4" />
                       </button>
                     </div>
+
+                    {link.client_code && (
+                      <div className="mb-3">
+                        <CompensationCodeCard code={link.client_code} compact />
+                      </div>
+                    )}
 
                     <p className="truncate rounded-2xl bg-[#F8F4FF] px-3 py-3 text-left text-xs font-bold text-zinc-500" dir="ltr">
                       {customerUrl}
@@ -4798,8 +4816,9 @@ function CustomerView({
     <Shell toast={toast}>
       <div className="min-h-screen bg-gradient-to-b from-[#F3F4F6] via-[#F9FAFB] to-white px-4 pb-24 pt-6 md:pb-28 md:pt-10" dir="rtl">
         <div className="mx-auto w-full max-w-[640px]">
-          <header className="mb-8 flex items-center justify-between rounded-[2rem] border border-white bg-white/80 p-4 shadow-premium backdrop-blur">
-            <div className="flex items-center gap-3">
+          <header className="mb-8 rounded-[2rem] border border-white bg-white/80 p-4 shadow-premium backdrop-blur">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
               <div className={cn("flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br text-lg font-black text-white", theme.gradient, theme.glow)}>
                 زون
               </div>
@@ -4809,23 +4828,21 @@ function CustomerView({
                 {link?.link_number != null && (
                   <p className={cn("mt-1 text-xs font-black", theme.accent)}>عميل رقم #{link.link_number}</p>
                 )}
-                {link?.client_code && (
-                  <a
-                    href="/compensation"
-                    className="mt-1 inline-flex items-center gap-1 text-xs font-black text-[#7C2CE8] hover:underline"
-                  >
-                    رمز التعويض: <span dir="ltr">{link.client_code}</span>
-                  </a>
-                )}
               </div>
+              </div>
+              <button
+                onClick={() => navigate("/")}
+                className={cn("flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl transition duration-300 hover:-translate-y-1 hover:text-white", theme.soft, theme.hoverBg)}
+                aria-label="الإدارة"
+              >
+                <UserRound className="h-6 w-6" />
+              </button>
             </div>
-            <button
-              onClick={() => navigate("/")}
-              className={cn("flex h-12 w-12 items-center justify-center rounded-2xl transition duration-300 hover:-translate-y-1 hover:text-white", theme.soft, theme.hoverBg)}
-              aria-label="الإدارة"
-            >
-              <UserRound className="h-6 w-6" />
-            </button>
+            {link?.client_code && (
+              <div className="mt-4 border-t border-[#EEE7F8] pt-4">
+                <CompensationCodeCard code={link.client_code} compact showPageLink />
+              </div>
+            )}
           </header>
 
           {loading && (
@@ -4880,6 +4897,7 @@ function CustomerView({
 
                 <div className="space-y-5">
                   <LoginCopyCard label="البريد الإلكتروني" value={account.email} icon={Mail} setToast={setToast} theme={theme} />
+                  {link.client_code && <CompensationCodeCard code={link.client_code} showPageLink />}
                   {serviceOutageActive ? (
                     <div
                       className="overflow-hidden rounded-[1.75rem] border border-red-200 bg-gradient-to-b from-red-50 via-white to-zinc-50 p-5 text-center shadow-[0_18px_42px_rgba(229,9,20,0.12)]"
@@ -5852,6 +5870,73 @@ function ExtraCreditRequestModal({
           </button>
         </div>
       </form>
+    </div>
+  );
+}
+
+function CompensationCodeCard({
+  code,
+  compact = false,
+  showPageLink = false,
+}: {
+  code: string;
+  compact?: boolean;
+  showPageLink?: boolean;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  async function copyCode() {
+    try {
+      await copyTextSilent(code);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch (error) {
+      console.error("Compensation code copy failed:", error);
+    }
+  }
+
+  return (
+    <div
+      className={cn(
+        "overflow-hidden rounded-2xl border border-[#D8C1FF] bg-gradient-to-l from-[#FBF8FF] to-white shadow-[0_10px_28px_rgba(124,44,232,0.10)]",
+        compact ? "p-3" : "p-4 md:p-5",
+      )}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-xs font-black text-zinc-500">رمز التعويض الخاص بك</p>
+          <p
+            className={cn(
+              "mt-1 font-black tracking-[0.16em] text-[#7C2CE8]",
+              compact ? "text-xl md:text-2xl" : "text-2xl md:text-3xl",
+            )}
+            dir="ltr"
+          >
+            {code}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void copyCode()}
+          className={cn(
+            "flex shrink-0 items-center justify-center gap-2 rounded-xl px-4 font-black transition duration-300",
+            copied
+              ? "bg-emerald-100 text-emerald-700"
+              : "bg-[#8B35F5] text-white shadow-[0_10px_24px_rgba(139,53,245,0.24)] hover:bg-[#7626DD]",
+            compact ? "h-11 text-xs" : "h-12 text-sm",
+          )}
+          aria-label="نسخ رمز التعويض"
+        >
+          {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+          {copied ? "تم النسخ" : "نسخ الرمز"}
+        </button>
+      </div>
+      {showPageLink && (
+        <a href="/compensation" className="mt-3 inline-flex items-center gap-1 text-xs font-black text-[#7C2CE8] hover:underline">
+          <ExternalLink className="h-3.5 w-3.5" />
+          فتح صفحة طلب ومتابعة التعويض
+        </a>
+      )}
     </div>
   );
 }
