@@ -4115,9 +4115,6 @@ function CustomerView({
     customerCode,
     deviceType: "mobile",
   });
-  const outageSupportWhatsAppUrl = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(
-    `مرحباً، أحتاج استفساراً بخصوص صيانة خدمة نتفليكس للحساب: ${supportEmail} - رقم العميل: ${customerCode}`,
-  )}`;
   const deviceLabel = (device: DeviceView) => (device === "mobile" ? "جوال / آيباد / بي سي / لابتوب" : "شاشة / سوني");
   const codeSecondsRemaining = codeDisplayExpiresAt
     ? Math.max(0, Math.ceil((codeDisplayExpiresAt - nowTick) / 1000))
@@ -4944,16 +4941,14 @@ function CustomerView({
                       <p className="mt-4 text-xs font-black text-[#E50914]">الخدمة تحت الصيانة حالياً</p>
                       <h3 className="mt-2 text-xl font-black leading-8 text-zinc-950">نعتذر عن التوقف الطارئ</h3>
                       <p className="mt-3 text-sm font-bold leading-8 text-zinc-700">
-                        نعتذر منك جداً، توجد مشكلة صيانة حالية في الخدمة وجاري العمل على معالجتها. سيتم إرسال حسابات جديدة لكم كتعويض عبر الواتساب فوراً. شكراً لتفهمكم وصبركم معنا.
+                        نعتذر منك جداً، توجد مشكلة صيانة حالية في الخدمة وجاري العمل على معالجتها. لحفظ حقك في التعويض، اضغط الزر أدناه ثم أدخل رمز التعويض الخاص بك وقدّم الطلب. تستغرق المراجعة من 24 إلى 72 ساعة، وعند اكتمالها سيظهر رابط الحساب الجديد داخل صفحة التعويض.
                       </p>
                       <a
-                        href={outageSupportWhatsAppUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="mt-5 flex min-h-13 w-full items-center justify-center gap-2 rounded-2xl bg-[#25D366] px-4 text-sm font-black text-white shadow-[0_14px_30px_rgba(37,211,102,0.24)] transition hover:-translate-y-0.5 hover:bg-[#1EBE5D]"
+                        href="/compensation"
+                        className="mt-5 flex min-h-14 w-full items-center justify-center gap-2 rounded-2xl bg-[#E50914] px-4 text-base font-black text-white shadow-[0_14px_30px_rgba(229,9,20,0.24)] transition hover:-translate-y-0.5 hover:bg-[#C90812]"
                       >
-                        <WhatsAppLogo className="h-5 w-5" />
-                        تواصل مع خدمة العملاء عبر الواتساب
+                        <Clipboard className="h-5 w-5" />
+                        رفع طلب تعويض ومتابعته
                       </a>
                     </div>
                   ) : !automatedCodeEnabled ? (
