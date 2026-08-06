@@ -5158,7 +5158,13 @@ function CustomerView({
         body: JSON.stringify({ customer_link_id: link.id }),
       }).then(async (response) => {
         const payload = await response.json().catch(() => ({}));
-        if (!response.ok && payload?.error !== "no_recent_code" && payload?.error !== "code_already_used") {
+        if (!response.ok && payload?.error === "netflix_code_not_found") {
+          setToast({
+            label: payload?.message || "تم الاتصال بالبريد بنجاح لكن لم تصل رسالة جديدة من نتفليكس بعد، يرجى إعادة المحاولة خلال ثوانٍ",
+            at: Date.now(),
+            tone: "error",
+          });
+        } else if (!response.ok && payload?.error !== "code_already_used") {
           console.error("Outlook IMAP code request failed:", payload?.error || response.status);
         }
         if (response.ok) void pollVerificationCode(accountId);
