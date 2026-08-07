@@ -4888,6 +4888,53 @@ function CompensationAccountCustomerView({
   const codeUrl = String(account.supplier_code_url || "").trim();
   const profileName = `ملف ${link.profile_label || link.profile_name}`;
   const tutorialMedia = getTutorialMedia(account.compensation_tutorial_url || defaultCompensationTutorialUrl);
+  const tutorialSection = (
+    <section className="rounded-[2rem] border border-white bg-white p-6 shadow-premium md:p-8">
+      <div className="mb-5 flex items-center gap-3">
+        <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-red-50 text-[#E50914]">
+          <MonitorPlay className="h-5 w-5" />
+        </div>
+        <h2 className="text-2xl font-black text-zinc-950">شرح طريقة الدخول</h2>
+      </div>
+
+      {tutorialMedia && (
+        <div className="mx-auto mb-6 w-full max-w-[360px] overflow-hidden rounded-[1.75rem] border border-red-100 bg-black shadow-[0_18px_48px_rgba(229,9,20,0.16)]">
+          <div className="aspect-[9/16] w-full">
+            {tutorialMedia.kind === "video" ? (
+              <video
+                src={tutorialMedia.src}
+                controls
+                playsInline
+                preload="metadata"
+                className="h-full w-full object-contain"
+              />
+            ) : (
+              <iframe
+                src={tutorialMedia.src}
+                title="فيديو شرح الدخول لحساب التعويض"
+                className="h-full w-full border-0"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                allowFullScreen
+              />
+            )}
+          </div>
+        </div>
+      )}
+
+      <div className="space-y-3">
+        {[
+          "أدخل البريد الإلكتروني الموضح أعلى الصفحة.",
+          `حدد ${profileName} واستخدم الرقم السري الخاص به (${link.profile_code}).`,
+          "عند طلب رمز التفعيل، اضغط على زر جلب الكود للانتقال مباشرة إلى صفحة الكود.",
+        ].map((step, index) => (
+          <div key={step} className="flex items-start gap-3 rounded-2xl border border-zinc-100 bg-[#FAFAFB] p-4">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#E50914] text-sm font-black text-white">{index + 1}</span>
+            <p className="pt-1 text-sm font-bold leading-7 text-zinc-700">{step}</p>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
 
   return (
     <Shell toast={toast}>
@@ -4915,6 +4962,8 @@ function CompensationAccountCustomerView({
               </button>
             </div>
           </header>
+
+          {tutorialSection}
 
           <section className="rounded-[2rem] border border-white bg-white p-6 shadow-premium-lg md:p-8">
             <div className="mb-6 text-center">
@@ -4950,51 +4999,6 @@ function CompensationAccountCustomerView({
             )}
           </section>
 
-          <section className="rounded-[2rem] border border-white bg-white p-6 shadow-premium md:p-8">
-            <div className="mb-5 flex items-center gap-3">
-              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-red-50 text-[#E50914]">
-                <MonitorPlay className="h-5 w-5" />
-              </div>
-              <h2 className="text-2xl font-black text-zinc-950">شرح طريقة الدخول</h2>
-            </div>
-
-            {tutorialMedia && (
-              <div className="mx-auto mb-6 w-full max-w-[360px] overflow-hidden rounded-[1.75rem] border border-red-100 bg-black shadow-[0_18px_48px_rgba(229,9,20,0.16)]">
-                <div className="aspect-[9/16] w-full">
-                  {tutorialMedia.kind === "video" ? (
-                    <video
-                      src={tutorialMedia.src}
-                      controls
-                      playsInline
-                      preload="metadata"
-                      className="h-full w-full object-contain"
-                    />
-                  ) : (
-                    <iframe
-                      src={tutorialMedia.src}
-                      title="فيديو شرح الدخول لحساب التعويض"
-                      className="h-full w-full border-0"
-                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                      allowFullScreen
-                    />
-                  )}
-                </div>
-              </div>
-            )}
-
-            <div className="space-y-3">
-              {[
-                "أدخل البريد الإلكتروني الموضح أعلى الصفحة.",
-                `حدد ${profileName} واستخدم الرقم السري الخاص به (${link.profile_code}).`,
-                "عند طلب رمز التفعيل، اضغط على زر جلب الكود للانتقال مباشرة إلى صفحة الكود.",
-              ].map((step, index) => (
-                <div key={step} className="flex items-start gap-3 rounded-2xl border border-zinc-100 bg-[#FAFAFB] p-4">
-                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#E50914] text-sm font-black text-white">{index + 1}</span>
-                  <p className="pt-1 text-sm font-bold leading-7 text-zinc-700">{step}</p>
-                </div>
-              ))}
-            </div>
-          </section>
         </main>
       </div>
     </Shell>
