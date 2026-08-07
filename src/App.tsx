@@ -1771,6 +1771,65 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     }
   }
 
+  async function resetSharedCompensationLinks(accountId: string) {
+    const account = accounts.find((item) => item.id === accountId);
+    if (account?.account_type !== "compensation" || account.compensation_distribution !== "shared") {
+      setToast({ label: "إعادة التعيين متاحة لحسابات التعويضات المشتركة فقط", at: Date.now(), tone: "error" });
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "هل أنت أصلًا تريد إعادة تعيين وإنشاء 8 روابط جديدة لهذا الحساب؟ (سيتم استبدال الروابط الحالية لهذا الحساب فقط)",
+    );
+    if (!confirmed) return;
+
+    if (!supabase) {
+      const now = new Date().toISOString();
+      const generatedLinks = buildProfileSlots("compensation", "netflix", "shared").map((slot) => ({
+        ...slot,
+        id: crypto.randomUUID(),
+        account_id: accountId,
+        email: account.email,
+        created_at: now,
+      })) as CustomerLink[];
+      setLinks((current) => [...current.filter((link) => link.account_id !== accountId), ...generatedLinks]);
+      setToast({ label: "تم إعادة تعيين 8 روابط جديدة بنجاح", at: Date.now() });
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const response = await fetch("/api/reset-compensation-links", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-admin-password": adminPassword,
+        },
+        body: JSON.stringify({ account_id: accountId }),
+      });
+      const result = (await response.json().catch(() => null)) as {
+        success?: boolean;
+        error?: string;
+        links?: CustomerLink[];
+      } | null;
+
+      if (!response.ok || !result?.success || result.links?.length !== 8) {
+        throw new Error(result?.error || "reset_failed");
+      }
+
+      setLinks((current) => [
+        ...current.filter((link) => link.account_id !== accountId),
+        ...(result.links || []),
+      ]);
+      setToast({ label: "تم إعادة تعيين 8 روابط جديدة بنجاح", at: Date.now() });
+    } catch (error) {
+      console.error("Shared compensation links reset request failed:", error);
+      setToast({ label: "تعذر إعادة تعيين الروابط، بقيت الروابط الحالية دون تغيير", at: Date.now(), tone: "error" });
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function deleteAccount(accountId: string) {
     if (!window.confirm("هل تريد حذف هذا الحساب وجميع روابط العملاء التابعة له؟")) return;
 
@@ -1990,6 +2049,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
           if (url) void copyText(url, setToast);
         }}
         onCopyAllLinks={copyAllCustomerLinksForAccount}
+        onResetCompensationLinks={resetSharedCompensationLinks}
         onUpdateCustomerCodeBalance={updateCustomerCodeBalance}
         onResetCustomerDevice={resetCustomerDevice}
         pendingCreditRequests={extraCreditRequests.filter((request) => request.status === "pending").length}
@@ -2152,6 +2212,7 @@ function Dashboard({
   onDelete,
   onCopyTemporaryLink,
   onCopyAllLinks,
+  onResetCompensationLinks,
   onUpdateCustomerCodeBalance,
   onResetCustomerDevice,
   pendingCreditRequests,
@@ -2178,6 +2239,7 @@ function Dashboard({
   onDelete: (id: string) => Promise<void>;
   onCopyTemporaryLink: (account: NetflixAccount) => void;
   onCopyAllLinks: (accountId: string) => Promise<void>;
+  onResetCompensationLinks: (accountId: string) => Promise<void>;
   onUpdateCustomerCodeBalance: (
     linkId: string,
     codeRequestLimit: number,
@@ -2446,6 +2508,7 @@ function Dashboard({
                     onDelete={onDelete}
                     onCopyTemporaryLink={onCopyTemporaryLink}
                     onCopyAllLinks={onCopyAllLinks}
+                    onResetCompensationLinks={onResetCompensationLinks}
                     onOpenSupplierCode={(url) => window.open(url, "_blank", "noopener,noreferrer")}
                   />
                 ))}
@@ -2464,6 +2527,7 @@ function Dashboard({
                 onDelete={onDelete}
                 onCopyTemporaryLink={onCopyTemporaryLink}
                 onCopyAllLinks={onCopyAllLinks}
+                onResetCompensationLinks={onResetCompensationLinks}
                 onOpenSupplierCode={(url) => window.open(url, "_blank", "noopener,noreferrer")}
               />
             ))}
@@ -2658,6 +2722,7 @@ function AccountCard({
   onDelete,
   onCopyTemporaryLink,
   onCopyAllLinks,
+  onResetCompensationLinks,
   onOpenSupplierCode,
 }: {
   account: NetflixAccount;
@@ -2667,6 +2732,7 @@ function AccountCard({
   onDelete: (id: string) => Promise<void>;
   onCopyTemporaryLink: (account: NetflixAccount) => void;
   onCopyAllLinks: (accountId: string) => Promise<void>;
+  onResetCompensationLinks: (accountId: string) => Promise<void>;
   onOpenSupplierCode: (url: string) => void;
 }) {
   const expired = isExpired(account.expires_at);
@@ -2780,6 +2846,17 @@ function AccountCard({
         >
           <Clipboard className="h-4 w-4" />
         </button>
+        {account.account_type === "compensation" && account.compensation_distribution === "shared" && (
+          <button
+            type="button"
+            onClick={() => void onResetCompensationLinks(account.id)}
+            title="إعادة تعيين الروابط"
+            aria-label="إعادة تعيين الروابط"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-amber-200 bg-amber-50 text-amber-700 transition hover:bg-amber-100"
+          >
+            <RefreshCw className="h-4 w-4" />
+          </button>
+        )}
         <button
           type="button"
           onClick={() => onOpenSupplierCode(account.supplier_code_url || "")}
@@ -2810,6 +2887,7 @@ function AccountRow({
   onDelete,
   onCopyTemporaryLink,
   onCopyAllLinks,
+  onResetCompensationLinks,
   onOpenSupplierCode,
 }: {
   account: NetflixAccount;
@@ -2819,6 +2897,7 @@ function AccountRow({
   onDelete: (id: string) => Promise<void>;
   onCopyTemporaryLink: (account: NetflixAccount) => void;
   onCopyAllLinks: (accountId: string) => Promise<void>;
+  onResetCompensationLinks: (accountId: string) => Promise<void>;
   onOpenSupplierCode: (url: string) => void;
 }) {
   const expired = isExpired(account.expires_at);
@@ -2927,6 +3006,17 @@ function AccountRow({
           >
             <Clipboard className="h-4 w-4" />
           </button>
+          {account.account_type === "compensation" && account.compensation_distribution === "shared" && (
+            <button
+              type="button"
+              onClick={() => void onResetCompensationLinks(account.id)}
+              title="إعادة تعيين الروابط"
+              aria-label="إعادة تعيين الروابط"
+              className="flex h-9 w-9 items-center justify-center rounded-lg text-amber-700 transition hover:bg-amber-50"
+            >
+              <RefreshCw className="h-4 w-4" />
+            </button>
+          )}
           <button
             type="button"
             onClick={() => onEdit(account)}

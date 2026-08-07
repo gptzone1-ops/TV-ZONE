@@ -37,6 +37,8 @@ export const NEW_SHARED_NETFLIX_PROFILE_CAPACITY: Record<string, number> = {
   E: 2,
 };
 
+const SHARED_COMPENSATION_PROFILES = ["B", "C", "D", "E"] as const;
+
 export function generateShortId(length = 4) {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
   return Array.from({ length }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("");
@@ -67,20 +69,30 @@ export function buildProfileSlots(
   if (accountType === "temporary") return [];
 
   if (accountType === "compensation") {
-    const capacity = compensationDistribution === "shared"
-      ? NEW_SHARED_NETFLIX_PROFILE_CAPACITY
-      : Object.fromEntries(PROFILE_NAMES.map((profileName) => [profileName, 1]));
+    if (compensationDistribution === "shared") {
+      const sharedSlots = SHARED_COMPENSATION_PROFILES.flatMap((profileName) =>
+        [1, 2].map((slotNumber) => ({
+          profile_name: `${profileName}${slotNumber}`,
+          profile_label: profileName,
+          profile_code: PROFILE_CODES[profileName],
+          service_type: "netflix" as const,
+          uuid: generateUuid(),
+          short_id: generateShortId(),
+        })),
+      );
 
-    return Object.entries(capacity).flatMap(([profileName, profileCapacity]) =>
-      Array.from({ length: profileCapacity }, (_, index) => ({
-        profile_name: compensationDistribution === "private" ? profileName : `${profileName}${index + 1}`,
-        profile_label: profileName,
-        profile_code: PROFILE_CODES[profileName],
-        service_type: "netflix" as const,
-        uuid: generateUuid(),
-        short_id: generateShortId(),
-      })),
-    );
+      if (sharedSlots.length !== 8) throw new Error("invalid_shared_compensation_slots");
+      return sharedSlots;
+    }
+
+    return PROFILE_NAMES.map((profileName) => ({
+      profile_name: profileName,
+      profile_label: profileName,
+      profile_code: PROFILE_CODES[profileName],
+      service_type: "netflix" as const,
+      uuid: generateUuid(),
+      short_id: generateShortId(),
+    }));
   }
 
   if (accountType === "shared" && serviceType === "netflix") {
