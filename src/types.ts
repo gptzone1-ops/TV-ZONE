@@ -23,6 +23,7 @@ export type NetflixAccount = {
   email_provider?: "none" | "outlook" | null;
   imap_enabled?: boolean | null;
   normal_client_layout?: boolean | null;
+  hide_password_from_client?: boolean | null;
   compensation_distribution?: CompensationDistribution | null;
   compensation_tutorial_url?: string | null;
   verification_code?: string | null;

@@ -66,14 +66,12 @@ type AccountTypeFilter = "all" | AccountType;
 type SupportIssue = "general" | "unavailable" | "expired";
 type CustomerSearchResult = { link: CustomerLink; account: NetflixAccount };
 type AccountFormResult = boolean | { ok: boolean; error?: string };
-type EmailProvider = "none" | "outlook";
 type AccountCreateForm = {
   email: string;
   password: string;
   account_type: AccountType;
   supplier_code_url?: string;
   compensation_tutorial_url?: string;
-  email_provider?: EmailProvider;
   compensation_distribution?: CompensationDistribution;
 };
 type PublicCompensationRequest = Omit<CompensationRequest, "id">;
@@ -127,6 +125,8 @@ const duplicateEmailMessage = "عفواً، هذا البريد الإلكترو
 const duplicateEmailSaveMessage = duplicateEmailMessage;
 const duplicateProfileMessage = (profileName: string) => `هذا الملف (${profileName}) مسجل مسبقاً لهذا الحساب`;
 const emptyEmailMessage = "أدخل البريد الإلكتروني أولاً";
+const customerAccountPublicSelect = "*,accounts(id,email,use_automated_code,supplier_code_url,compensation_tutorial_url,verification_code,verification_code_received_at,service_type,account_type,compensation_distribution,expires_at,created_at,email_provider,imap_enabled,normal_client_layout,hide_password_from_client)";
+const legacyCustomerAccountSelect = "*,accounts(id,email,password,use_automated_code,supplier_code_url,compensation_tutorial_url,verification_code,verification_code_received_at,service_type,account_type,compensation_distribution,expires_at,created_at,email_provider,imap_enabled,normal_client_layout)";
 
 const serviceThemes: Record<ServiceType, ServiceTheme> = {
   netflix: {
@@ -185,6 +185,63 @@ function isExpired(expiresAt: string) {
 
 function normalizeEmail(email: string) {
   return email.trim().toLowerCase();
+}
+
+async function hydrateCustomerLinkPassword(rawData: unknown) {
+  const customerLink = rawData as CustomerLink;
+  const account = customerLink?.accounts;
+  if (!account) return customerLink;
+
+  if (account.hide_password_from_client === true) {
+    return { ...customerLink, accounts: { ...account, password: "" } } as CustomerLink;
+  }
+
+  if (!supabase) return customerLink;
+  const { data, error } = await supabase
+    .from("accounts")
+    .select("password")
+    .eq("id", account.id)
+    .maybeSingle();
+  if (error) {
+    console.error("Supabase legacy account password loading error:", error);
+    return { ...customerLink, accounts: { ...account, password: "" } } as CustomerLink;
+  }
+
+  return {
+    ...customerLink,
+    accounts: { ...account, password: String(data?.password || "") },
+  } as CustomerLink;
+}
+
+async function loadCustomerLinkRecord(column: "short_id" | "uuid" | "id", value: string) {
+  if (!supabase) return null;
+
+  const primaryResult = await supabase
+    .from("customer_links")
+    .select(customerAccountPublicSelect)
+    .eq(column, value)
+    .maybeSingle();
+  if (!primaryResult.error && primaryResult.data) {
+    return hydrateCustomerLinkPassword(primaryResult.data);
+  }
+
+  const missingVisibilityColumn = String(primaryResult.error?.message || "").includes("hide_password_from_client");
+  if (!missingVisibilityColumn) {
+    if (primaryResult.error) console.error("Supabase customer link loading error:", primaryResult.error);
+    return null;
+  }
+
+  console.warn("Password visibility migration is not applied yet; using the legacy customer query.");
+  const legacyResult = await supabase
+    .from("customer_links")
+    .select(legacyCustomerAccountSelect)
+    .eq(column, value)
+    .maybeSingle();
+  if (legacyResult.error) {
+    console.error("Supabase legacy customer link loading error:", legacyResult.error);
+    return null;
+  }
+  return (legacyResult.data || null) as unknown as CustomerLink | null;
 }
 
 function isValidHttpUrl(value: string) {
@@ -1233,6 +1290,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     let slots = buildProfileSlots(form.account_type, selectedService, form.compensation_distribution);
     const normalizedEmail = normalizeEmail(form.email);
     let temporaryShortId: string | null = null;
+    const hidePasswordFromClient = selectedService === "netflix" && (form.account_type === "private" || form.account_type === "shared");
     const expectedNewLinks = selectedService === "netflix" && form.account_type === "private"
       ? 5
       : selectedService === "netflix" && form.account_type === "shared"
@@ -1273,9 +1331,10 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       supplier_code_url: form.supplier_code_url,
       compensation_tutorial_url: form.account_type === "compensation" ? form.compensation_tutorial_url || null : null,
       temporary_short_id: temporaryShortId,
-      email_provider: form.account_type === "temporary" || form.account_type === "compensation" ? "none" : form.email_provider || "none",
-      imap_enabled: form.account_type !== "temporary" && form.account_type !== "compensation" && form.email_provider === "outlook",
+      email_provider: "none",
+      imap_enabled: false,
       normal_client_layout: form.account_type !== "temporary" && form.account_type !== "compensation",
+      hide_password_from_client: hidePasswordFromClient,
       compensation_distribution: form.account_type === "compensation" ? form.compensation_distribution : null,
       expires_at,
       service_type: selectedService,
@@ -1348,13 +1407,14 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
           service_type: selectedService,
           use_automated_code: form.account_type !== "temporary" && form.account_type !== "compensation",
           temporary_short_id: temporaryShortId,
-          email_provider: form.account_type === "temporary" || form.account_type === "compensation" ? "none" : form.email_provider || "none",
-          imap_enabled: form.account_type !== "temporary" && form.account_type !== "compensation" && form.email_provider === "outlook",
+          email_provider: "none",
+          imap_enabled: false,
           normal_client_layout: form.account_type !== "temporary" && form.account_type !== "compensation",
+          hide_password_from_client: hidePasswordFromClient,
           compensation_distribution: form.account_type === "compensation" ? form.compensation_distribution : null,
           compensation_tutorial_url: form.account_type === "compensation" ? form.compensation_tutorial_url || null : null,
         })
-        .select("id,email,password,account_type,compensation_distribution,compensation_tutorial_url,expires_at,created_at,service_type,use_automated_code,supplier_code_url,temporary_short_id,email_provider,imap_enabled,normal_client_layout")
+        .select("id,email,password,account_type,compensation_distribution,compensation_tutorial_url,expires_at,created_at,service_type,use_automated_code,supplier_code_url,temporary_short_id,email_provider,imap_enabled,normal_client_layout,hide_password_from_client")
         .single();
 
       if (accountError) throw accountError;
@@ -3897,18 +3957,10 @@ function AccountForm({
   const [password, setPassword] = useState(initialAccount?.password || "");
   const [supplierCodeUrl, setSupplierCodeUrl] = useState(initialAccount?.supplier_code_url || "");
   const [compensationTutorialUrl, setCompensationTutorialUrl] = useState(initialAccount?.compensation_tutorial_url || "");
-  const [emailProvider, setEmailProvider] = useState<EmailProvider>("none");
   const [formError, setFormError] = useState("");
   const [showCompensationDistribution, setShowCompensationDistribution] = useState(false);
   const calculatedExpiry = defaultExpiryDate();
   const theme = serviceThemes[service];
-  const isNewPasswordlessSubscription = !editing && service === "netflix" && (accountType === "private" || accountType === "shared");
-  const isPasswordlessSubscription = isNewPasswordlessSubscription || (
-    editing &&
-    service === "netflix" &&
-    (accountType === "private" || accountType === "shared") &&
-    !initialAccount?.password
-  );
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -3921,14 +3973,6 @@ function AccountForm({
       return;
     }
 
-    if (isNewPasswordlessSubscription && !supplier_code_url) {
-      setFormError("أدخل رابط جلب الأكواد قبل إنشاء الحساب.");
-      return;
-    }
-    if (isNewPasswordlessSubscription && supplier_code_url && !isValidHttpUrl(supplier_code_url)) {
-      setFormError("رابط جلب الأكواد غير صحيح. يجب أن يبدأ بـ https:// أو http://.");
-      return;
-    }
 
     if (accountType === "compensation" && !supplier_code_url) {
       setFormError("أدخل رابط جلب الكود قبل متابعة إنشاء حساب التعويضات.");
@@ -3972,11 +4016,10 @@ function AccountForm({
     onClose();
     void onAdd({
       email: cleanEmail,
-      password: isNewPasswordlessSubscription ? "" : password,
+      password,
       account_type: accountType,
       supplier_code_url,
       compensation_tutorial_url: accountType === "compensation" ? compensationTutorialUrl.trim() || undefined : undefined,
-      email_provider: accountType === "temporary" || accountType === "compensation" ? "none" : emailProvider,
       compensation_distribution: accountType === "compensation" ? compensationDistribution : undefined,
     });
   }
@@ -4022,9 +4065,11 @@ function AccountForm({
             "grid rounded-2xl border-2 border-[#E0D0FB] bg-[#F8F4FF] p-1.5",
             "sm:grid-cols-2",
           )}>
-            {(service === "netflix"
-              ? (["private", "shared", "temporary", "compensation"] as AccountType[])
-              : (["private", "shared"] as AccountType[])
+            {(editing
+              ? ([accountType] as AccountType[])
+              : service === "netflix"
+                ? (["private", "shared", "compensation"] as AccountType[])
+                : (["private", "shared"] as AccountType[])
             ).map((type) => (
               <button
                 key={type}
@@ -4045,7 +4090,7 @@ function AccountForm({
           {editing && <p className="mt-2 text-[11px] font-bold text-zinc-400">نوع الحساب ثابت لحماية روابط العملاء المنشأة.</p>}
         </div>
 
-        <div className={cn("grid gap-x-4", !isPasswordlessSubscription && "sm:grid-cols-2")}>
+        <div className="grid gap-x-4 sm:grid-cols-2">
           <Field icon={Mail} label="البريد الإلكتروني">
             <input
               required
@@ -4058,18 +4103,16 @@ function AccountForm({
             />
           </Field>
 
-          {!isPasswordlessSubscription && (
-            <Field icon={KeyRound} label="كلمة المرور">
-              <input
-                required
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                placeholder="أدخل كلمة مرور الحساب"
-                className="admin-modal-input"
-                dir="ltr"
-              />
-            </Field>
-          )}
+          <Field icon={KeyRound} label="كلمة المرور">
+            <input
+              required
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              placeholder="أدخل كلمة مرور الحساب"
+              className="admin-modal-input"
+              dir="ltr"
+            />
+          </Field>
         </div>
 
         {formError && (
@@ -4080,66 +4123,23 @@ function AccountForm({
 
         {accountType !== "temporary" && (
           <>
-            {!editing && service === "netflix" && accountType !== "compensation" && (
-              <div className="mb-4 rounded-2xl border border-[#E0D4F8] bg-[#FAF8FD] p-4">
-                <p className="mb-2 text-sm font-black text-zinc-700">مزود البريد وجلب الكود</p>
-                <div className="grid grid-cols-2 gap-2 rounded-xl bg-[#F1E9FF] p-1.5">
-                  {([
-                    { value: "none", label: "بدون ربط" },
-                    { value: "outlook", label: "Outlook" },
-                  ] as Array<{ value: EmailProvider; label: string }>).map((option) => (
-                    <button
-                      key={option.value}
-                      type="button"
-                      onClick={() => {
-                        setEmailProvider(option.value);
-                        setFormError("");
-                      }}
-                      className={cn(
-                        "h-11 rounded-lg text-sm font-black transition",
-                        emailProvider === option.value
-                          ? "bg-[#8B35F5] text-white shadow-[0_8px_20px_rgba(139,53,245,0.22)]"
-                          : "bg-white text-zinc-600 hover:text-[#7C2CE8]",
-                      )}
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
-
-                {emailProvider === "outlook" && (
-                  <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
-                    <div className="flex items-start gap-3">
-                      <Mail className="mt-0.5 h-5 w-5 shrink-0 text-emerald-700" />
-                      <div>
-                        <p className="text-sm font-black text-emerald-900">جلب الأكواد عبر تحويل البريد</p>
-                        <p className="mt-1 text-xs font-bold leading-6 text-emerald-800">
-                          وجّه رسائل Netflix من بريد Outlook إلى عنوان Cloudflare المخصص. سيطابق النظام البريد ويحفظ أحدث كود تلقائياً، ولا نحتاج كلمة مرور البريد.
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
+            {(editing || accountType === "compensation") && (
+              <Field icon={Link2} label="رابط جلب الأكواد">
+                <input
+                  required={accountType === "compensation"}
+                  value={supplierCodeUrl}
+                  onChange={(event) => setSupplierCodeUrl(event.target.value)}
+                  placeholder="https://example.com"
+                  className="admin-modal-input"
+                  dir="ltr"
+                />
+                <p className="mt-2 text-[11px] font-bold text-zinc-400">
+                  {accountType === "compensation"
+                    ? "سيظهر للعميل كزر جلب الكود ويفتح هذا الرابط مباشرة."
+                    : "خاص بالمسؤول فقط ولا يظهر في صفحة العميل."}
+                </p>
+              </Field>
             )}
-
-            <Field icon={Link2} label="رابط جلب الأكواد">
-              <input
-                required={accountType === "compensation" || isNewPasswordlessSubscription}
-                value={supplierCodeUrl}
-                onChange={(event) => setSupplierCodeUrl(event.target.value)}
-                placeholder="https://example.com"
-                className="admin-modal-input"
-                dir="ltr"
-              />
-              <p className="mt-2 text-[11px] font-bold text-zinc-400">
-                {accountType === "compensation"
-                  ? "سيظهر للعميل كزر جلب الكود ويفتح هذا الرابط مباشرة."
-                  : isNewPasswordlessSubscription
-                    ? "مطلوب للحسابات الجديدة، ويُستخدم لجلب رمز الدخول دون عرض كلمة مرور للعميل."
-                  : "خاص بالمسؤول فقط ولا يظهر في صفحة العميل."}
-              </p>
-            </Field>
 
             {accountType === "compensation" && (
               <Field icon={MonitorPlay} label="رابط فيديو شرح الدخول">
@@ -5112,15 +5112,8 @@ function CustomerView({
       }
 
       const queryColumn = lookup === "short" ? "short_id" : "uuid";
-      const { data, error } = await supabase
-        .from("customer_links")
-        .select(
-          "*,accounts(id,email,password,use_automated_code,supplier_code_url,compensation_tutorial_url,verification_code,verification_code_received_at,service_type,account_type,compensation_distribution,expires_at,created_at,email_provider,imap_enabled,normal_client_layout)",
-        )
-        .eq(queryColumn, identifier)
-        .single();
-
-      if (!error) setLink(data as unknown as CustomerLink);
+      const customerLink = await loadCustomerLinkRecord(queryColumn, identifier);
+      if (customerLink) setLink(customerLink);
       setLoading(false);
     }
 
@@ -5720,19 +5713,8 @@ function CustomerView({
     if (request) setExtraCreditRequest(request);
 
     if (request && (request.status === "approved" || request.status === "rejected") && link?.id) {
-      const { data: refreshedLink, error: refreshError } = await supabase
-        .from("customer_links")
-        .select(
-          "*,accounts(id,email,password,use_automated_code,supplier_code_url,compensation_tutorial_url,verification_code,verification_code_received_at,service_type,account_type,compensation_distribution,expires_at,created_at,email_provider,imap_enabled,normal_client_layout)",
-        )
-        .eq("id", link.id)
-        .maybeSingle();
-
-      if (refreshError) {
-        console.error("Supabase customer balance refresh error:", refreshError);
-      } else if (refreshedLink) {
-        setLink(refreshedLink as unknown as CustomerLink);
-      }
+      const refreshedLink = await loadCustomerLinkRecord("id", link.id);
+      if (refreshedLink) setLink(refreshedLink);
     }
 
     return request;
@@ -6038,7 +6020,7 @@ function CustomerView({
 
                 <div className="space-y-5">
                   <LoginCopyCard label="البريد الإلكتروني" value={account.email} icon={Mail} setToast={setToast} theme={theme} />
-                  {normalClientLayout && account.password && (
+                  {normalClientLayout && account.hide_password_from_client !== true && account.password && (
                     <LoginCopyCard label="كلمة المرور" value={account.password} icon={KeyRound} setToast={setToast} theme={theme} />
                   )}
                   {!normalClientLayout && link.client_code && <CompensationCodeCard code={link.client_code} showPageLink />}
