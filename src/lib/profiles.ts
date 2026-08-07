@@ -96,7 +96,7 @@ export function buildProfileSlots(
   }
 
   if (accountType === "shared" && serviceType === "netflix") {
-    return Object.entries(NEW_SHARED_NETFLIX_PROFILE_CAPACITY).flatMap(([profileName, capacity]) =>
+    const sharedSlots = Object.entries(NEW_SHARED_NETFLIX_PROFILE_CAPACITY).flatMap(([profileName, capacity]) =>
       Array.from({ length: capacity }, (_, index) => ({
         profile_name: `${profileName}${index + 1}`,
         profile_label: profileName,
@@ -106,6 +106,23 @@ export function buildProfileSlots(
         short_id: generateShortId(),
       })),
     );
+
+    if (sharedSlots.length !== 8) throw new Error("invalid_shared_netflix_slots");
+    return sharedSlots;
+  }
+
+  if (accountType === "private" && serviceType === "netflix") {
+    const privateSlots = PROFILE_NAMES.map((profileName) => ({
+      profile_name: profileName,
+      profile_label: profileName,
+      profile_code: PROFILE_CODES[profileName],
+      service_type: serviceType,
+      uuid: generateUuid(),
+      short_id: generateShortId(),
+    }));
+
+    if (privateSlots.length !== 5) throw new Error("invalid_private_netflix_slots");
+    return privateSlots;
   }
 
   const repeats = accountType === "private" ? 1 : 2;

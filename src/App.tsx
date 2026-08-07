@@ -1233,10 +1233,25 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     let slots = buildProfileSlots(form.account_type, selectedService, form.compensation_distribution);
     const normalizedEmail = normalizeEmail(form.email);
     let temporaryShortId: string | null = null;
+    const expectedNewLinks = selectedService === "netflix" && form.account_type === "private"
+      ? 5
+      : selectedService === "netflix" && form.account_type === "shared"
+        ? 8
+        : null;
 
     if (!normalizedEmail) {
       setToast({ label: emptyEmailMessage, at: Date.now(), tone: "error" });
       return { ok: false, error: emptyEmailMessage };
+    }
+
+    if (expectedNewLinks !== null && slots.length !== expectedNewLinks) {
+      console.error("Unexpected customer link count before account creation:", {
+        accountType: form.account_type,
+        expected: expectedNewLinks,
+        received: slots.length,
+      });
+      setToast({ label: "تعذر تجهيز العدد الصحيح من روابط العملاء", at: Date.now(), tone: "error" });
+      return { ok: false, error: "تعذر تجهيز العدد الصحيح من روابط العملاء" };
     }
 
     if (form.account_type === "temporary") {
@@ -1439,6 +1454,20 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       setLoading(false);
       setToast({ label: "تعذر حفظ الحساب والروابط، تمت إزالة الحساب المؤقت", at: Date.now(), tone: "error" });
       return false;
+    }
+
+    if (expectedNewLinks !== null && createdLinks.length !== expectedNewLinks) {
+      await supabase.from("accounts").delete().eq("id", account.id);
+      rollbackOptimisticAccount();
+      setAccounts((current) => current.filter((item) => item.id !== account?.id));
+      setLoading(false);
+      console.error("Unexpected customer link count after account creation:", {
+        accountId: account.id,
+        expected: expectedNewLinks,
+        received: createdLinks.length,
+      });
+      setToast({ label: "لم يُحفظ العدد الكامل من الروابط؛ تم إلغاء إنشاء الحساب لحمايته", at: Date.now(), tone: "error" });
+      return { ok: false, error: "لم يُحفظ العدد الكامل من الروابط؛ تم إلغاء إنشاء الحساب لحمايته" };
     }
 
     optimisticAccountVisible = false;
@@ -3873,6 +3902,13 @@ function AccountForm({
   const [showCompensationDistribution, setShowCompensationDistribution] = useState(false);
   const calculatedExpiry = defaultExpiryDate();
   const theme = serviceThemes[service];
+  const isNewPasswordlessSubscription = !editing && service === "netflix" && (accountType === "private" || accountType === "shared");
+  const isPasswordlessSubscription = isNewPasswordlessSubscription || (
+    editing &&
+    service === "netflix" &&
+    (accountType === "private" || accountType === "shared") &&
+    !initialAccount?.password
+  );
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -3882,6 +3918,15 @@ function AccountForm({
 
     if (!cleanEmail) {
       setFormError(emptyEmailMessage);
+      return;
+    }
+
+    if (isNewPasswordlessSubscription && !supplier_code_url) {
+      setFormError("أدخل رابط جلب الأكواد قبل إنشاء الحساب.");
+      return;
+    }
+    if (isNewPasswordlessSubscription && supplier_code_url && !isValidHttpUrl(supplier_code_url)) {
+      setFormError("رابط جلب الأكواد غير صحيح. يجب أن يبدأ بـ https:// أو http://.");
       return;
     }
 
@@ -3927,7 +3972,7 @@ function AccountForm({
     onClose();
     void onAdd({
       email: cleanEmail,
-      password,
+      password: isNewPasswordlessSubscription ? "" : password,
       account_type: accountType,
       supplier_code_url,
       compensation_tutorial_url: accountType === "compensation" ? compensationTutorialUrl.trim() || undefined : undefined,
@@ -4000,7 +4045,7 @@ function AccountForm({
           {editing && <p className="mt-2 text-[11px] font-bold text-zinc-400">نوع الحساب ثابت لحماية روابط العملاء المنشأة.</p>}
         </div>
 
-        <div className="grid gap-x-4 sm:grid-cols-2">
+        <div className={cn("grid gap-x-4", !isPasswordlessSubscription && "sm:grid-cols-2")}>
           <Field icon={Mail} label="البريد الإلكتروني">
             <input
               required
@@ -4013,16 +4058,18 @@ function AccountForm({
             />
           </Field>
 
-          <Field icon={KeyRound} label="كلمة المرور">
-            <input
-              required
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              placeholder="أدخل كلمة مرور الحساب"
-              className="admin-modal-input"
-              dir="ltr"
-            />
-          </Field>
+          {!isPasswordlessSubscription && (
+            <Field icon={KeyRound} label="كلمة المرور">
+              <input
+                required
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                placeholder="أدخل كلمة مرور الحساب"
+                className="admin-modal-input"
+                dir="ltr"
+              />
+            </Field>
+          )}
         </div>
 
         {formError && (
@@ -4078,7 +4125,7 @@ function AccountForm({
 
             <Field icon={Link2} label="رابط جلب الأكواد">
               <input
-                required={accountType === "compensation"}
+                required={accountType === "compensation" || isNewPasswordlessSubscription}
                 value={supplierCodeUrl}
                 onChange={(event) => setSupplierCodeUrl(event.target.value)}
                 placeholder="https://example.com"
@@ -4088,6 +4135,8 @@ function AccountForm({
               <p className="mt-2 text-[11px] font-bold text-zinc-400">
                 {accountType === "compensation"
                   ? "سيظهر للعميل كزر جلب الكود ويفتح هذا الرابط مباشرة."
+                  : isNewPasswordlessSubscription
+                    ? "مطلوب للحسابات الجديدة، ويُستخدم لجلب رمز الدخول دون عرض كلمة مرور للعميل."
                   : "خاص بالمسؤول فقط ولا يظهر في صفحة العميل."}
               </p>
             </Field>
