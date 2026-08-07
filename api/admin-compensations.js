@@ -76,13 +76,23 @@ async function availableLinkCounts(supabase) {
 }
 
 async function dashboardSnapshot(supabase) {
-  const { data: requests, error: requestsError } = await supabase
-    .from("compensation_requests")
-    .select("id, client_code, status, replacement_link, created_at, updated_at")
-    .order("created_at", { ascending: false });
-  if (requestsError) throw requestsError;
+  const [requestsResult, availableLinksResult] = await Promise.all([
+    supabase
+      .from("compensation_requests")
+      .select("id, client_code, status, replacement_link, created_at, updated_at")
+      .order("created_at", { ascending: false }),
+    supabase
+      .from("compensation_link_pool")
+      .select("id,replacement_link,account_type,status,assigned_request_id,assigned_at,created_at")
+      .eq("status", "available")
+      .is("assigned_request_id", null)
+      .is("assigned_at", null)
+      .order("created_at", { ascending: false }),
+  ]);
+  if (requestsResult.error) throw requestsResult.error;
+  if (availableLinksResult.error) throw availableLinksResult.error;
 
-  const safeRequests = requests || [];
+  const safeRequests = requestsResult.data || [];
   const [typesByCode, availableCounts] = await Promise.all([
     requestTypeMap(supabase, safeRequests),
     availableLinkCounts(supabase),
@@ -104,6 +114,7 @@ async function dashboardSnapshot(supabase) {
 
   return {
     requests: typedRequests,
+    available_links: availableLinksResult.data || [],
     available_count: availableCounts.total,
     available_counts: availableCounts,
     pending_counts: pendingCounts,
@@ -150,6 +161,50 @@ export default async function handler(req, res) {
       return send(res, 200, {
         success: true,
         imported_count: data?.length || 0,
+        link_type: linkType,
+        ...(await dashboardSnapshot(supabase)),
+      });
+    }
+
+    if (action === "delete_available_link") {
+      const linkId = String(req.body?.link_id || "").trim();
+      if (!linkId) return send(res, 400, { success: false, error: "link_id_required" });
+
+      const { data, error } = await supabase
+        .from("compensation_link_pool")
+        .delete()
+        .eq("id", linkId)
+        .eq("status", "available")
+        .is("assigned_request_id", null)
+        .is("assigned_at", null)
+        .select("id");
+      if (error) throw error;
+      if (!data?.length) return send(res, 409, { success: false, error: "link_not_available" });
+
+      return send(res, 200, {
+        success: true,
+        deleted_count: data.length,
+        ...(await dashboardSnapshot(supabase)),
+      });
+    }
+
+    if (action === "delete_all_available_links") {
+      const linkType = normalizeAccountType(req.body?.link_type);
+      if (!linkType) return send(res, 400, { success: false, error: "invalid_link_type" });
+
+      const { data, error } = await supabase
+        .from("compensation_link_pool")
+        .delete()
+        .eq("account_type", linkType)
+        .eq("status", "available")
+        .is("assigned_request_id", null)
+        .is("assigned_at", null)
+        .select("id");
+      if (error) throw error;
+
+      return send(res, 200, {
+        success: true,
+        deleted_count: data?.length || 0,
         link_type: linkType,
         ...(await dashboardSnapshot(supabase)),
       });

@@ -77,6 +77,15 @@ type AccountCreateForm = {
   compensation_distribution?: CompensationDistribution;
 };
 type PublicCompensationRequest = Omit<CompensationRequest, "id">;
+type CompensationPoolLink = {
+  id: string;
+  replacement_link: string;
+  account_type: "private" | "shared" | null;
+  status: "available" | "assigned";
+  assigned_request_id: string | null;
+  assigned_at: string | null;
+  created_at: string;
+};
 type ServiceTheme = {
   type: ServiceType;
   name: string;
@@ -3060,6 +3069,7 @@ function CompensationAdminPage({
   setToast: (toast: Toast) => void;
 }) {
   const [requests, setRequests] = useState<CompensationRequest[]>([]);
+  const [availableLinks, setAvailableLinks] = useState<CompensationPoolLink[]>([]);
   const [availableCounts, setAvailableCounts] = useState({ private: 0, shared: 0, unclassified: 0, total: 0 });
   const [pendingCounts, setPendingCounts] = useState({ private: 0, shared: 0, unknown: 0 });
   const [privateLinksInput, setPrivateLinksInput] = useState("");
@@ -3088,11 +3098,13 @@ function CompensationAdminPage({
 
   function applySnapshot(payload: {
     requests?: CompensationRequest[];
+    available_links?: CompensationPoolLink[];
     available_count?: number;
     available_counts?: { private?: number; shared?: number; unclassified?: number; total?: number };
     pending_counts?: { private?: number; shared?: number; unknown?: number };
   }) {
     setRequests(Array.isArray(payload.requests) ? payload.requests : []);
+    setAvailableLinks(Array.isArray(payload.available_links) ? payload.available_links : []);
     setAvailableCounts({
       private: Number(payload.available_counts?.private || 0),
       shared: Number(payload.available_counts?.shared || 0),
@@ -3170,6 +3182,48 @@ function CompensationAdminPage({
         tone: "error",
         at: Date.now(),
       });
+    } finally {
+      setProcessing(null);
+    }
+  }
+
+  async function deleteAvailableLink(linkId: string) {
+    if (!window.confirm("هل أنت متأكد من حذف هذا الرابط من المخزن؟")) return;
+
+    setProcessing(`delete-link-${linkId}`);
+    try {
+      const payload = await callAdminApi("delete_available_link", { link_id: linkId });
+      applySnapshot(payload);
+      setToast({ label: "تم حذف الرابط من المخزن", at: Date.now() });
+    } catch (deleteError) {
+      console.error("Available compensation link deletion failed:", deleteError);
+      const errorCode = (deleteError as Error & { code?: string }).code;
+      setToast({
+        label: errorCode === "link_not_available"
+          ? "هذا الرابط لم يعد متاحاً للحذف"
+          : "تعذر حذف الرابط من المخزن",
+        tone: "error",
+        at: Date.now(),
+      });
+    } finally {
+      setProcessing(null);
+    }
+  }
+
+  async function deleteAllAvailableLinks(linkType: "private" | "shared") {
+    if (!window.confirm("هل أنت متأكد من حذف جميع الروابط غير الموزعة من هذا المخزن؟")) return;
+
+    setProcessing(`delete-all-${linkType}`);
+    try {
+      const payload = await callAdminApi("delete_all_available_links", { link_type: linkType });
+      applySnapshot(payload);
+      setToast({
+        label: `تم حذف ${Number(payload.deleted_count || 0)} رابط غير مسند`,
+        at: Date.now(),
+      });
+    } catch (deleteError) {
+      console.error("Available compensation links deletion failed:", deleteError);
+      setToast({ label: "تعذر حذف الروابط غير المسندة", tone: "error", at: Date.now() });
     } finally {
       setProcessing(null);
     }
@@ -3274,9 +3328,21 @@ function CompensationAdminPage({
               },
             ]).map((pool) => (
               <div key={pool.type} className="rounded-2xl border border-[#E8DCFF] bg-[#FCFAFF] p-4">
-                <div className="mb-3 flex items-center justify-between gap-3">
+                <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <p className="text-sm font-black">{pool.title}</p>
-                  <span className="rounded-full bg-white px-3 py-1 text-xs font-black text-[#7C2CE8] shadow-sm">متاح: {pool.count}</span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void deleteAllAvailableLinks(pool.type)}
+                      disabled={processing !== null || pool.count === 0}
+                      title="حذف الكل غير المسند"
+                      className="flex h-9 items-center justify-center gap-1.5 rounded-xl border border-rose-200 bg-white px-3 text-xs font-black text-rose-600 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {processing === `delete-all-${pool.type}` ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                      حذف الكل غير المسند
+                    </button>
+                    <span className="rounded-full bg-white px-3 py-1 text-xs font-black text-[#7C2CE8] shadow-sm">متاح: {pool.count}</span>
+                  </div>
                 </div>
                 <textarea
                   value={pool.value}
@@ -3294,6 +3360,35 @@ function CompensationAdminPage({
                   {processing === `import-${pool.type}` ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
                   استيراد {pool.type === "private" ? "الروابط الخاصة" : "الروابط المشتركة"}
                 </button>
+                <div className="mt-4 border-t border-[#E8DCFF] pt-4">
+                  <p className="mb-2 text-xs font-black text-zinc-500">الروابط المتاحة غير المسندة</p>
+                  {availableLinks.filter((link) => link.account_type === pool.type).length === 0 ? (
+                    <div className="rounded-xl border border-dashed border-[#DCCBFA] bg-white px-3 py-5 text-center text-xs font-bold text-zinc-400">
+                      لا توجد روابط متاحة في هذا المخزن
+                    </div>
+                  ) : (
+                    <div className="max-h-52 space-y-2 overflow-y-auto pe-1">
+                      {availableLinks
+                        .filter((link) => link.account_type === pool.type)
+                        .map((link) => (
+                          <div key={link.id} className="flex min-w-0 items-center gap-2 rounded-xl border border-[#E8DCFF] bg-white p-2">
+                            <span className="min-w-0 flex-1 truncate text-left text-xs font-bold text-zinc-600" dir="ltr" title={link.replacement_link}>
+                              {link.replacement_link}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => void deleteAvailableLink(link.id)}
+                              disabled={processing !== null}
+                              title="حذف الرابط غير المسند"
+                              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-rose-500 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              {processing === `delete-link-${link.id}` ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                            </button>
+                          </div>
+                        ))}
+                    </div>
+                  )}
+                </div>
               </div>
             ))}
           </div>
