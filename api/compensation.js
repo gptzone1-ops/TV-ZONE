@@ -73,7 +73,7 @@ export default async function handler(req, res) {
     const { data: createdRequest, error: createError } = await supabase
       .from("compensation_requests")
       .insert({ client_code: canonicalCode, status: "pending" })
-      .select("client_code, status, replacement_link, created_at, updated_at")
+      .select("id, client_code, status, replacement_link, created_at, updated_at")
       .single();
 
     if (createError?.code === "23505") {
@@ -93,7 +93,55 @@ export default async function handler(req, res) {
       return send(res, 500, { success: false, error: "request_creation_failed" });
     }
 
-    return send(res, 201, { success: true, created: true, request: publicRequest(createdRequest) });
+    const { data: assignmentRows, error: assignmentError } = await supabase.rpc("assign_compensation_link", {
+      p_request_id: createdRequest.id,
+    });
+
+    if (assignmentError) {
+      const assignmentMessage = String(assignmentError.message || "");
+      if (assignmentMessage.includes("no_available_links")) {
+        return send(res, 201, {
+          success: true,
+          created: true,
+          automatically_assigned: false,
+          request: publicRequest(createdRequest),
+        });
+      }
+
+      console.error("Automatic compensation assignment failed; request remains pending:", assignmentError);
+      return send(res, 201, {
+        success: true,
+        created: true,
+        automatically_assigned: false,
+        request: publicRequest(createdRequest),
+      });
+    }
+
+    const assignment = Array.isArray(assignmentRows) ? assignmentRows[0] : assignmentRows;
+    const completedRequest = {
+      ...createdRequest,
+      client_code: assignment?.assigned_client_code || createdRequest.client_code,
+      status: assignment?.assigned_status || "completed",
+      replacement_link: assignment?.assigned_replacement_link || null,
+      updated_at: assignment?.assigned_updated_at || createdRequest.updated_at,
+    };
+
+    if (!completedRequest.replacement_link) {
+      console.error("Automatic compensation assignment returned no replacement link:", assignmentRows);
+      return send(res, 201, {
+        success: true,
+        created: true,
+        automatically_assigned: false,
+        request: publicRequest(createdRequest),
+      });
+    }
+
+    return send(res, 201, {
+      success: true,
+      created: true,
+      automatically_assigned: true,
+      request: publicRequest(completedRequest),
+    });
   } catch (error) {
     console.error("Compensation endpoint failed:", error);
     return send(res, 500, { success: false, error: "unexpected_error" });

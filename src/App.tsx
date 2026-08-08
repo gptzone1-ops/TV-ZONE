@@ -767,7 +767,6 @@ function CompensationPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
-  const [justCreated, setJustCreated] = useState(false);
 
   async function checkCompensation(rawCode: string) {
     const normalizedCode = rawCode.replace(/\s+/g, "").toUpperCase();
@@ -799,7 +798,6 @@ function CompensationPage() {
       }
 
       localStorage.setItem(storageKey, normalizedCode);
-      setJustCreated(payload.created === true);
       setRequest(payload.request as PublicCompensationRequest);
     } catch (lookupError) {
       console.error("Compensation lookup failed:", lookupError);
@@ -913,9 +911,7 @@ function CompensationPage() {
                 </div>
                 <h2 className="mt-4 text-xl font-black">طلبك قيد المراجعة</h2>
                 <p className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm font-bold leading-8 text-amber-900">
-                  {justCreated
-                    ? "تم استلام طلب التعويض الخاص بك بنجاح. الوقت المتوقع لمعالجة الطلب من ساعة إلى 24 ساعة، يرجى تحديث هذه الصفحة لاحقاً لمتابعة الطلب واستلام رابط الحساب الجديد."
-                    : "طلب التعويض الخاص بك قيد المراجعة والمعالجة حالياً. الوقت المتوقع للانتظار من ساعة إلى 24 ساعة، يرجى إعادة تحديث الصفحة لاحقاً."}
+                  تم استلام طلبك، سيتم التعويض وتوفير الرابط خلال مدة تتراوح من ساعة إلى 24 ساعة كحد أقصى.
                 </p>
                 <div className="mt-3 flex items-center justify-center gap-2 rounded-xl bg-[#FFF8E7] px-4 py-3 text-sm font-black text-amber-800">
                   <Clock3 className="h-4 w-4" />
@@ -940,7 +936,7 @@ function CompensationPage() {
                   <CircleCheck className="h-8 w-8" />
                 </div>
                 <h2 className="mt-4 text-2xl font-black text-emerald-700">تم التعويض بنجاح!</h2>
-                <p className="mt-2 text-sm font-bold text-zinc-600">هذا هو رابط الحساب الجديد الخاص بك:</p>
+                <p className="mt-2 text-sm font-bold text-zinc-600">تفضل رابط حسابك الجديد:</p>
                 <div className="mt-4 text-right">
                   <CompensationCodeCard code={request.client_code} compact />
                 </div>
