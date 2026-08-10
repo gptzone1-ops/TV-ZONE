@@ -987,6 +987,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
   const [currentPage, setCurrentPage] = useState(1);
   const [totalAccounts, setTotalAccounts] = useState(0);
   const [toast, setToast] = useState<Toast>(null);
+  const loadRequestIdRef = useRef(0);
 
   useEffect(() => {
     if (!toast) return;
@@ -1037,6 +1038,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
   }, [authenticated, currentPage, selectedService, debouncedQuery]);
 
   async function loadData() {
+    const requestId = ++loadRequestIdRef.current;
     if (!supabase) {
       setAccounts([demoAccount]);
       setLinks(demoLinks);
@@ -1096,19 +1098,30 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
 
     const [
       { data: accountsData, error: accountsError, count: accountsCount },
-      { data: linksData, error: linksError },
       { data: creditRequestsData, error: creditRequestsError },
-    ] =
-      await Promise.all([
-        accountsQuery
-          .order("created_at", { ascending: false })
-          .range(from, to),
-        supabase.from("customer_links").select("*").order("profile_name", { ascending: true }),
-        supabase
-          .from("extra_credit_requests")
-          .select("*,customer_links(*,accounts(*))")
-          .order("created_at", { ascending: false }),
-      ]);
+    ] = await Promise.all([
+      accountsQuery
+        .order("created_at", { ascending: false })
+        .range(from, to),
+      supabase
+        .from("extra_credit_requests")
+        .select("*,customer_links(*,accounts(*))")
+        .order("created_at", { ascending: false }),
+    ]);
+
+    const pageAccountIds = (accountsData || []).map((account) => account.id);
+    const { data: linksData, error: linksError } = pageAccountIds.length
+      ? await supabase
+          .from("customer_links")
+          .select("*")
+          .in("account_id", pageAccountIds)
+          .order("account_id", { ascending: true })
+          .order("profile_name", { ascending: true })
+      : { data: [] as CustomerLink[], error: null };
+
+    // Realtime events can start overlapping loads. Only the newest response may
+    // replace the dashboard state, so an older request cannot restore a partial view.
+    if (requestId !== loadRequestIdRef.current) return;
 
     if (accountsError || linksError) {
       setToast({ label: "تعذر تحميل بيانات Supabase", at: Date.now() });

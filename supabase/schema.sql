@@ -117,6 +117,9 @@ alter table public.customer_links
 alter table public.customer_links
   add column if not exists updated_at timestamptz not null default now();
 
+alter table public.customer_links
+  add column if not exists generation_version integer;
+
 alter table public.accounts
   add column if not exists service_type text not null default 'netflix';
 
@@ -161,6 +164,10 @@ create unique index if not exists customer_links_short_id_key
 
 create unique index if not exists customer_links_link_number_key
   on public.customer_links(link_number);
+
+create unique index if not exists customer_links_strict_account_profile_key
+  on public.customer_links(account_id, profile_name)
+  where generation_version = 2;
 
 create index if not exists customer_links_email_idx
   on public.customer_links(lower(email))

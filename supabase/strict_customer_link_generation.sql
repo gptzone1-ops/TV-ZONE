@@ -3,6 +3,44 @@
 
 create extension if not exists pgcrypto;
 
+alter table public.customer_links
+  add column if not exists generation_version integer;
+
+-- Legacy uniqueness on profile_label incorrectly treats B1 and B2 as one slot.
+-- Removing that rule changes no stored row and leaves all legacy links untouched.
+do $migration$
+declare
+  item record;
+begin
+  for item in
+    select conname
+    from pg_constraint
+    where conrelid = 'public.customer_links'::regclass
+      and contype = 'u'
+      and pg_get_constraintdef(oid) ilike '%profile_label%'
+      and pg_get_constraintdef(oid) not ilike '%profile_name%'
+  loop
+    execute format('alter table public.customer_links drop constraint %I', item.conname);
+  end loop;
+
+  for item in
+    select indexname
+    from pg_indexes
+    where schemaname = 'public'
+      and tablename = 'customer_links'
+      and indexdef ilike 'create unique index%'
+      and indexdef ilike '%profile_label%'
+      and indexdef not ilike '%profile_name%'
+  loop
+    execute format('drop index if exists public.%I', item.indexname);
+  end loop;
+end;
+$migration$;
+
+create unique index if not exists customer_links_strict_account_profile_key
+  on public.customer_links(account_id, profile_name)
+  where generation_version = 2;
+
 create or replace function public.create_strict_customer_links(
   p_account_id uuid,
   p_email text,
@@ -81,7 +119,8 @@ begin
     service_type,
     profile_name,
     profile_label,
-    profile_code
+    profile_code,
+    generation_version
   )
   select
     p_account_id,
@@ -91,7 +130,8 @@ begin
     'netflix',
     item.value->>'profile_name',
     item.value->>'profile_label',
-    item.value->>'profile_code'
+    item.value->>'profile_code',
+    2
   from jsonb_array_elements(p_links) with ordinality as item(value, position)
   order by item.position
   returning inserted_link.*;
