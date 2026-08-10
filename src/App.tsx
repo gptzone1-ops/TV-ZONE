@@ -1449,18 +1449,48 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     let createdLinks: CustomerLink[] = [];
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
-        const { data, error } = await supabase
-          .from("customer_links")
-          .insert(
-            slots.map((slot) => ({
+        if (expectedNewLinks !== null) {
+          const response = await fetch("/api/create-customer-links", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-admin-password": adminPassword,
+            },
+            body: JSON.stringify({
               account_id: account.id,
               email: normalizedEmail,
-              ...slot,
-            })),
-          )
-          .select("*");
-        if (error) throw error;
-        createdLinks = (data || []) as CustomerLink[];
+              links: slots,
+            }),
+          });
+          const result = (await response.json().catch(() => null)) as {
+            success?: boolean;
+            error?: string;
+            code?: string | null;
+            details?: string | null;
+            links?: CustomerLink[];
+          } | null;
+          if (!response.ok || !result?.success) {
+            throw {
+              code: result?.code || undefined,
+              message: result?.error || "strict_link_creation_failed",
+              details: result?.details || undefined,
+            };
+          }
+          createdLinks = result.links || [];
+        } else {
+          const { data, error } = await supabase
+            .from("customer_links")
+            .insert(
+              slots.map((slot) => ({
+                account_id: account.id,
+                email: normalizedEmail,
+                ...slot,
+              })),
+            )
+            .select("*");
+          if (error) throw error;
+          createdLinks = (data || []) as CustomerLink[];
+        }
         linksError = null;
         break;
       } catch (error) {
@@ -1831,7 +1861,9 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
   async function copyAllCustomerLinksForAccount(accountId: string) {
     let accountLinks = links.filter((link) => link.account_id === accountId);
 
-    if (!accountLinks.length && supabase) {
+    // Always read the authoritative set before copying; local paginated/realtime
+    // state may briefly contain only part of an account's links.
+    if (supabase) {
       const { data, error } = await supabase
         .from("customer_links")
         .select("*")
@@ -1848,6 +1880,26 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
 
     if (!accountLinks.length) {
       setToast({ label: "لا توجد روابط مرتبطة بهذا الحساب", at: Date.now(), tone: "error" });
+      return;
+    }
+
+    const account = accounts.find((item) => item.id === accountId);
+    const expectedCount = account?.service_type !== "shahid" && account?.account_type === "private"
+      ? 5
+      : account?.service_type !== "shahid" && account?.account_type === "shared"
+        ? 8
+        : null;
+    if (expectedCount !== null && accountLinks.length !== expectedCount) {
+      console.error("Refusing to copy an incomplete customer link set:", {
+        accountId,
+        expected: expectedCount,
+        received: accountLinks.length,
+      });
+      setToast({
+        label: `تعذر النسخ: العدد المحفوظ ${accountLinks.length} من ${expectedCount}. لم يتم تغيير أي رابط.`,
+        at: Date.now(),
+        tone: "error",
+      });
       return;
     }
 

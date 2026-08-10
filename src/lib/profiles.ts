@@ -28,15 +28,6 @@ export const PROFILE_CODES: Record<string, string> = {
 export const PROFILE_NAMES = Object.keys(PROFILE_CODES);
 export const SHAHID_PROFILE_NAMES = ["A", "B", "C", "D"];
 
-// Applied only while creating new shared Netflix accounts. Existing links are never rewritten.
-export const NEW_SHARED_NETFLIX_PROFILE_CAPACITY: Record<string, number> = {
-  A: 0,
-  B: 2,
-  C: 2,
-  D: 2,
-  E: 2,
-};
-
 const SHARED_COMPENSATION_PROFILES = ["B", "C", "D", "E"] as const;
 
 export function generateShortId(length = 4) {
@@ -59,6 +50,17 @@ function generateUuid() {
   bytes[8] = (bytes[8] & 0x3f) | 0x80;
   const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function createNetflixSlot(profileName: string, profileLabel: string) {
+  return {
+    profile_name: profileName,
+    profile_label: profileLabel,
+    profile_code: PROFILE_CODES[profileLabel],
+    service_type: "netflix" as const,
+    uuid: generateUuid(),
+    short_id: generateShortId(),
+  };
 }
 
 export function buildProfileSlots(
@@ -96,33 +98,28 @@ export function buildProfileSlots(
   }
 
   if (accountType === "shared" && serviceType === "netflix") {
-    const sharedSlots = Object.entries(NEW_SHARED_NETFLIX_PROFILE_CAPACITY).flatMap(([profileName, capacity]) =>
-      Array.from({ length: capacity }, (_, index) => ({
-        profile_name: `${profileName}${index + 1}`,
-        profile_label: profileName,
-        profile_code: PROFILE_CODES[profileName],
-        service_type: serviceType,
-        uuid: generateUuid(),
-        short_id: generateShortId(),
-      })),
-    );
-
-    if (sharedSlots.length !== 8) throw new Error("invalid_shared_netflix_slots");
-    return sharedSlots;
+    // Deliberately explicit: new shared accounts always have exactly B1..E2.
+    return [
+      createNetflixSlot("B1", "B"),
+      createNetflixSlot("B2", "B"),
+      createNetflixSlot("C1", "C"),
+      createNetflixSlot("C2", "C"),
+      createNetflixSlot("D1", "D"),
+      createNetflixSlot("D2", "D"),
+      createNetflixSlot("E1", "E"),
+      createNetflixSlot("E2", "E"),
+    ];
   }
 
   if (accountType === "private" && serviceType === "netflix") {
-    const privateSlots = PROFILE_NAMES.map((profileName) => ({
-      profile_name: profileName,
-      profile_label: profileName,
-      profile_code: PROFILE_CODES[profileName],
-      service_type: serviceType,
-      uuid: generateUuid(),
-      short_id: generateShortId(),
-    }));
-
-    if (privateSlots.length !== 5) throw new Error("invalid_private_netflix_slots");
-    return privateSlots;
+    // Deliberately explicit: new private accounts always have exactly A..E.
+    return [
+      createNetflixSlot("A", "A"),
+      createNetflixSlot("B", "B"),
+      createNetflixSlot("C", "C"),
+      createNetflixSlot("D", "D"),
+      createNetflixSlot("E", "E"),
+    ];
   }
 
   const repeats = accountType === "private" ? 1 : 2;
