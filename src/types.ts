@@ -1,6 +1,6 @@
 export type AccountType = "private" | "shared" | "temporary" | "compensation";
 export type CompensationDistribution = "private" | "shared";
-export type ServiceType = "netflix" | "shahid";
+export type ServiceType = "netflix" | "shahid" | "osn";
 export type CodeFetchMethod = "auto_fetch" | "external_link";
 export type ExtraCreditReason =
   | "كود خاطئ"

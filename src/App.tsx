@@ -34,6 +34,7 @@ import {
   UserRound,
   Users,
   Trash2,
+  Tv,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -155,10 +156,23 @@ const serviceThemes: Record<ServiceType, ServiceTheme> = {
     soft: "bg-cyan-50 text-cyan-600",
     hoverBg: "hover:bg-cyan-500",
   },
+  osn: {
+    type: "osn",
+    name: "OSN",
+    title: "إدارة OSN",
+    accent: "text-fuchsia-700",
+    border: "border-fuchsia-100",
+    gradient: "from-fuchsia-700 to-amber-500",
+    glow: "shadow-[0_16px_36px_rgba(162,28,175,0.22)]",
+    soft: "bg-fuchsia-50 text-fuchsia-700",
+    hoverBg: "hover:bg-fuchsia-700",
+  },
 };
 
 function serviceOf(account?: NetflixAccount | null): ServiceType {
-  return account?.service_type === "shahid" ? "shahid" : "netflix";
+  if (account?.service_type === "shahid") return "shahid";
+  if (account?.service_type === "osn") return "osn";
+  return "netflix";
 }
 
 function cn(...classes: Array<string | false | null | undefined>) {
@@ -980,9 +994,10 @@ function CompensationPage() {
 function AdminApp({ navigate }: { navigate: (path: string) => void }) {
   const [authenticated, setAuthenticated] = useState(() => localStorage.getItem(adminAuthKey) === adminAuthValue);
   const [screen, setScreen] = useState<Screen>(() => (localStorage.getItem("zone-admin-screen") as Screen) || "selector");
-  const [selectedService, setSelectedService] = useState<ServiceType>(() =>
-    localStorage.getItem("zone-selected-service") === "shahid" ? "shahid" : "netflix",
-  );
+  const [selectedService, setSelectedService] = useState<ServiceType>(() => {
+    const storedService = localStorage.getItem("zone-selected-service");
+    return storedService === "shahid" || storedService === "osn" ? storedService : "netflix";
+  });
   const [accounts, setAccounts] = useState<NetflixAccount[]>([]);
   const [links, setLinks] = useState<CustomerLink[]>([]);
   const [extraCreditRequests, setExtraCreditRequests] = useState<ExtraCreditRequest[]>([]);
@@ -1091,9 +1106,9 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       .from("accounts")
       .select("*", { count: "exact" });
 
-    accountsQuery = selectedService === "shahid"
-      ? accountsQuery.eq("service_type", "shahid")
-      : accountsQuery.or("service_type.eq.netflix,service_type.is.null");
+    accountsQuery = selectedService === "netflix"
+      ? accountsQuery.or("service_type.eq.netflix,service_type.is.null")
+      : accountsQuery.eq("service_type", selectedService);
 
     if (searchTerm) {
       const accountIds = Array.from(matchingAccountIds);
@@ -1148,27 +1163,44 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     setLoading(false);
   }
 
-  async function emailAlreadyExists(email: string, exceptAccountId?: string) {
+  async function emailAlreadyExists(email: string, exceptAccountId?: string, serviceScope?: ServiceType) {
     const normalized = normalizeEmail(email);
     if (!normalized) return false;
     if (
-      accounts.some((account) => account.id !== exceptAccountId && normalizeEmail(account.email) === normalized) ||
-      links.some((link) => link.account_id !== exceptAccountId && normalizeEmail(link.email || "") === normalized)
+      accounts.some(
+        (account) =>
+          account.id !== exceptAccountId &&
+          normalizeEmail(account.email) === normalized &&
+          (!serviceScope || serviceOf(account) === serviceScope),
+      ) ||
+      links.some(
+        (link) =>
+          link.account_id !== exceptAccountId &&
+          normalizeEmail(link.email || "") === normalized &&
+          (!serviceScope || link.service_type === serviceScope),
+      )
     ) {
       return true;
     }
 
     if (!supabase) return false;
 
+    let customerLinksQuery = supabase
+      .from("customer_links")
+      .select("id,account_id")
+      .eq("email", normalized);
+    let accountsQuery = supabase
+      .from("accounts")
+      .select("id")
+      .eq("email", normalized);
+    if (serviceScope) {
+      customerLinksQuery = customerLinksQuery.eq("service_type", serviceScope);
+      accountsQuery = accountsQuery.eq("service_type", serviceScope);
+    }
+
     const [{ data, error }, { data: accountRows, error: accountError }] = await Promise.all([
-      supabase
-        .from("customer_links")
-        .select("id,account_id")
-        .eq("email", normalized),
-      supabase
-        .from("accounts")
-        .select("id")
-        .eq("email", normalized),
+      customerLinksQuery,
+      accountsQuery,
     ]);
 
     if (error || accountError) {
@@ -1181,7 +1213,12 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     return existing.length > 0 || existingAccounts.length > 0;
   }
 
-  async function duplicateProfileForEmail(email: string, profileNames: string[], exceptAccountId?: string) {
+  async function duplicateProfileForEmail(
+    email: string,
+    profileNames: string[],
+    exceptAccountId?: string,
+    serviceScope?: ServiceType,
+  ) {
     const normalized = normalizeEmail(email);
     const uniqueProfiles = Array.from(new Set(profileNames.filter(Boolean)));
     if (!normalized || !uniqueProfiles.length) return null;
@@ -1190,17 +1227,20 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       (link) =>
         link.account_id !== exceptAccountId &&
         normalizeEmail(link.email || "") === normalized &&
+        (!serviceScope || link.service_type === serviceScope) &&
         uniqueProfiles.includes(link.profile_name),
     );
     if (localDuplicate) return localDuplicate.profile_name;
 
     if (!supabase) return null;
 
-    const { data, error } = await supabase
+    let duplicateQuery = supabase
       .from("customer_links")
       .select("id,account_id,profile_name")
       .eq("email", normalized)
       .in("profile_name", uniqueProfiles);
+    if (serviceScope) duplicateQuery = duplicateQuery.eq("service_type", serviceScope);
+    const { data, error } = await duplicateQuery;
 
     if (error) {
       console.error("Supabase duplicate profile validation error:", error);
@@ -1216,15 +1256,16 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     accountType: AccountType,
     profileNames: string[],
     exceptAccountId?: string,
+    serviceScope?: ServiceType,
   ): Promise<AccountFormResult> {
     if (accountType === "private" || accountType === "temporary" || accountType === "compensation") {
-      if (await emailAlreadyExists(email, exceptAccountId)) {
+      if (await emailAlreadyExists(email, exceptAccountId, serviceScope)) {
         return { ok: false, error: duplicateEmailMessage };
       }
       return true;
     }
 
-    const duplicateProfile = await duplicateProfileForEmail(email, profileNames, exceptAccountId);
+    const duplicateProfile = await duplicateProfileForEmail(email, profileNames, exceptAccountId, serviceScope);
     if (duplicateProfile) {
       return { ok: false, error: duplicateProfileMessage(duplicateProfile) };
     }
@@ -1321,16 +1362,21 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       : selectedService === "netflix" && form.account_type === "shared"
         ? 8
         : null;
+    const expectedCreatedLinks = expectedNewLinks ?? (
+      selectedService === "osn"
+        ? form.account_type === "private" ? 5 : 10
+        : null
+    );
 
     if (!normalizedEmail) {
       setToast({ label: emptyEmailMessage, at: Date.now(), tone: "error" });
       return { ok: false, error: emptyEmailMessage };
     }
 
-    if (expectedNewLinks !== null && slots.length !== expectedNewLinks) {
+    if (expectedCreatedLinks !== null && slots.length !== expectedCreatedLinks) {
       console.error("Unexpected customer link count before account creation:", {
         accountType: form.account_type,
-        expected: expectedNewLinks,
+        expected: expectedCreatedLinks,
         received: slots.length,
       });
       setToast({ label: "تعذر تجهيز العدد الصحيح من روابط العملاء", at: Date.now(), tone: "error" });
@@ -1364,7 +1410,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       compensation_distribution: form.account_type === "compensation" ? form.compensation_distribution : null,
       expires_at,
       service_type: selectedService,
-      use_automated_code: form.account_type !== "compensation" && codeFetchMethod !== "external_link",
+      use_automated_code: selectedService === "netflix" && form.account_type !== "compensation" && codeFetchMethod !== "external_link",
       created_at: new Date().toISOString(),
     };
     let optimisticAccountVisible = true;
@@ -1384,6 +1430,8 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
         normalizedEmail,
         form.account_type,
         slots.map((slot) => slot.profile_name),
+        undefined,
+        selectedService === "osn" ? "osn" : undefined,
       );
       if (!accountFormSucceeded(validation)) {
         const error = accountFormError(validation) || duplicateEmailMessage;
@@ -1431,7 +1479,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
           email: normalizedEmail,
           expires_at,
           service_type: selectedService,
-          use_automated_code: form.account_type !== "temporary" && form.account_type !== "compensation" && codeFetchMethod !== "external_link",
+          use_automated_code: selectedService === "netflix" && form.account_type !== "temporary" && form.account_type !== "compensation" && codeFetchMethod !== "external_link",
           code_fetch_method: codeFetchMethod,
           temporary_short_id: temporaryShortId,
           email_provider: "none",
@@ -1573,14 +1621,14 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       return false;
     }
 
-    if (expectedNewLinks !== null && createdLinks.length !== expectedNewLinks) {
+    if (expectedCreatedLinks !== null && createdLinks.length !== expectedCreatedLinks) {
       await supabase.from("accounts").delete().eq("id", account.id);
       rollbackOptimisticAccount();
       setAccounts((current) => current.filter((item) => item.id !== account?.id));
       setLoading(false);
       console.error("Unexpected customer link count after account creation:", {
         accountId: account.id,
-        expected: expectedNewLinks,
+        expected: expectedCreatedLinks,
         received: createdLinks.length,
       });
       setToast({ label: "لم يُحفظ العدد الكامل من الروابط؛ تم إلغاء إنشاء الحساب لحمايته", at: Date.now(), tone: "error" });
@@ -1628,6 +1676,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
         currentAccount?.account_type || "private",
         currentProfileNames,
         accountId,
+        serviceOf(currentAccount) === "osn" ? "osn" : undefined,
       );
       if (!accountFormSucceeded(validation)) {
         const error = accountFormError(validation) || duplicateEmailMessage;
@@ -1915,10 +1964,11 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     }
 
     const account = accounts.find((item) => item.id === accountId);
-    const expectedCount = account?.service_type !== "shahid" && account?.account_type === "private"
-      ? 5
-      : account?.service_type !== "shahid" && account?.account_type === "shared"
-        ? 8
+    const accountService = serviceOf(account);
+    const expectedCount = account?.account_type === "private"
+      ? accountService === "shahid" ? 4 : 5
+      : account?.account_type === "shared"
+        ? accountService === "osn" ? 10 : 8
         : null;
     if (expectedCount !== null && accountLinks.length !== expectedCount) {
       console.error("Refusing to copy an incomplete customer link set:", {
@@ -2134,6 +2184,11 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
           setSelectedService("shahid");
           setScreen("netflix");
         }}
+        onOsn={() => {
+          setCurrentPage(1);
+          setSelectedService("osn");
+          setScreen("netflix");
+        }}
       />
     );
   }
@@ -2305,10 +2360,12 @@ function AdminLogin({ onLogin }: { onLogin: (password: string) => void }) {
 function ServiceSelector({
   onNetflix,
   onShahid,
+  onOsn,
   onLogout,
 }: {
   onNetflix: () => void;
   onShahid: () => void;
+  onOsn: () => void;
   onLogout: () => void;
 }) {
   return (
@@ -2332,7 +2389,7 @@ function ServiceSelector({
           </div>
         </div>
 
-        <div className="grid gap-5 md:grid-cols-2">
+        <div className="grid gap-5 md:grid-cols-3">
           <button
             onClick={onNetflix}
             className="group animate-rise rounded-3xl border border-red-100 bg-white p-8 text-right shadow-premium transition duration-300 hover:-translate-y-1 hover:border-netflix hover:shadow-premium-lg active:scale-[0.98]"
@@ -2362,6 +2419,22 @@ function ServiceSelector({
             <h2 className="text-2xl font-black">إدارة شاهد</h2>
             <p className="mt-3 max-w-md text-sm leading-7 text-zinc-500">
               إدارة حسابات شاهد بروابط مختصرة وصفحة عميل بدون رمز ملف.
+            </p>
+          </button>
+
+          <button
+            onClick={onOsn}
+            className="group animate-rise rounded-3xl border border-fuchsia-100 bg-white p-8 text-right shadow-premium transition duration-300 hover:-translate-y-1 hover:border-fuchsia-400 hover:shadow-[0_20px_55px_rgba(162,28,175,0.16)] active:scale-[0.98]"
+          >
+            <div className="mb-10 flex items-center justify-between">
+              <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-fuchsia-700 to-amber-500 text-white shadow-[0_16px_36px_rgba(162,28,175,0.24)]">
+                <Tv className="h-8 w-8" />
+              </div>
+              <ChevronLeft className="h-6 w-6 text-fuchsia-700 transition duration-300 group-hover:-translate-x-1" />
+            </div>
+            <h2 className="text-2xl font-black">إدارة OSN</h2>
+            <p className="mt-3 max-w-md text-sm leading-7 text-zinc-500">
+              إدارة وتوليد روابط حسابات OSN للعملاء.
             </p>
           </button>
         </div>
@@ -2500,28 +2573,32 @@ function Dashboard({
               />
             </div>
 
-            <button
-              type="button"
-              onClick={onOpenCreditRequests}
-              className="relative flex h-13 shrink-0 items-center justify-center gap-2 rounded-xl border border-[#D8C1FF] bg-[#F8F4FF] px-5 text-sm font-black text-[#7C2CE8] transition hover:border-[#8B35F5] hover:bg-[#8B35F5] hover:text-white"
-            >
-              <Inbox className="h-4 w-4" />
-              طلبات الرصيد الإضافي
-              {pendingCreditRequests > 0 && (
-                <span className="flex h-6 min-w-6 items-center justify-center rounded-full bg-rose-600 px-1.5 text-xs font-black text-white">
-                  {pendingCreditRequests}
-                </span>
-              )}
-            </button>
+            {service !== "osn" && (
+              <>
+                <button
+                  type="button"
+                  onClick={onOpenCreditRequests}
+                  className="relative flex h-13 shrink-0 items-center justify-center gap-2 rounded-xl border border-[#D8C1FF] bg-[#F8F4FF] px-5 text-sm font-black text-[#7C2CE8] transition hover:border-[#8B35F5] hover:bg-[#8B35F5] hover:text-white"
+                >
+                  <Inbox className="h-4 w-4" />
+                  طلبات الرصيد الإضافي
+                  {pendingCreditRequests > 0 && (
+                    <span className="flex h-6 min-w-6 items-center justify-center rounded-full bg-rose-600 px-1.5 text-xs font-black text-white">
+                      {pendingCreditRequests}
+                    </span>
+                  )}
+                </button>
 
-            <button
-              type="button"
-              onClick={onOpenCompensations}
-              className="flex h-13 shrink-0 items-center justify-center gap-2 rounded-xl border border-[#D8C1FF] bg-white px-5 text-sm font-black text-[#7C2CE8] transition hover:border-[#8B35F5] hover:bg-[#8B35F5] hover:text-white"
-            >
-              <RefreshCw className="h-4 w-4" />
-              طلبات التعويض
-            </button>
+                <button
+                  type="button"
+                  onClick={onOpenCompensations}
+                  className="flex h-13 shrink-0 items-center justify-center gap-2 rounded-xl border border-[#D8C1FF] bg-white px-5 text-sm font-black text-[#7C2CE8] transition hover:border-[#8B35F5] hover:bg-[#8B35F5] hover:text-white"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  طلبات التعويض
+                </button>
+              </>
+            )}
 
             <div className="relative shrink-0 md:w-36" data-filter-popover>
               <button
@@ -2547,7 +2624,9 @@ function Dashboard({
                     { key: "shared", label: "مشترك" },
                     { key: "temporary", label: "حساب مؤقت" },
                     { key: "compensation", label: "التعويضات" },
-                  ].map((option) => (
+                  ]
+                    .filter((option) => service !== "osn" || ["all", "private", "shared"].includes(option.key))
+                    .map((option) => (
                     <button
                       key={option.key}
                       type="button"
@@ -2563,7 +2642,7 @@ function Dashboard({
                       <span>{option.label}</span>
                       {accountTypeFilter === option.key && <Check className="h-4 w-4" />}
                     </button>
-                  ))}
+                    ))}
                 </div>
               )}
             </div>
@@ -3131,8 +3210,8 @@ function AccountRow({
           <span className="rounded-full bg-[#F1E9FF] px-3 py-1 text-xs font-black text-[#6F22D6]">
             {accountTypeLabel(account.account_type)}
           </span>
-          <span className={cn("text-[11px] font-black", service === "shahid" ? "text-cyan-600" : "text-[#8B35F5]")}>
-            {service === "shahid" ? "شاهد" : "Netflix"}
+          <span className={cn("text-[11px] font-black", service === "shahid" ? "text-cyan-600" : service === "osn" ? "text-fuchsia-700" : "text-[#8B35F5]")}>
+            {service === "shahid" ? "شاهد" : service === "osn" ? "OSN" : "Netflix"}
           </span>
         </div>
       </td>
@@ -4312,6 +4391,10 @@ function AccountForm({
               ? accountType === "private"
                 ? "سيتم إنشاء 4 روابط تلقائياً بدون رمز ملف."
                 : "سيتم إنشاء 8 روابط تلقائياً بدون رمز ملف."
+              : service === "osn"
+                ? accountType === "private"
+                  ? "سيتم إنشاء 5 روابط OSN مستقلة تلقائياً."
+                  : "سيتم إنشاء 10 روابط OSN مستقلة تلقائياً، رابطان لكل ملف."
               : accountType === "private"
                 ? "سيتم إنشاء 5 روابط تلقائياً."
                 : "سيتم إنشاء 8 روابط تلقائياً: رابطان لكل ملف من B إلى E، مع تجاوز الملف A."}
@@ -4449,6 +4532,8 @@ function AccountDetail({
       ? account.compensation_distribution === "shared" ? 8 : 5
     : service === "shahid"
       ? account.account_type === "private" ? 4 : 8
+      : service === "osn"
+        ? account.account_type === "private" ? 5 : 10
       : account.account_type === "private" ? 5 : 8;
   const generatedLimit = links.length || fallbackGeneratedLimit;
   const [selectedLinkIds, setSelectedLinkIds] = useState<string[]>([]);
@@ -4677,7 +4762,9 @@ function AccountDetail({
             {[
               { key: "customers", label: "العملاء" },
               { key: "twofa", label: "المصادقة الثنائية 2FA" },
-            ].map((tab) => (
+            ]
+              .filter((tab) => service !== "osn" || tab.key === "customers")
+              .map((tab) => (
               <button
                 key={tab.key}
                 type="button"
@@ -4689,7 +4776,7 @@ function AccountDetail({
               >
                 {tab.label}
               </button>
-            ))}
+              ))}
           </div>
           <div className="text-sm font-bold text-[#7C2CE8]">
             {selectedCount ? `تم تحديد ${selectedCount} عميل.` : "لم يتم تحديد أي عميل، سيتم تطبيق الإجراءات على جميع العملاء."}
@@ -4711,13 +4798,15 @@ function AccountDetail({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setToast({ label: "ميزة تعديل الرصيد قيد الإعداد", at: Date.now() })}
-              className="rounded-full border border-[#E4D6FA] bg-white px-4 py-2 text-sm font-black text-[#7C2CE8] transition hover:bg-[#F5EEFF]"
-            >
-              تعديل الرصيد
-            </button>
+            {service !== "osn" && (
+              <button
+                type="button"
+                onClick={() => setToast({ label: "ميزة تعديل الرصيد قيد الإعداد", at: Date.now() })}
+                className="rounded-full border border-[#E4D6FA] bg-white px-4 py-2 text-sm font-black text-[#7C2CE8] transition hover:bg-[#F5EEFF]"
+              >
+                تعديل الرصيد
+              </button>
+            )}
             <button
               type="button"
               onClick={async () => {
@@ -6121,7 +6210,8 @@ function CustomerView({
 
           {link && account && (
             <div className="space-y-6">
-              <section className="animate-rise overflow-hidden rounded-[2rem] bg-white p-4 shadow-video-glow md:p-5">
+              {service !== "osn" && (
+                <section className="animate-rise overflow-hidden rounded-[2rem] bg-white p-4 shadow-video-glow md:p-5">
                 <div className="flex justify-center overflow-hidden rounded-[1.6rem] bg-zinc-950/95">
                   {customerTutorialVideoUrl ? (
                     <iframe
@@ -6147,7 +6237,8 @@ function CustomerView({
                   </p>
                   <h2 className="text-2xl font-black md:text-3xl">شرح طريقة الدخول</h2>
                 </div>
-              </section>
+                </section>
+              )}
 
               <section className="animate-rise rounded-[2rem] border border-white bg-white p-6 shadow-premium-lg md:p-8">
                 <div className="mb-6 text-center">
@@ -6163,7 +6254,21 @@ function CustomerView({
                     <LoginCopyCard label="كلمة المرور" value={account.password} icon={KeyRound} setToast={setToast} theme={theme} />
                   )}
                   {!normalClientLayout && link.client_code && <CompensationCodeCard code={link.client_code} showPageLink />}
-                  {serviceOutageActive ? (
+                  {service === "osn" ? (
+                    <div className="rounded-[1.75rem] border border-fuchsia-100 bg-gradient-to-l from-white to-fuchsia-50 p-4 shadow-card">
+                      <div className="flex items-center gap-4">
+                        <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-fuchsia-100 text-fuchsia-700">
+                          <Tv className="h-7 w-7" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-lg font-black text-zinc-900">بيانات حساب OSN جاهزة</p>
+                          <p className="mt-1 text-xs font-bold leading-6 text-zinc-500">
+                            انسخ البريد الإلكتروني وكلمة المرور أعلاه، ثم استخدمهما لتسجيل الدخول في تطبيق OSN.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  ) : serviceOutageActive ? (
                     <div
                       className="overflow-hidden rounded-[1.75rem] border border-red-200 bg-gradient-to-b from-red-50 via-white to-zinc-50 p-5 text-center shadow-[0_18px_42px_rgba(229,9,20,0.12)]"
                       role="status"
@@ -6607,6 +6712,30 @@ function CustomerView({
                         icon={Clipboard}
                         title="أكمل تسجيل الدخول"
                         text="انسخ الرمز أو افتح رابط الموافقة فوراً لإتمام تسجيل الدخول في نتفليكس."
+                        theme={theme}
+                      />
+                    </>
+                  ) : service === "osn" ? (
+                    <>
+                      <StepCard
+                        step="Step 1"
+                        icon={Tv}
+                        title="افتح تطبيق OSN"
+                        text="افتح تطبيق OSN أو الموقع الرسمي على جهازك."
+                        theme={theme}
+                      />
+                      <StepCard
+                        step="Step 2"
+                        icon={Mail}
+                        title="أدخل البريد الإلكتروني"
+                        text="انسخ البريد الإلكتروني الموضح في بيانات تسجيل الدخول وأدخله في OSN."
+                        theme={theme}
+                      />
+                      <StepCard
+                        step="Step 3"
+                        icon={KeyRound}
+                        title="أدخل كلمة المرور"
+                        text="انسخ كلمة المرور ثم أكمل تسجيل الدخول إلى الحساب."
                         theme={theme}
                       />
                     </>
