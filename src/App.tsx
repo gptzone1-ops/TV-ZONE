@@ -1935,11 +1935,8 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
 
     const linksText = [...accountLinks]
       .sort((first, second) => first.profile_name.localeCompare(second.profile_name, "en", { numeric: true }))
-      .map(
-        (link) =>
-          `للحصول على بيانات الحساب وكود التفعيل افتح الرابط التالي:\n${getCustomerUrl(link)}\n\n----------------------------------`,
-      )
-      .join("\n\n");
+      .map((link) => `للحصول على بيانات الحساب ادخل على الرابط التالي:\n${getCustomerUrl(link)}`)
+      .join("\n");
 
     try {
       await writeClipboardText(linksText);
