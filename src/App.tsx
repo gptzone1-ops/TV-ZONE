@@ -30,6 +30,7 @@ import {
   SlidersHorizontal,
   Smartphone,
   Sparkles,
+  TriangleAlert,
   UserRound,
   Users,
   Trash2,
@@ -5209,6 +5210,9 @@ function CustomerView({
   const [agreePreRequest, setAgreePreRequest] = useState(false);
   const [showTvRequestModal, setShowTvRequestModal] = useState(false);
   const [agreeTvRequest, setAgreeTvRequest] = useState(false);
+  const [showProfilePinWarning, setShowProfilePinWarning] = useState(false);
+  const [agreeProfilePinWarning, setAgreeProfilePinWarning] = useState(false);
+  const [profilePinRevealed, setProfilePinRevealed] = useState(false);
   const [tvRequestState, setTvRequestState] = useState<"idle" | "searching" | "ready" | "failed" | "expired">("idle");
   const [tvSearchDeadlineAt, setTvSearchDeadlineAt] = useState<number | null>(null);
   const [tvDisplayExpiresAt, setTvDisplayExpiresAt] = useState<number | null>(null);
@@ -5293,6 +5297,9 @@ function CustomerView({
     setDeviceView(selectedDevice === "mobile" || selectedDevice === "screen" ? selectedDevice : null);
     setPendingDeviceView(null);
     setAgreeDeviceChoice(false);
+    setShowProfilePinWarning(false);
+    setAgreeProfilePinWarning(false);
+    setProfilePinRevealed(false);
   }, [link?.id, link?.selected_device]);
 
   useEffect(() => {
@@ -5302,13 +5309,14 @@ function CustomerView({
         showReminder ||
         Boolean(pendingDeviceView) ||
         showTvRequestModal ||
+        showProfilePinWarning ||
         showExtraCreditModal);
     const previous = document.body.style.overflow;
     if (shouldLock) document.body.style.overflow = "hidden";
     return () => {
       document.body.style.overflow = previous;
     };
-  }, [link?.accounts?.account_type, showDisclaimer, showReminder, pendingDeviceView, showTvRequestModal, showExtraCreditModal]);
+  }, [link?.accounts?.account_type, showDisclaimer, showReminder, pendingDeviceView, showTvRequestModal, showProfilePinWarning, showExtraCreditModal]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNowTick(Date.now()), 1000);
@@ -6537,7 +6545,30 @@ function CustomerView({
                 <div className={cn("grid gap-4", service === "netflix" && "sm:grid-cols-2")}>
                   <ProfileMiniCard label="اسم الملف" value={`ملف ${link.profile_label}`} icon={UserRound} setToast={setToast} theme={theme} />
                   {service === "netflix" && (
-                    <ProfileMiniCard label="رمز الملف" value={getProfilePin(link)} icon={LockKeyhole} setToast={setToast} theme={theme} ltr />
+                    profilePinRevealed ? (
+                      <ProfileMiniCard label="رمز الملف" value={getProfilePin(link)} icon={LockKeyhole} setToast={setToast} theme={theme} ltr />
+                    ) : (
+                      <article className="rounded-3xl border border-[#E0D4F8] bg-gradient-to-b from-white to-[#F8F4FF] p-4 shadow-inner">
+                        <div className={cn("mb-4 flex items-center justify-center gap-2 text-sm font-black", theme.accent)}>
+                          <LockKeyhole className="h-5 w-5" />
+                          رمز الملف
+                        </div>
+                        <div className="mb-4 flex h-10 items-center justify-center gap-2 rounded-xl bg-[#EEE7F8] text-zinc-400" aria-label="رمز الملف مخفي">
+                          <span className="text-xl font-black tracking-[0.35em]">••••</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setAgreeProfilePinWarning(false);
+                            setShowProfilePinWarning(true);
+                          }}
+                          className="flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#8B35F5] px-4 text-sm font-black text-white shadow-[0_12px_28px_rgba(139,53,245,0.24)] transition hover:-translate-y-0.5 hover:bg-[#7626DD]"
+                        >
+                          <Eye className="h-4 w-4" />
+                          اضغط لإظهار الرمز السري للملف
+                        </button>
+                      </article>
+                    )
                   )}
                 </div>
               </section>
@@ -6636,6 +6667,55 @@ function CustomerView({
                 setToast({ label: "تمت الموافقة، يمكنك الآن متابعة بيانات الحساب.", at: Date.now() });
               }}
             />
+          )}
+
+          {showProfilePinWarning && (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center bg-zinc-950/65 p-4 backdrop-blur-sm" dir="rtl" role="dialog" aria-modal="true" aria-labelledby="profile-pin-warning-title">
+              <div className="w-full max-w-lg rounded-[2rem] border border-amber-200 bg-white p-5 shadow-2xl md:p-7">
+                <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-3xl bg-amber-100 text-amber-600 shadow-[0_14px_35px_rgba(217,119,6,0.20)]">
+                  <TriangleAlert className="h-11 w-11" />
+                </div>
+                <h2 id="profile-pin-warning-title" className="mt-5 text-center text-2xl font-black text-zinc-950 md:text-3xl">
+                  تحذير هام جداً
+                </h2>
+                <p className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm font-black leading-8 text-zinc-900">
+                  يمنع منعاً باتاً تغيير اسم الملف الخاص بك أو تعديل الرقم السري (PIN). مخالفة هذا الشروط تؤدي إلى إخراجك فوراً ومباشرة من الحساب وإلغاء اشتراكك نهائياً دون أي تعويض أو استرداد للمبلغ.
+                </p>
+                <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-2xl border border-[#E0D4F8] bg-[#FAF8FD] p-4 text-sm font-black leading-7 text-zinc-800">
+                  <input
+                    type="checkbox"
+                    checked={agreeProfilePinWarning}
+                    onChange={(event) => setAgreeProfilePinWarning(event.target.checked)}
+                    className="mt-1 h-5 w-5 shrink-0 accent-[#8B35F5]"
+                  />
+                  <span>أقر وأتعهد بعدم تغيير اسم الملف أو الرقم السري والتزام الشروط.</span>
+                </label>
+                <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowProfilePinWarning(false);
+                      setAgreeProfilePinWarning(false);
+                    }}
+                    className="h-12 rounded-2xl border border-zinc-200 bg-white px-4 text-sm font-black text-zinc-600 transition hover:bg-zinc-50"
+                  >
+                    إلغاء
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!agreeProfilePinWarning}
+                    onClick={() => {
+                      setProfilePinRevealed(true);
+                      setShowProfilePinWarning(false);
+                      setAgreeProfilePinWarning(false);
+                    }}
+                    className="h-12 rounded-2xl bg-[#8B35F5] px-4 text-sm font-black text-white shadow-[0_12px_28px_rgba(139,53,245,0.24)] transition hover:bg-[#7626DD] disabled:cursor-not-allowed disabled:opacity-45"
+                  >
+                    متابعة
+                  </button>
+                </div>
+              </div>
+            </div>
           )}
 
           {showExtraCreditModal && link && (
