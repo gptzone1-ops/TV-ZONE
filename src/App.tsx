@@ -1935,12 +1935,15 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
 
     const linksText = [...accountLinks]
       .sort((first, second) => first.profile_name.localeCompare(second.profile_name, "en", { numeric: true }))
-      .map(getCustomerUrl)
-      .join("\n");
+      .map(
+        (link) =>
+          `للحصول على بيانات الحساب وكود التفعيل افتح الرابط التالي:\n${getCustomerUrl(link)}\n\n----------------------------------`,
+      )
+      .join("\n\n");
 
     try {
       await writeClipboardText(linksText);
-      setToast({ label: `تم نسخ جميع الروابط بنجاح (${accountLinks.length} روابط)`, at: Date.now() });
+      setToast({ label: "تم نسخ جميع الروابط بالتنسيق الإرشادي بنجاح", at: Date.now() });
     } catch (error) {
       console.error("Customer links bulk copy failed:", error);
       setToast({ label: "تعذر نسخ الروابط، حاول مرة أخرى", at: Date.now(), tone: "error" });
