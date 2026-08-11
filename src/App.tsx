@@ -48,6 +48,7 @@ import {
 import { hasSupabaseConfig, supabase } from "./lib/supabase";
 import type {
   AccountType,
+  CodeFetchMethod,
   CompensationDistribution,
   CompensationRequest,
   CustomerLink,
@@ -71,6 +72,7 @@ type AccountCreateForm = {
   password: string;
   account_type: AccountType;
   supplier_code_url?: string;
+  code_fetch_method?: CodeFetchMethod;
   compensation_tutorial_url?: string;
   compensation_distribution?: CompensationDistribution;
 };
@@ -125,7 +127,7 @@ const duplicateEmailMessage = "عفواً، هذا البريد الإلكترو
 const duplicateEmailSaveMessage = duplicateEmailMessage;
 const duplicateProfileMessage = (profileName: string) => `هذا الملف (${profileName}) مسجل مسبقاً لهذا الحساب`;
 const emptyEmailMessage = "أدخل البريد الإلكتروني أولاً";
-const customerAccountPublicSelect = "*,accounts(id,email,use_automated_code,supplier_code_url,compensation_tutorial_url,verification_code,verification_code_received_at,service_type,account_type,compensation_distribution,expires_at,created_at,email_provider,imap_enabled,normal_client_layout,hide_password_from_client)";
+const customerAccountPublicSelect = "*,accounts(id,email,use_automated_code,supplier_code_url,code_fetch_method,compensation_tutorial_url,verification_code,verification_code_received_at,service_type,account_type,compensation_distribution,expires_at,created_at,email_provider,imap_enabled,normal_client_layout,hide_password_from_client)";
 const legacyCustomerAccountSelect = "*,accounts(id,email,password,use_automated_code,supplier_code_url,compensation_tutorial_url,verification_code,verification_code_received_at,service_type,account_type,compensation_distribution,expires_at,created_at,email_provider,imap_enabled,normal_client_layout)";
 
 const serviceThemes: Record<ServiceType, ServiceTheme> = {
@@ -225,8 +227,10 @@ async function loadCustomerLinkRecord(column: "short_id" | "uuid" | "id", value:
     return hydrateCustomerLinkPassword(primaryResult.data);
   }
 
-  const missingVisibilityColumn = String(primaryResult.error?.message || "").includes("hide_password_from_client");
-  if (!missingVisibilityColumn) {
+  const missingNewPublicColumn = ["hide_password_from_client", "code_fetch_method"].some((column) =>
+    String(primaryResult.error?.message || "").includes(column),
+  );
+  if (!missingNewPublicColumn) {
     if (primaryResult.error) console.error("Supabase customer link loading error:", primaryResult.error);
     return null;
   }
@@ -1295,11 +1299,21 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
   }
 
   async function addAccount(form: AccountCreateForm): Promise<AccountFormResult> {
+    const allowedNewAccountTypes: AccountType[] = ["private", "shared"];
+    if (!allowedNewAccountTypes.includes(form.account_type)) {
+      const error = "إنشاء الحسابات الجديدة متاح للنوع الخاص أو المشترك فقط.";
+      setToast({ label: error, at: Date.now(), tone: "error" });
+      return { ok: false, error };
+    }
+
     const expires_at = defaultExpiryDate();
     let slots = buildProfileSlots(form.account_type, selectedService, form.compensation_distribution);
     const normalizedEmail = normalizeEmail(form.email);
     let temporaryShortId: string | null = null;
     const hidePasswordFromClient = selectedService === "netflix" && (form.account_type === "private" || form.account_type === "shared");
+    const codeFetchMethod: CodeFetchMethod | null = selectedService === "netflix" && (form.account_type === "private" || form.account_type === "shared")
+      ? form.code_fetch_method || "auto_fetch"
+      : null;
     const expectedNewLinks = selectedService === "netflix" && form.account_type === "private"
       ? 5
       : selectedService === "netflix" && form.account_type === "shared"
@@ -1338,6 +1352,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       password: form.password,
       account_type: form.account_type,
       supplier_code_url: form.supplier_code_url,
+      code_fetch_method: codeFetchMethod,
       compensation_tutorial_url: form.account_type === "compensation" ? form.compensation_tutorial_url || null : null,
       temporary_short_id: temporaryShortId,
       email_provider: "none",
@@ -1347,7 +1362,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       compensation_distribution: form.account_type === "compensation" ? form.compensation_distribution : null,
       expires_at,
       service_type: selectedService,
-      use_automated_code: form.account_type !== "compensation",
+      use_automated_code: form.account_type !== "compensation" && codeFetchMethod !== "external_link",
       created_at: new Date().toISOString(),
     };
     let optimisticAccountVisible = true;
@@ -1414,7 +1429,8 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
           email: normalizedEmail,
           expires_at,
           service_type: selectedService,
-          use_automated_code: form.account_type !== "temporary" && form.account_type !== "compensation",
+          use_automated_code: form.account_type !== "temporary" && form.account_type !== "compensation" && codeFetchMethod !== "external_link",
+          code_fetch_method: codeFetchMethod,
           temporary_short_id: temporaryShortId,
           email_provider: "none",
           imap_enabled: false,
@@ -1423,7 +1439,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
           compensation_distribution: form.account_type === "compensation" ? form.compensation_distribution : null,
           compensation_tutorial_url: form.account_type === "compensation" ? form.compensation_tutorial_url || null : null,
         })
-        .select("id,email,password,account_type,compensation_distribution,compensation_tutorial_url,expires_at,created_at,service_type,use_automated_code,supplier_code_url,temporary_short_id,email_provider,imap_enabled,normal_client_layout,hide_password_from_client")
+        .select("id,email,password,account_type,compensation_distribution,compensation_tutorial_url,expires_at,created_at,service_type,use_automated_code,supplier_code_url,code_fetch_method,temporary_short_id,email_provider,imap_enabled,normal_client_layout,hide_password_from_client")
         .single();
 
       if (accountError) throw accountError;
@@ -4017,6 +4033,9 @@ function AccountForm({
   const [email, setEmail] = useState(initialAccount?.email || "");
   const [password, setPassword] = useState(initialAccount?.password || "");
   const [supplierCodeUrl, setSupplierCodeUrl] = useState(initialAccount?.supplier_code_url || "");
+  const [externalCodeLinkEnabled, setExternalCodeLinkEnabled] = useState(
+    initialAccount?.code_fetch_method === "external_link",
+  );
   const [compensationTutorialUrl, setCompensationTutorialUrl] = useState(initialAccount?.compensation_tutorial_url || "");
   const [formError, setFormError] = useState("");
   const [showCompensationDistribution, setShowCompensationDistribution] = useState(false);
@@ -4028,9 +4047,19 @@ function AccountForm({
     setFormError("");
     const supplier_code_url = supplierCodeUrl.trim() || undefined;
     const cleanEmail = normalizeEmail(email);
+    const creatingExternalLink = !editing && service === "netflix" && externalCodeLinkEnabled;
 
     if (!cleanEmail) {
       setFormError(emptyEmailMessage);
+      return;
+    }
+
+    if (creatingExternalLink && !supplier_code_url) {
+      setFormError("أدخل رابط جلب الكود الخارجي قبل إضافة الحساب.");
+      return;
+    }
+    if (creatingExternalLink && supplier_code_url && !isValidHttpUrl(supplier_code_url)) {
+      setFormError("رابط جلب الكود غير صحيح. يجب أن يبدأ بـ https:// أو http://.");
       return;
     }
 
@@ -4073,13 +4102,15 @@ function AccountForm({
 
   function submitNewAccount(compensationDistribution?: CompensationDistribution) {
     const cleanEmail = normalizeEmail(email);
-    const supplier_code_url = supplierCodeUrl.trim() || undefined;
+    const useExternalLink = service === "netflix" && externalCodeLinkEnabled;
+    const supplier_code_url = useExternalLink ? supplierCodeUrl.trim() || undefined : undefined;
     onClose();
     void onAdd({
       email: cleanEmail,
       password,
       account_type: accountType,
       supplier_code_url,
+      code_fetch_method: service === "netflix" ? (useExternalLink ? "external_link" : "auto_fetch") : undefined,
       compensation_tutorial_url: accountType === "compensation" ? compensationTutorialUrl.trim() || undefined : undefined,
       compensation_distribution: accountType === "compensation" ? compensationDistribution : undefined,
     });
@@ -4128,9 +4159,7 @@ function AccountForm({
           )}>
             {(editing
               ? ([accountType] as AccountType[])
-              : service === "netflix"
-                ? (["private", "shared", "compensation"] as AccountType[])
-                : (["private", "shared"] as AccountType[])
+              : (["private", "shared"] as AccountType[])
             ).map((type) => (
               <button
                 key={type}
@@ -4176,6 +4205,41 @@ function AccountForm({
           </Field>
         </div>
 
+        {!editing && service === "netflix" && (
+          <div className="mb-5 rounded-2xl border border-[#E0D0FB] bg-[#F8F4FF] p-4">
+            <div className="flex items-center justify-between gap-4">
+              <div className="min-w-0">
+                <p className="text-sm font-black text-zinc-800">رابط جلب الكود الخارجي</p>
+                <p className="mt-1 text-xs font-bold leading-6 text-zinc-500">
+                  {externalCodeLinkEnabled
+                    ? "سيتم تحويل العميل مباشرة إلى الرابط الخارجي عند طلب الكود."
+                    : "سيستخدم الحساب نظام جلب كود التحقق الآلي المعتاد."}
+                </p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={externalCodeLinkEnabled}
+                onClick={() => {
+                  setExternalCodeLinkEnabled((current) => !current);
+                  setFormError("");
+                }}
+                className={cn(
+                  "relative h-8 w-14 shrink-0 rounded-full transition-colors duration-200",
+                  externalCodeLinkEnabled ? "bg-[#8B35F5]" : "bg-zinc-300",
+                )}
+              >
+                <span
+                  className={cn(
+                    "absolute top-1 h-6 w-6 rounded-full bg-white shadow-md transition-all duration-200",
+                    externalCodeLinkEnabled ? "right-7" : "right-1",
+                  )}
+                />
+              </button>
+            </div>
+          </div>
+        )}
+
         {formError && (
           <p className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-black text-rose-700">
             {formError}
@@ -4184,10 +4248,10 @@ function AccountForm({
 
         {accountType !== "temporary" && (
           <>
-            {(editing || accountType === "compensation") && (
-              <Field icon={Link2} label="رابط جلب الأكواد">
+            {(editing || (!editing && service === "netflix" && externalCodeLinkEnabled)) && (
+              <Field icon={Link2} label={editing ? "رابط جلب الأكواد" : "رابط جلب الكود الخارجي"}>
                 <input
-                  required={accountType === "compensation"}
+                  required={(!editing && externalCodeLinkEnabled) || accountType === "compensation"}
                   value={supplierCodeUrl}
                   onChange={(event) => setSupplierCodeUrl(event.target.value)}
                   placeholder="https://example.com"
@@ -4195,7 +4259,9 @@ function AccountForm({
                   dir="ltr"
                 />
                 <p className="mt-2 text-[11px] font-bold text-zinc-400">
-                  {accountType === "compensation"
+                  {!editing && externalCodeLinkEnabled
+                    ? "سيظهر للعميل زر جلب الكود، وعند الضغط عليه يفتح هذا الرابط في تبويب جديد."
+                    : accountType === "compensation"
                     ? "سيظهر للعميل كزر جلب الكود ويفتح هذا الرابط مباشرة."
                     : "خاص بالمسؤول فقط ولا يظهر في صفحة العميل."}
                 </p>
@@ -5282,6 +5348,8 @@ function CustomerView({
       codeDisplayExpiresAt > nowTick,
   );
   const automatedCodeEnabled = account?.use_automated_code !== false;
+  const usesExternalCodeLink = account?.code_fetch_method === "external_link";
+  const externalCodeUrl = usesExternalCodeLink ? String(account?.supplier_code_url || "").trim() : "";
   const forwardedEmailCodeEnabled = account?.imap_enabled === true && account?.email_provider === "outlook";
   const codeRequestLimit = Math.max(0, link?.code_request_limit ?? 1);
   const codeRequestedCount = Math.max(0, link?.code_requested_count ?? 0);
@@ -6106,6 +6174,35 @@ function CustomerView({
                         <Clipboard className="h-5 w-5" />
                         رفع طلب تعويض ومتابعته
                       </a>
+                    </div>
+                  ) : usesExternalCodeLink ? (
+                    <div className="rounded-[1.75rem] border border-[#E0D4F8] bg-gradient-to-l from-white to-[#F7F2FF] p-4 shadow-card">
+                      <div className="flex items-center gap-4">
+                        <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-[#F0E7FF] text-[#8B35F5]">
+                          <ExternalLink className="h-7 w-7" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-lg font-black">جلب الكود عبر الرابط الخارجي</p>
+                          <p className="mt-1 text-xs font-bold leading-6 text-zinc-500">
+                            اضغط على الزر للانتقال مباشرة إلى صفحة جلب الكود الخاصة بهذا الحساب.
+                          </p>
+                        </div>
+                      </div>
+                      {externalCodeUrl ? (
+                        <a
+                          href={externalCodeUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="mt-4 flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#8B35F5] px-4 text-sm font-black text-white shadow-[0_14px_32px_rgba(139,53,245,0.24)] transition hover:-translate-y-0.5 hover:bg-[#7626DD]"
+                        >
+                          <ExternalLink className="h-5 w-5" />
+                          جلب الكود
+                        </a>
+                      ) : (
+                        <p className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-center text-sm font-black text-rose-700">
+                          رابط جلب الكود غير متوفر حالياً، يرجى التواصل مع المتجر.
+                        </p>
+                      )}
                     </div>
                   ) : !automatedCodeEnabled ? (
                     <div className="rounded-[1.75rem] border border-[#E0D4F8] bg-gradient-to-l from-white to-[#F7F2FF] p-4 shadow-card">

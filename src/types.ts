@@ -1,6 +1,7 @@
 export type AccountType = "private" | "shared" | "temporary" | "compensation";
 export type CompensationDistribution = "private" | "shared";
 export type ServiceType = "netflix" | "shahid";
+export type CodeFetchMethod = "auto_fetch" | "external_link";
 export type ExtraCreditReason =
   | "كود خاطئ"
   | "استبدال الجهاز أو الدخول بجهاز آخر"
@@ -19,6 +20,7 @@ export type NetflixAccount = {
   password: string;
   use_automated_code?: boolean | null;
   supplier_code_url?: string | null;
+  code_fetch_method?: CodeFetchMethod | null;
   temporary_short_id?: string | null;
   email_provider?: "none" | "outlook" | null;
   imap_enabled?: boolean | null;
