@@ -99,6 +99,7 @@ type ServiceTheme = {
 };
 
 const defaultCustomerVideoUrl = "https://www.youtube.com/embed/ALEeqFXBWjQ?playsinline=1&rel=0&modestbranding=1";
+const externalCodeCustomerVideoUrl = "https://www.youtube.com/embed/lYq_HNApRk4?playsinline=1&rel=0&modestbranding=1";
 const videoUrl = import.meta.env.VITE_CUSTOMER_VIDEO_URL || defaultCustomerVideoUrl;
 const defaultCompensationTutorialUrl = "https://www.youtube.com/embed/ga805aqXGH4?playsinline=1&rel=0&modestbranding=1";
 const netflixServiceOutage = ["1", "true", "yes", "on"].includes(
@@ -5350,6 +5351,7 @@ function CustomerView({
   const automatedCodeEnabled = account?.use_automated_code !== false;
   const usesExternalCodeLink = account?.code_fetch_method === "external_link";
   const externalCodeUrl = usesExternalCodeLink ? String(account?.supplier_code_url || "").trim() : "";
+  const customerTutorialVideoUrl = usesExternalCodeLink ? externalCodeCustomerVideoUrl : videoUrl;
   const forwardedEmailCodeEnabled = account?.imap_enabled === true && account?.email_provider === "outlook";
   const codeRequestLimit = Math.max(0, link?.code_request_limit ?? 1);
   const codeRequestedCount = Math.max(0, link?.code_requested_count ?? 0);
@@ -6113,10 +6115,10 @@ function CustomerView({
             <div className="space-y-6">
               <section className="animate-rise overflow-hidden rounded-[2rem] bg-white p-4 shadow-video-glow md:p-5">
                 <div className="flex justify-center overflow-hidden rounded-[1.6rem] bg-zinc-950/95">
-                  {videoUrl ? (
+                  {customerTutorialVideoUrl ? (
                     <iframe
                       className="aspect-[9/16] w-full max-w-[360px] bg-zinc-950"
-                      src={videoUrl}
+                      src={customerTutorialVideoUrl}
                       title="شرح طريقة الدخول"
                       allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
                       allowFullScreen
