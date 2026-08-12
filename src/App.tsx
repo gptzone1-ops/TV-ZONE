@@ -5429,6 +5429,10 @@ function CustomerView({
   const theme = serviceThemes[service];
   const customerCode = String(link?.link_number ?? link?.short_id ?? identifier);
   const supportEmail = account?.email || "غير متوفر";
+  const netflixCodeSupportMessage = `مرحباً، أرغب بالحصول على كود التفعيل للحساب التالي:
+- البريد الإلكتروني: ${supportEmail}
+- رمز الطلب/العميل: ${customerCode}`;
+  const netflixCodeSupportWhatsAppUrl = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(netflixCodeSupportMessage)}`;
   const unavailableResultWhatsAppUrl = buildSupportWhatsAppUrl({
     issue: "unavailable",
     email: supportEmail,
@@ -6250,7 +6254,7 @@ function CustomerView({
 
                 <div className="space-y-5">
                   <LoginCopyCard label="البريد الإلكتروني" value={account.email} icon={Mail} setToast={setToast} theme={theme} />
-                  {normalClientLayout && account.hide_password_from_client !== true && account.password && (
+                  {service !== "netflix" && normalClientLayout && account.hide_password_from_client !== true && account.password && (
                     <LoginCopyCard label="كلمة المرور" value={account.password} icon={KeyRound} setToast={setToast} theme={theme} />
                   )}
                   {!normalClientLayout && link.client_code && <CompensationCodeCard code={link.client_code} showPageLink />}
@@ -6267,6 +6271,29 @@ function CustomerView({
                           </p>
                         </div>
                       </div>
+                    </div>
+                  ) : service === "netflix" ? (
+                    <div className="rounded-[1.75rem] border border-emerald-200 bg-gradient-to-l from-white to-emerald-50 p-4 shadow-card">
+                      <div className="flex items-center gap-4">
+                        <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-700">
+                          <WhatsAppLogo className="h-7 w-7" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-lg font-black text-zinc-950">طلب كود تفعيل نتفليكس</p>
+                          <p className="mt-1 text-xs font-bold leading-6 text-zinc-600">
+                            بعد إدخال البريد في نتفليكس وطلب الكود، تواصل مع الدعم وسيتم تجهيز الكود الخاص بحسابك.
+                          </p>
+                        </div>
+                      </div>
+                      <a
+                        href={netflixCodeSupportWhatsAppUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-4 flex min-h-14 w-full items-center justify-center gap-2 rounded-2xl bg-[#16A34A] px-4 text-center text-base font-black text-white shadow-[0_14px_32px_rgba(22,163,74,0.24)] transition hover:-translate-y-0.5 hover:bg-[#12843D]"
+                      >
+                        <WhatsAppLogo className="h-5 w-5 shrink-0" />
+                        للحصول على الكود تواصل مع الدعم الفني على الواتس
+                      </a>
                     </div>
                   ) : serviceOutageActive ? (
                     <div
@@ -6702,16 +6729,16 @@ function CustomerView({
                       />
                       <StepCard
                         step="Step 3"
-                        icon={KeyRound}
-                        title="اطلب الرمز أو الرابط"
-                        text="اضغط على زر طلب الرمز، أو اطلب رابط الموافقة إذا كان جهازك شاشة أو سوني."
+                        icon={WhatsAppLogo}
+                        title="تواصل مع الدعم"
+                        text="للحصول على الكود تواصل عبر الدعم من زر الواتساب الموجود في بيانات تسجيل الدخول."
                         theme={theme}
                       />
                       <StepCard
                         step="Step 4"
                         icon={Clipboard}
                         title="أكمل تسجيل الدخول"
-                        text="انسخ الرمز أو افتح رابط الموافقة فوراً لإتمام تسجيل الدخول في نتفليكس."
+                        text="بعد استلام الكود من الدعم، أدخله فوراً في نتفليكس لإتمام تسجيل الدخول."
                         theme={theme}
                       />
                     </>
