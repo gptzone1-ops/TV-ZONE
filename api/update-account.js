@@ -90,11 +90,27 @@ export default async function handler(req, res) {
     existingAccount.email,
     email,
   );
+  const hasCodeFetchMethod = Object.prototype.hasOwnProperty.call(req.body || {}, "code_fetch_method");
+  const codeFetchMethod = hasCodeFetchMethod ? String(req.body?.code_fetch_method || "").trim() : null;
+  if (hasCodeFetchMethod && !["auto_fetch", "external_link"].includes(codeFetchMethod)) {
+    return send(res, 400, { success: false, error: "invalid_code_fetch_method" });
+  }
+  if (codeFetchMethod === "external_link" && !supplierCodeUrl) {
+    return send(res, 400, { success: false, error: "external_code_url_required" });
+  }
+  if (codeFetchMethod === "external_link" && normalizeOptionalHttpUrl(supplierCodeUrl) === undefined) {
+    return send(res, 400, { success: false, error: "invalid_external_code_url" });
+  }
   const updatePayload = {
     email,
     password,
     supplier_code_url: supplierCodeUrl,
   };
+
+  if (hasCodeFetchMethod) {
+    updatePayload.code_fetch_method = codeFetchMethod;
+    updatePayload.use_automated_code = codeFetchMethod !== "external_link";
+  }
 
   if (Object.prototype.hasOwnProperty.call(req.body || {}, "compensation_tutorial_url")) {
     const tutorialUrl = normalizeOptionalHttpUrl(req.body?.compensation_tutorial_url);
@@ -126,11 +142,18 @@ export default async function handler(req, res) {
     return send(res, 409, { success: false, error: "account_update_returned_no_row" });
   }
 
-  const { data: updatedLinks, error: linksUpdateError } = await supabase
+  const emailChanged = normalizeEmail(existingAccount.email) !== email;
+  const linksQuery = supabase
     .from("customer_links")
-    .update({ email })
-    .eq("account_id", accountId)
-    .select("*");
+    .select("*")
+    .eq("account_id", accountId);
+  const { data: updatedLinks, error: linksUpdateError } = emailChanged
+    ? await supabase
+        .from("customer_links")
+        .update({ email })
+        .eq("account_id", accountId)
+        .select("*")
+    : await linksQuery;
 
   if (linksUpdateError) {
     console.error("Customer link email update failed:", linksUpdateError);
@@ -140,6 +163,8 @@ export default async function handler(req, res) {
         email: existingAccount.email,
         password: existingAccount.password,
         supplier_code_url: existingAccount.supplier_code_url,
+        code_fetch_method: existingAccount.code_fetch_method,
+        use_automated_code: existingAccount.use_automated_code,
         compensation_tutorial_url: existingAccount.compensation_tutorial_url,
         created_at: existingAccount.created_at,
         expires_at: existingAccount.expires_at,

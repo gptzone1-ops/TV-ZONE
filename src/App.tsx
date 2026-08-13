@@ -1652,7 +1652,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
 
   async function updateAccount(
     accountId: string,
-    form: { email: string; password: string; supplier_code_url?: string; compensation_tutorial_url?: string | null; created_at?: string; expires_at?: string },
+    form: { email: string; password: string; supplier_code_url?: string | null; code_fetch_method?: CodeFetchMethod; compensation_tutorial_url?: string | null; created_at?: string; expires_at?: string },
   ): Promise<AccountFormResult> {
     const normalizedEmail = normalizeEmail(form.email);
     const currentAccount = accounts.find((account) => account.id === accountId);
@@ -1697,6 +1697,10 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
                 ...form,
                 email: normalizedEmail,
                 supplier_code_url: syncedSupplierCodeUrl,
+                code_fetch_method: form.code_fetch_method ?? account.code_fetch_method,
+                use_automated_code: form.code_fetch_method
+                  ? form.code_fetch_method !== "external_link"
+                  : account.use_automated_code,
                 created_at: form.created_at || account.created_at,
                 expires_at: form.expires_at || account.expires_at,
               }
@@ -1723,6 +1727,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
           email: normalizedEmail,
           password: form.password,
           supplier_code_url: syncedSupplierCodeUrl,
+          code_fetch_method: form.code_fetch_method,
           compensation_tutorial_url: form.compensation_tutorial_url,
           created_at: form.created_at,
           expires_at: form.expires_at,
@@ -1759,7 +1764,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       });
 
       await loadData();
-      setToast({ label: "تم حفظ البريد وتحديث الرابط بنجاح", at: Date.now() });
+      setToast({ label: "تم حفظ إعدادات الحساب دون تغيير روابط العملاء", at: Date.now() });
       return true;
     } catch (error) {
       console.error("Account update request failed:", error);
@@ -4102,7 +4107,7 @@ function AccountForm({
   onAdd: (form: AccountCreateForm) => Promise<AccountFormResult>;
   onUpdate: (
     accountId: string,
-    form: { email: string; password: string; supplier_code_url?: string; compensation_tutorial_url?: string | null },
+    form: { email: string; password: string; supplier_code_url?: string | null; code_fetch_method?: CodeFetchMethod; compensation_tutorial_url?: string | null },
   ) => Promise<AccountFormResult>;
   loading: boolean;
   service: ServiceType;
@@ -4122,24 +4127,25 @@ function AccountForm({
   const [showCompensationDistribution, setShowCompensationDistribution] = useState(false);
   const calculatedExpiry = defaultExpiryDate();
   const theme = serviceThemes[service];
+  const canConfigureCodeFetch = service === "netflix" && (accountType === "private" || accountType === "shared");
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     setFormError("");
     const supplier_code_url = supplierCodeUrl.trim() || undefined;
     const cleanEmail = normalizeEmail(email);
-    const creatingExternalLink = !editing && service === "netflix" && externalCodeLinkEnabled;
+    const usingExternalLink = canConfigureCodeFetch && externalCodeLinkEnabled;
 
     if (!cleanEmail) {
       setFormError(emptyEmailMessage);
       return;
     }
 
-    if (creatingExternalLink && !supplier_code_url) {
-      setFormError("أدخل رابط جلب الكود الخارجي قبل إضافة الحساب.");
+    if (usingExternalLink && !supplier_code_url) {
+      setFormError("أدخل رابط جلب الكود الخارجي قبل حفظ الحساب.");
       return;
     }
-    if (creatingExternalLink && supplier_code_url && !isValidHttpUrl(supplier_code_url)) {
+    if (usingExternalLink && supplier_code_url && !isValidHttpUrl(supplier_code_url)) {
       setFormError("رابط جلب الكود غير صحيح. يجب أن يبدأ بـ https:// أو http://.");
       return;
     }
@@ -4170,7 +4176,8 @@ function AccountForm({
     const result = await onUpdate(initialAccount.id, {
       email: cleanEmail,
       password,
-      supplier_code_url,
+      supplier_code_url: canConfigureCodeFetch ? (usingExternalLink ? supplier_code_url : null) : supplier_code_url,
+      code_fetch_method: canConfigureCodeFetch ? (usingExternalLink ? "external_link" : "auto_fetch") : undefined,
       compensation_tutorial_url: accountType === "compensation" ? compensationTutorialUrl.trim() || null : undefined,
     });
 
@@ -4286,7 +4293,7 @@ function AccountForm({
           </Field>
         </div>
 
-        {!editing && service === "netflix" && (
+        {canConfigureCodeFetch && (
           <div className="mb-5 rounded-2xl border border-[#E0D0FB] bg-[#F8F4FF] p-4">
             <div className="flex items-center justify-between gap-4">
               <div className="min-w-0">
@@ -4294,7 +4301,7 @@ function AccountForm({
                 <p className="mt-1 text-xs font-bold leading-6 text-zinc-500">
                   {externalCodeLinkEnabled
                     ? "سيتم تحويل العميل مباشرة إلى الرابط الخارجي عند طلب الكود."
-                    : "سيستخدم الحساب نظام جلب كود التحقق الآلي المعتاد."}
+                    : "سيستخدم الحساب نظام جلب كود التحقق الافتراضي مع بقاء روابط العملاء الحالية."}
                 </p>
               </div>
               <button
@@ -4329,10 +4336,10 @@ function AccountForm({
 
         {accountType !== "temporary" && (
           <>
-            {(editing || (!editing && service === "netflix" && externalCodeLinkEnabled)) && (
-              <Field icon={Link2} label={editing ? "رابط جلب الأكواد" : "رابط جلب الكود الخارجي"}>
+            {((canConfigureCodeFetch && externalCodeLinkEnabled) || (!canConfigureCodeFetch && editing)) && (
+              <Field icon={Link2} label="رابط جلب الكود الخارجي">
                 <input
-                  required={(!editing && externalCodeLinkEnabled) || accountType === "compensation"}
+                  required={canConfigureCodeFetch && externalCodeLinkEnabled}
                   value={supplierCodeUrl}
                   onChange={(event) => setSupplierCodeUrl(event.target.value)}
                   placeholder="https://example.com"
@@ -4340,8 +4347,8 @@ function AccountForm({
                   dir="ltr"
                 />
                 <p className="mt-2 text-[11px] font-bold text-zinc-400">
-                  {!editing && externalCodeLinkEnabled
-                    ? "سيظهر للعميل زر جلب الكود، وعند الضغط عليه يفتح هذا الرابط في تبويب جديد."
+                  {canConfigureCodeFetch
+                    ? "سيظهر التغيير فور تحديث العميل لصفحته الحالية، دون إعادة توليد الرابط."
                     : accountType === "compensation"
                     ? "سيظهر للعميل كزر جلب الكود ويفتح هذا الرابط مباشرة."
                     : "خاص بالمسؤول فقط ولا يظهر في صفحة العميل."}
