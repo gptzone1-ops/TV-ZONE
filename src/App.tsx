@@ -1360,7 +1360,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     const expectedNewLinks = selectedService === "netflix" && form.account_type === "private"
       ? 5
       : selectedService === "netflix" && form.account_type === "shared"
-        ? 8
+        ? 10
         : null;
     const expectedCreatedLinks = expectedNewLinks ?? (
       selectedService === "osn"
@@ -1973,7 +1973,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     const expectedCount = account?.account_type === "private"
       ? accountService === "shahid" ? 4 : 5
       : account?.account_type === "shared"
-        ? accountService === "osn" ? 10 : 8
+        ? accountService === "shahid" ? 8 : 10
         : null;
     if (expectedCount !== null && accountLinks.length !== expectedCount) {
       console.error("Refusing to copy an incomplete customer link set:", {
@@ -4404,7 +4404,7 @@ function AccountForm({
                   : "سيتم إنشاء 10 روابط OSN مستقلة تلقائياً، رابطان لكل ملف."
               : accountType === "private"
                 ? "سيتم إنشاء 5 روابط تلقائياً."
-                : "سيتم إنشاء 8 روابط تلقائياً: رابطان لكل ملف من B إلى E، مع تجاوز الملف A."}
+                : "سيتم إنشاء 10 روابط تلقائياً: رابطان مستقلان لكل ملف من A إلى E."}
           </p>
         )}
 
@@ -4541,7 +4541,7 @@ function AccountDetail({
       ? account.account_type === "private" ? 4 : 8
       : service === "osn"
         ? account.account_type === "private" ? 5 : 10
-      : account.account_type === "private" ? 5 : 8;
+      : account.account_type === "private" ? 5 : 10;
   const generatedLimit = links.length || fallbackGeneratedLimit;
   const [selectedLinkIds, setSelectedLinkIds] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<"customers" | "twofa">("customers");

@@ -1,4 +1,4 @@
--- Atomic creation for NEW Netflix private/shared accounts only.
+-- Atomic creation for NEW Netflix private/shared accounts only (5 private / 10 shared).
 -- This function never updates or deletes existing customer links.
 
 create extension if not exists pgcrypto;
@@ -84,7 +84,7 @@ begin
     raise exception 'invalid_links_payload';
   end if;
 
-  expected_count := case selected_account.account_type when 'private' then 5 else 8 end;
+  expected_count := case selected_account.account_type when 'private' then 5 else 10 end;
   if jsonb_array_length(p_links) <> expected_count then
     raise exception 'invalid_links_count: expected %, received %', expected_count, jsonb_array_length(p_links);
   end if;
@@ -103,9 +103,9 @@ begin
        or (selected_account.account_type = 'private' and item.value->>'profile_label' <>
           (array['A','B','C','D','E'])[item.position::integer])
        or (selected_account.account_type = 'shared' and item.value->>'profile_name' <>
-          (array['B1','B2','C1','C2','D1','D2','E1','E2'])[item.position::integer])
+          (array['A1','A2','B1','B2','C1','C2','D1','D2','E1','E2'])[item.position::integer])
        or (selected_account.account_type = 'shared' and item.value->>'profile_label' <>
-          (array['B','B','C','C','D','D','E','E'])[item.position::integer])
+          (array['A','A','B','B','C','C','D','D','E','E'])[item.position::integer])
   ) then
     raise exception 'invalid_links_structure';
   end if;

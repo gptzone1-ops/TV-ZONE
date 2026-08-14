@@ -98,8 +98,10 @@ export function buildProfileSlots(
   }
 
   if (accountType === "shared" && serviceType === "netflix") {
-    // Deliberately explicit: new shared accounts always have exactly B1..E2.
+    // Deliberately explicit: new shared accounts always have exactly A1..E2.
     return [
+      createNetflixSlot("A1", "A"),
+      createNetflixSlot("A2", "A"),
       createNetflixSlot("B1", "B"),
       createNetflixSlot("B2", "B"),
       createNetflixSlot("C1", "C"),
