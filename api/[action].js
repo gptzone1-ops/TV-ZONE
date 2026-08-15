@@ -1,6 +1,5 @@
 import adminCompensations from "../server/api/admin-compensations.js";
 import compensation from "../server/api/compensation.js";
-import createCustomerLinks from "../server/api/create-customer-links.js";
 import fetchImapCode from "../server/api/fetch-imap-code.js";
 import notifyExtraCredit from "../server/api/notify-extra-credit.js";
 import receiveCode from "../server/api/receive-code.js";
@@ -18,7 +17,6 @@ export const config = { maxDuration: 300 };
 const handlers = {
   "admin-compensations": adminCompensations,
   compensation,
-  "create-customer-links": createCustomerLinks,
   "fetch-imap-code": fetchImapCode,
   "notify-extra-credit": notifyExtraCredit,
   "receive-code": receiveCode,

@@ -1563,19 +1563,26 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
               links: slots,
             }),
           });
-          const result = (await response.json().catch(() => null)) as {
-            success?: boolean;
-            error?: string;
-            code?: string | null;
-            details?: string | null;
-            hint?: string | null;
-            links?: CustomerLink[];
-          } | null;
+          const responseText = await response.text();
+          const result = (() => {
+            try {
+              return JSON.parse(responseText) as {
+                success?: boolean;
+                error?: string;
+                code?: string | null;
+                details?: string | null;
+                hint?: string | null;
+                links?: CustomerLink[];
+              };
+            } catch {
+              return null;
+            }
+          })();
           if (!response.ok || !result?.success) {
             throw {
               code: result?.code || undefined,
-              message: result?.error || "strict_link_creation_failed",
-              details: result?.details || undefined,
+              message: result?.error || `create_customer_links_http_${response.status}`,
+              details: result?.details || responseText.slice(0, 300) || undefined,
               hint: result?.hint || undefined,
             };
           }
