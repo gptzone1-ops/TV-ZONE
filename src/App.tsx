@@ -379,13 +379,27 @@ function buildSupportWhatsAppUrl({
 }
 
 function isDuplicateEmailError(error: unknown) {
-  const supabaseError = error as { code?: string; message?: string; details?: string } | null;
+  const supabaseError = error as { code?: string; message?: string; details?: string; hint?: string } | null;
   const message = `${supabaseError?.message || ""} ${supabaseError?.details || ""}`.toLowerCase();
   return (
-    supabaseError?.code === "23505" ||
-    message.includes("unique constraint") ||
-    message.includes("duplicate key")
+    supabaseError?.code === "23505" &&
+    (message.includes("email") || message.includes("accounts_email"))
   );
+}
+
+function formatDatabaseError(error: unknown) {
+  const databaseError = error as {
+    code?: string;
+    message?: string;
+    details?: string;
+    hint?: string;
+  } | null;
+  const parts = [databaseError?.message, databaseError?.details, databaseError?.hint]
+    .map((part) => String(part || "").trim())
+    .filter(Boolean);
+  const uniqueParts = Array.from(new Set(parts));
+  const errorCode = String(databaseError?.code || "").trim();
+  return `${uniqueParts.join(" - ") || "خطأ غير معروف من قاعدة البيانات"}${errorCode ? ` (${errorCode})` : ""}`;
 }
 
 function isCustomerLinksEmailConstraintError(error: unknown) {
@@ -1554,6 +1568,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
             error?: string;
             code?: string | null;
             details?: string | null;
+            hint?: string | null;
             links?: CustomerLink[];
           } | null;
           if (!response.ok || !result?.success) {
@@ -1561,6 +1576,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
               code: result?.code || undefined,
               message: result?.error || "strict_link_creation_failed",
               details: result?.details || undefined,
+              hint: result?.hint || undefined,
             };
           }
           createdLinks = result.links || [];
@@ -1623,10 +1639,18 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
         return { ok: false, error: duplicateEmailSaveMessage };
       }
 
-      console.error("Supabase customer links insert error:", linksError);
+      const databaseError = formatDatabaseError(linksError);
+      console.error("Supabase customer links insert error:", {
+        error: linksError,
+        formattedError: databaseError,
+        accountId: account.id,
+        accountType: form.account_type,
+        expectedLinks: expectedCreatedLinks,
+      });
       setLoading(false);
-      setToast({ label: "تعذر حفظ الحساب والروابط، تمت إزالة الحساب المؤقت", at: Date.now(), tone: "error" });
-      return false;
+      const errorMessage = `تعذر حفظ روابط الحساب: ${databaseError}`;
+      setToast({ label: errorMessage, at: Date.now(), tone: "error" });
+      return { ok: false, error: errorMessage };
     }
 
     if (expectedCreatedLinks !== null && createdLinks.length !== expectedCreatedLinks) {

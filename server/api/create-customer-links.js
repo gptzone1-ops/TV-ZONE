@@ -34,6 +34,19 @@ function hasValidStructure(links, accountType) {
   ));
 }
 
+function sanitizeLinkRows(links, accountId, email) {
+  return links.map((link) => ({
+    account_id: accountId,
+    email,
+    uuid: String(link.uuid).trim(),
+    short_id: String(link.short_id).trim(),
+    service_type: "netflix",
+    profile_name: String(link.profile_name).trim(),
+    profile_label: String(link.profile_label).trim(),
+    profile_code: String(link.profile_code).trim(),
+  }));
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return send(res, 405, { success: false, error: "method_not_allowed" });
@@ -95,17 +108,9 @@ export default async function handler(req, res) {
   }
 
   // PostgREST sends this array as one INSERT statement, so all rows commit together.
-  const rows = links.map((link) => ({
-    account_id: accountId,
-    email,
-    uuid: link.uuid,
-    short_id: link.short_id,
-    service_type: "netflix",
-    profile_name: link.profile_name,
-    profile_label: link.profile_label,
-    profile_code: link.profile_code,
-    generation_version: 2,
-  }));
+  // Keep this payload compatible with databases that have not applied optional
+  // tracking migrations. Only established customer_links columns are inserted.
+  const rows = sanitizeLinkRows(links, accountId, email);
   const { data, error } = await supabase
     .from("customer_links")
     .insert(rows)
@@ -119,6 +124,7 @@ export default async function handler(req, res) {
       error: error.message || "link_creation_failed",
       code: error.code || null,
       details: error.details || null,
+      hint: error.hint || null,
     });
   }
 
