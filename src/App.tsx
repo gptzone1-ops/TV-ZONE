@@ -5580,11 +5580,11 @@ function CustomerView({
     const pendingTab = window.open("about:blank", "_blank");
     if (pendingTab) {
       pendingTab.opener = null;
-      pendingTab.document.title = "جاري فتح صفحة الكود";
-      pendingTab.document.body.innerHTML = '<div dir="rtl" style="font-family:Arial,sans-serif;text-align:center;padding:48px">جاري التحقق وفتح صفحة الكود...</div>';
     }
 
     setIsExternalCodeUsed(true);
+    setShowExternalCodeWarning(false);
+    setAgreeExternalCodeTerms(false);
     setExternalCodeSubmitting(true);
     setExternalCodeError(null);
     try {
@@ -5595,18 +5595,18 @@ function CustomerView({
       });
       const payload = await response.json().catch(() => null) as {
         success?: boolean;
+        url?: string;
         external_url?: string;
         used_at?: string;
         error?: string;
       } | null;
 
-      if (!response.ok || !payload?.success || !payload.external_url) {
+      const externalUrl = payload?.url || payload?.external_url;
+      if (!response.ok || !payload?.success || !externalUrl) {
         if (pendingTab && !pendingTab.closed) pendingTab.close();
         if (response.status === 410 || payload?.error === "external_code_already_used") {
           setIsExternalCodeUsed(true);
           setLink((current) => current ? { ...current, external_code_used: true } : current);
-          setShowExternalCodeWarning(false);
-          setAgreeExternalCodeTerms(false);
           return;
         }
         throw new Error(payload?.error || "external_code_request_failed");
@@ -5620,18 +5620,16 @@ function CustomerView({
             external_code_used_at: payload.used_at || new Date().toISOString(),
           }
         : current);
-      setShowExternalCodeWarning(false);
-      setAgreeExternalCodeTerms(false);
       if (pendingTab && !pendingTab.closed) {
-        pendingTab.location.replace(payload.external_url);
+        pendingTab.location.href = externalUrl;
       } else {
-        window.location.assign(payload.external_url);
+        window.location.assign(externalUrl);
       }
     } catch (error) {
       if (pendingTab && !pendingTab.closed) pendingTab.close();
       console.error("External code access failed:", error);
       setIsExternalCodeUsed(false);
-      setExternalCodeError("تعذر فتح رابط الكود حالياً. يرجى المحاولة مرة أخرى.");
+      setToast({ label: "تعذر فتح الرابط، يرجى المحاولة لاحقاً", at: Date.now() });
     } finally {
       setExternalCodeSubmitting(false);
     }

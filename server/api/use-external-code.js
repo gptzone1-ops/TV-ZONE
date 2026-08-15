@@ -27,7 +27,7 @@ export default async function handler(req, res) {
     return send(res, 503, { success: false, error: "service_unavailable" });
   }
 
-  const identifier = String(req.body?.link_id || req.body?.code || "").trim();
+  const identifier = String(req.body?.link_id || req.body?.codeId || req.body?.code || "").trim();
   if (!identifier) return send(res, 400, { success: false, error: "invalid_link_id" });
 
   const supabase = createClient(supabaseUrl, serviceRoleKey, {
@@ -35,7 +35,7 @@ export default async function handler(req, res) {
   });
   let lookupQuery = supabase
     .from("customer_links")
-    .select("id,external_code_used,accounts!inner(service_type,account_type,code_fetch_method,supplier_code_url)");
+    .select("id,account_id,external_code_used");
 
   lookupQuery = uuidPattern.test(identifier)
     ? lookupQuery.eq("id", identifier)
@@ -51,10 +51,27 @@ export default async function handler(req, res) {
     return send(res, 410, { success: false, error: "external_code_already_used" });
   }
 
-  const account = Array.isArray(customerLink.accounts) ? customerLink.accounts[0] : customerLink.accounts;
-  const supportedAccountType = account?.account_type === "private" || account?.account_type === "shared";
-  const externalUrl = account?.service_type === "netflix" && supportedAccountType && account?.code_fetch_method === "external_link"
-    ? validExternalUrl(account?.supplier_code_url)
+  const { data: account, error: accountError } = await supabase
+    .from("accounts")
+    .select("*")
+    .eq("id", customerLink.account_id)
+    .maybeSingle();
+  if (accountError) {
+    console.error("External code account lookup failed:", accountError);
+    return send(res, 500, { success: false, error: "account_lookup_failed" });
+  }
+  if (!account) return send(res, 404, { success: false, error: "account_not_found" });
+
+  const serviceType = String(account.service_type || "netflix").trim().toLowerCase();
+  const accountType = String(account.account_type || "").trim().toLowerCase();
+  const supportedAccountType = accountType === "private" || accountType === "shared";
+  const configuredUrl =
+    account.supplier_code_url ||
+    account.external_link ||
+    account.external_code_url ||
+    account.code_fetch_url;
+  const externalUrl = serviceType === "netflix" && supportedAccountType
+    ? validExternalUrl(configuredUrl)
     : null;
   if (!externalUrl) {
     return send(res, 409, { success: false, error: "external_code_not_enabled" });
@@ -65,7 +82,7 @@ export default async function handler(req, res) {
     .from("customer_links")
     .update({ external_code_used: true, external_code_used_at: usedAt })
     .eq("id", customerLink.id)
-    .eq("external_code_used", false)
+    .or("external_code_used.eq.false,external_code_used.is.null")
     .select("id")
     .maybeSingle();
 
@@ -79,6 +96,7 @@ export default async function handler(req, res) {
 
   return send(res, 200, {
     success: true,
+    url: externalUrl,
     external_url: externalUrl,
     used_at: usedAt,
   });
