@@ -5377,6 +5377,7 @@ function CustomerView({
   const [profilePinRevealed, setProfilePinRevealed] = useState(false);
   const [showExternalCodeWarning, setShowExternalCodeWarning] = useState(false);
   const [agreeExternalCodeTerms, setAgreeExternalCodeTerms] = useState(false);
+  const [isExternalCodeUsed, setIsExternalCodeUsed] = useState(false);
   const [externalCodeSubmitting, setExternalCodeSubmitting] = useState(false);
   const [externalCodeError, setExternalCodeError] = useState<string | null>(null);
   const [tvRequestState, setTvRequestState] = useState<"idle" | "searching" | "ready" | "failed" | "expired">("idle");
@@ -5469,6 +5470,10 @@ function CustomerView({
   }, [link?.id, link?.selected_device]);
 
   useEffect(() => {
+    setIsExternalCodeUsed(link?.external_code_used === true);
+  }, [link?.id, link?.external_code_used]);
+
+  useEffect(() => {
     const shouldLock =
       link?.accounts?.account_type !== "compensation" &&
       (showDisclaimer ||
@@ -5532,7 +5537,7 @@ function CustomerView({
     service === "netflix" &&
     (account?.account_type === "private" || account?.account_type === "shared") &&
     account?.code_fetch_method === "external_link";
-  const externalCodeUsed = link?.external_code_used === true;
+  const externalCodeUsed = isExternalCodeUsed;
   const customerTutorialVideoUrl = usesExternalCodeLink ? externalCodeCustomerVideoUrl : videoUrl;
   const forwardedEmailCodeEnabled = account?.imap_enabled === true && account?.email_provider === "outlook";
   const codeRequestLimit = Math.max(0, link?.code_request_limit ?? 1);
@@ -5579,6 +5584,7 @@ function CustomerView({
       pendingTab.document.body.innerHTML = '<div dir="rtl" style="font-family:Arial,sans-serif;text-align:center;padding:48px">جاري التحقق وفتح صفحة الكود...</div>';
     }
 
+    setIsExternalCodeUsed(true);
     setExternalCodeSubmitting(true);
     setExternalCodeError(null);
     try {
@@ -5597,6 +5603,7 @@ function CustomerView({
       if (!response.ok || !payload?.success || !payload.external_url) {
         if (pendingTab && !pendingTab.closed) pendingTab.close();
         if (response.status === 410 || payload?.error === "external_code_already_used") {
+          setIsExternalCodeUsed(true);
           setLink((current) => current ? { ...current, external_code_used: true } : current);
           setShowExternalCodeWarning(false);
           setAgreeExternalCodeTerms(false);
@@ -5605,6 +5612,7 @@ function CustomerView({
         throw new Error(payload?.error || "external_code_request_failed");
       }
 
+      setIsExternalCodeUsed(true);
       setLink((current) => current
         ? {
             ...current,
@@ -5622,6 +5630,7 @@ function CustomerView({
     } catch (error) {
       if (pendingTab && !pendingTab.closed) pendingTab.close();
       console.error("External code access failed:", error);
+      setIsExternalCodeUsed(false);
       setExternalCodeError("تعذر فتح رابط الكود حالياً. يرجى المحاولة مرة أخرى.");
     } finally {
       setExternalCodeSubmitting(false);
@@ -6470,7 +6479,7 @@ function CustomerView({
                           className="mt-4 flex min-h-12 w-full cursor-not-allowed items-center justify-center gap-2 rounded-2xl bg-zinc-200 px-4 text-sm font-black text-zinc-500"
                         >
                           <LockKeyhole className="h-5 w-5" />
-                          تم استهلاك رابط جلب الكود (صلاحية لمرة واحدة)
+                          تم استهلاك رابط الكود (صلاحية لمرة واحدة)
                         </button>
                       ) : usesExternalCodeLink ? (
                         <button
