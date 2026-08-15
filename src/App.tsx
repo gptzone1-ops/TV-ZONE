@@ -5377,6 +5377,8 @@ function CustomerView({
   const [profilePinRevealed, setProfilePinRevealed] = useState(false);
   const [showExternalCodeWarning, setShowExternalCodeWarning] = useState(false);
   const [agreeExternalCodeTerms, setAgreeExternalCodeTerms] = useState(false);
+  const [externalCodeSubmitting, setExternalCodeSubmitting] = useState(false);
+  const [externalCodeError, setExternalCodeError] = useState<string | null>(null);
   const [tvRequestState, setTvRequestState] = useState<"idle" | "searching" | "ready" | "failed" | "expired">("idle");
   const [tvSearchDeadlineAt, setTvSearchDeadlineAt] = useState<number | null>(null);
   const [tvDisplayExpiresAt, setTvDisplayExpiresAt] = useState<number | null>(null);
@@ -5526,7 +5528,10 @@ function CustomerView({
       codeDisplayExpiresAt > nowTick,
   );
   const automatedCodeEnabled = account?.use_automated_code !== false;
-  const usesExternalCodeLink = account?.code_fetch_method === "external_link";
+  const usesExternalCodeLink =
+    service === "netflix" &&
+    (account?.account_type === "private" || account?.account_type === "shared") &&
+    account?.code_fetch_method === "external_link";
   const externalCodeUsed = link?.external_code_used === true;
   const customerTutorialVideoUrl = usesExternalCodeLink ? externalCodeCustomerVideoUrl : videoUrl;
   const forwardedEmailCodeEnabled = account?.imap_enabled === true && account?.email_provider === "outlook";
@@ -5560,21 +5565,67 @@ function CustomerView({
   function openExternalCodeWarning() {
     if (!link?.id || !usesExternalCodeLink || externalCodeUsed) return;
     setAgreeExternalCodeTerms(false);
+    setExternalCodeError(null);
     setShowExternalCodeWarning(true);
   }
 
-  function continueToExternalCode() {
-    if (!link?.id || !agreeExternalCodeTerms || externalCodeUsed) return;
+  async function continueToExternalCode() {
+    if (!link?.id || !agreeExternalCodeTerms || externalCodeUsed || externalCodeSubmitting) return;
     const customerLinkId = link.id;
-    setShowExternalCodeWarning(false);
-    setAgreeExternalCodeTerms(false);
-    window.open(`/api/access-external-code/${encodeURIComponent(customerLinkId)}`, "_blank", "noopener,noreferrer");
+    const pendingTab = window.open("about:blank", "_blank");
+    if (pendingTab) {
+      pendingTab.opener = null;
+      pendingTab.document.title = "جاري فتح صفحة الكود";
+      pendingTab.document.body.innerHTML = '<div dir="rtl" style="font-family:Arial,sans-serif;text-align:center;padding:48px">جاري التحقق وفتح صفحة الكود...</div>';
+    }
 
-    window.setTimeout(() => {
-      void loadCustomerLinkRecord("id", customerLinkId).then((refreshedLink) => {
-        if (refreshedLink) setLink(refreshedLink);
+    setExternalCodeSubmitting(true);
+    setExternalCodeError(null);
+    try {
+      const response = await fetch("/api/use-external-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ link_id: customerLinkId }),
       });
-    }, 1200);
+      const payload = await response.json().catch(() => null) as {
+        success?: boolean;
+        external_url?: string;
+        used_at?: string;
+        error?: string;
+      } | null;
+
+      if (!response.ok || !payload?.success || !payload.external_url) {
+        if (pendingTab && !pendingTab.closed) pendingTab.close();
+        if (response.status === 410 || payload?.error === "external_code_already_used") {
+          setLink((current) => current ? { ...current, external_code_used: true } : current);
+          setShowExternalCodeWarning(false);
+          setAgreeExternalCodeTerms(false);
+          return;
+        }
+        throw new Error(payload?.error || "external_code_request_failed");
+      }
+
+      setLink((current) => current
+        ? {
+            ...current,
+            external_code_used: true,
+            external_code_used_at: payload.used_at || new Date().toISOString(),
+          }
+        : current);
+      setShowExternalCodeWarning(false);
+      setAgreeExternalCodeTerms(false);
+      if (pendingTab && !pendingTab.closed) {
+        pendingTab.location.replace(payload.external_url);
+      } else {
+        window.location.assign(payload.external_url);
+      }
+    } catch (error) {
+      if (pendingTab && !pendingTab.closed) pendingTab.close();
+      console.error("External code access failed:", error);
+      setExternalCodeError("تعذر فتح رابط الكود حالياً. يرجى المحاولة مرة أخرى.");
+    } finally {
+      setExternalCodeSubmitting(false);
+    }
   }
 
   useEffect(() => {
@@ -6988,8 +7039,8 @@ function CustomerView({
                 </h2>
                 <div className="mt-4 space-y-3 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm font-black leading-8 text-zinc-900">
                   <p>الكود مخصص للاستخدام على جهاز واحد فقط.</p>
-                  <p>لا يمكن تبديل الجهاز أو طلب كود جديد إلا بإرفاق فيديو واضح يوثق عملية تسجيل الخروج من الجهاز الأول.</p>
-                  <p>تسجيل الدخول من أكثر من جهاز يعتبر مخالفة صريحة تؤدي إلى إلغاء الاشتراك وإغلاق الحساب نهائياً دون أي تعويض أو استرداد للمبلغ.</p>
+                    <p>لا يمكن تبديل الجهاز إلا بإرفاق فيديو يوثق تسجيل الخروج من الجهاز الأول.</p>
+                    <p>استخدام أكثر من جهاز يؤدي لإلغاء الاشتراك نهائياً دون تعويض.</p>
                   <p className="text-rose-700">تنبيه: هذا الرابط صالح للاستخدام والفتح لمرة واحدة فقط.</p>
                 </div>
                 <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-2xl border border-[#E0D4F8] bg-[#FAF8FD] p-4 text-sm font-black leading-7 text-zinc-800">
@@ -6999,26 +7050,33 @@ function CustomerView({
                     onChange={(event) => setAgreeExternalCodeTerms(event.target.checked)}
                     className="mt-1 h-5 w-5 shrink-0 accent-[#8B35F5]"
                   />
-                  <span>أوافق وأتعهد بالالتزام بشروط الجهاز الواحد وسياسة الاستخدام.</span>
+                  <span>أوافق وأتعهد بالالتزام بشروط الجهاز الواحد.</span>
                 </label>
+                {externalCodeError && (
+                  <p className="mt-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-center text-sm font-black text-rose-700">
+                    {externalCodeError}
+                  </p>
+                )}
                 <div className="mt-5 grid gap-3 sm:grid-cols-2">
                   <button
                     type="button"
+                    disabled={externalCodeSubmitting}
                     onClick={() => {
                       setShowExternalCodeWarning(false);
                       setAgreeExternalCodeTerms(false);
+                      setExternalCodeError(null);
                     }}
-                    className="h-12 rounded-2xl border border-zinc-200 bg-white px-4 text-sm font-black text-zinc-600 transition hover:bg-zinc-50"
+                    className="h-12 rounded-2xl border border-zinc-200 bg-white px-4 text-sm font-black text-zinc-600 transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     إلغاء
                   </button>
                   <button
                     type="button"
-                    disabled={!agreeExternalCodeTerms}
-                    onClick={continueToExternalCode}
+                    disabled={!agreeExternalCodeTerms || externalCodeSubmitting}
+                    onClick={() => void continueToExternalCode()}
                     className="min-h-12 rounded-2xl bg-[#8B35F5] px-4 py-3 text-sm font-black text-white shadow-[0_12px_28px_rgba(139,53,245,0.24)] transition hover:bg-[#7626DD] disabled:cursor-not-allowed disabled:opacity-45"
                   >
-                    موافقة والانتقال لصفحة الكود
+                    {externalCodeSubmitting ? "جاري تسجيل الاستخدام..." : "موافقة والانتقال لصفحة الكود"}
                   </button>
                 </div>
               </div>
