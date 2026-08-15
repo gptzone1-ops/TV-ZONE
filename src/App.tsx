@@ -130,7 +130,7 @@ const duplicateEmailMessage = "عفواً، هذا البريد الإلكترو
 const duplicateEmailSaveMessage = duplicateEmailMessage;
 const duplicateProfileMessage = (profileName: string) => `هذا الملف (${profileName}) مسجل مسبقاً لهذا الحساب`;
 const emptyEmailMessage = "أدخل البريد الإلكتروني أولاً";
-const customerAccountPublicSelect = "*,accounts(id,email,use_automated_code,supplier_code_url,code_fetch_method,compensation_tutorial_url,verification_code,verification_code_received_at,service_type,account_type,compensation_distribution,expires_at,created_at,email_provider,imap_enabled,normal_client_layout,hide_password_from_client)";
+const customerAccountPublicSelect = "*,accounts(id,email,use_automated_code,code_fetch_method,compensation_tutorial_url,verification_code,verification_code_received_at,service_type,account_type,compensation_distribution,expires_at,created_at,email_provider,imap_enabled,normal_client_layout,hide_password_from_client)";
 const legacyCustomerAccountSelect = "*,accounts(id,email,password,use_automated_code,supplier_code_url,compensation_tutorial_url,verification_code,verification_code_received_at,service_type,account_type,compensation_distribution,expires_at,created_at,email_provider,imap_enabled,normal_client_layout)";
 
 const serviceThemes: Record<ServiceType, ServiceTheme> = {
@@ -210,14 +210,16 @@ async function hydrateCustomerLinkPassword(rawData: unknown) {
   const account = customerLink?.accounts;
   if (!account) return customerLink;
 
-  if (account.hide_password_from_client === true) {
+  const needsCompensationUrl = account.account_type === "compensation";
+  const needsPassword = account.hide_password_from_client !== true;
+  if (!needsPassword && !needsCompensationUrl) {
     return { ...customerLink, accounts: { ...account, password: "" } } as CustomerLink;
   }
 
   if (!supabase) return customerLink;
   const { data, error } = await supabase
     .from("accounts")
-    .select("password")
+    .select("password,supplier_code_url")
     .eq("id", account.id)
     .maybeSingle();
   if (error) {
@@ -227,7 +229,11 @@ async function hydrateCustomerLinkPassword(rawData: unknown) {
 
   return {
     ...customerLink,
-    accounts: { ...account, password: String(data?.password || "") },
+    accounts: {
+      ...account,
+      password: needsPassword ? String(data?.password || "") : "",
+      supplier_code_url: needsCompensationUrl ? String(data?.supplier_code_url || "") : null,
+    },
   } as CustomerLink;
 }
 
@@ -1880,6 +1886,49 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     return true;
   }
 
+  async function resetExternalCodeAccess(linkId: string) {
+    if (!supabase) {
+      setLinks((current) =>
+        current.map((link) =>
+          link.id === linkId
+            ? { ...link, external_code_used: false, external_code_used_at: null }
+            : link,
+        ),
+      );
+      setToast({ label: "تمت إعادة تفعيل رابط الكود لهذا العميل", at: Date.now() });
+      return true;
+    }
+
+    try {
+      const response = await fetch("/api/reset-external-code-access", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-admin-password": adminPassword,
+        },
+        body: JSON.stringify({ link_id: linkId }),
+      });
+      const result = (await response.json().catch(() => null)) as {
+        success?: boolean;
+        link?: CustomerLink;
+        error?: string;
+      } | null;
+      if (!response.ok || !result?.success || !result.link) {
+        throw new Error(result?.error || "reset_failed");
+      }
+
+      setLinks((current) =>
+        current.map((link) => (link.id === linkId ? { ...link, ...result.link } : link)),
+      );
+      setToast({ label: "تمت إعادة تفعيل رابط الكود لهذا العميل", at: Date.now() });
+      return true;
+    } catch (error) {
+      console.error("External code access reset request failed:", error);
+      setToast({ label: "تعذرت إعادة تفعيل رابط الكود", at: Date.now(), tone: "error" });
+      return false;
+    }
+  }
+
   async function reviewExtraCreditRequest(
     requestId: string,
     status: Exclude<ExtraCreditRequestStatus, "pending">,
@@ -2238,6 +2287,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
           onDeleteLinks={deleteCustomerLinks}
           onUpdateCustomerCodeBalance={updateCustomerCodeBalance}
           onResetCustomerDevice={resetCustomerDevice}
+          onResetExternalCodeAccess={resetExternalCodeAccess}
           onUpdateDates={updateAccountDates}
           onUpdate={updateAccount}
           onLogout={logout}
@@ -4511,6 +4561,7 @@ function AccountDetail({
   onDeleteLinks,
   onUpdateCustomerCodeBalance,
   onResetCustomerDevice,
+  onResetExternalCodeAccess,
   onUpdateDates,
   onUpdate,
   onLogout,
@@ -4527,6 +4578,7 @@ function AccountDetail({
     resetRequestedCount: boolean,
   ) => Promise<boolean>;
   onResetCustomerDevice: (linkId: string) => Promise<boolean>;
+  onResetExternalCodeAccess: (linkId: string) => Promise<boolean>;
   onUpdateDates: (accountId: string, form: { created_at: string; expires_at: string }) => Promise<boolean>;
   onUpdate: Parameters<typeof AccountForm>[0]["onUpdate"];
   onLogout: () => void;
@@ -4957,6 +5009,20 @@ function AccountDetail({
                       <RefreshCw className="h-4 w-4" />
                       إعادة ضبط الجهاز المختار
                     </button>
+                    {account.code_fetch_method === "external_link" && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (!window.confirm("هل تريد إعادة تفعيل رابط جلب الكود لهذا العميل؟")) return;
+                          await onResetExternalCodeAccess(link.id);
+                        }}
+                        disabled={!link.external_code_used}
+                        className="mt-2 flex h-11 w-full items-center justify-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 text-sm font-black text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-45"
+                      >
+                        <RefreshCw className="h-4 w-4" />
+                        {link.external_code_used ? "إعادة تفعيل رابط الكود" : "رابط الكود متاح"}
+                      </button>
+                    )}
                   </article>
                 );
               })}
@@ -5309,6 +5375,8 @@ function CustomerView({
   const [showProfilePinWarning, setShowProfilePinWarning] = useState(false);
   const [agreeProfilePinWarning, setAgreeProfilePinWarning] = useState(false);
   const [profilePinRevealed, setProfilePinRevealed] = useState(false);
+  const [showExternalCodeWarning, setShowExternalCodeWarning] = useState(false);
+  const [agreeExternalCodeTerms, setAgreeExternalCodeTerms] = useState(false);
   const [tvRequestState, setTvRequestState] = useState<"idle" | "searching" | "ready" | "failed" | "expired">("idle");
   const [tvSearchDeadlineAt, setTvSearchDeadlineAt] = useState<number | null>(null);
   const [tvDisplayExpiresAt, setTvDisplayExpiresAt] = useState<number | null>(null);
@@ -5406,13 +5474,14 @@ function CustomerView({
         Boolean(pendingDeviceView) ||
         showTvRequestModal ||
         showProfilePinWarning ||
+        showExternalCodeWarning ||
         showExtraCreditModal);
     const previous = document.body.style.overflow;
     if (shouldLock) document.body.style.overflow = "hidden";
     return () => {
       document.body.style.overflow = previous;
     };
-  }, [link?.accounts?.account_type, showDisclaimer, showReminder, pendingDeviceView, showTvRequestModal, showProfilePinWarning, showExtraCreditModal]);
+  }, [link?.accounts?.account_type, showDisclaimer, showReminder, pendingDeviceView, showTvRequestModal, showProfilePinWarning, showExternalCodeWarning, showExtraCreditModal]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNowTick(Date.now()), 1000);
@@ -5458,7 +5527,7 @@ function CustomerView({
   );
   const automatedCodeEnabled = account?.use_automated_code !== false;
   const usesExternalCodeLink = account?.code_fetch_method === "external_link";
-  const externalCodeUrl = usesExternalCodeLink ? String(account?.supplier_code_url || "").trim() : "";
+  const externalCodeUsed = link?.external_code_used === true;
   const customerTutorialVideoUrl = usesExternalCodeLink ? externalCodeCustomerVideoUrl : videoUrl;
   const forwardedEmailCodeEnabled = account?.imap_enabled === true && account?.email_provider === "outlook";
   const codeRequestLimit = Math.max(0, link?.code_request_limit ?? 1);
@@ -5487,6 +5556,26 @@ function CustomerView({
   const tvDisplaySecondsRemaining = tvDisplayExpiresAt
     ? Math.max(0, Math.ceil((tvDisplayExpiresAt - nowTick) / 1000))
     : 0;
+
+  function openExternalCodeWarning() {
+    if (!link?.id || !usesExternalCodeLink || externalCodeUsed) return;
+    setAgreeExternalCodeTerms(false);
+    setShowExternalCodeWarning(true);
+  }
+
+  function continueToExternalCode() {
+    if (!link?.id || !agreeExternalCodeTerms || externalCodeUsed) return;
+    const customerLinkId = link.id;
+    setShowExternalCodeWarning(false);
+    setAgreeExternalCodeTerms(false);
+    window.open(`/api/access-external-code/${encodeURIComponent(customerLinkId)}`, "_blank", "noopener,noreferrer");
+
+    window.setTimeout(() => {
+      void loadCustomerLinkRecord("id", customerLinkId).then((refreshedLink) => {
+        if (refreshedLink) setLink(refreshedLink);
+      });
+    }, 1200);
+  }
 
   useEffect(() => {
     if (automatedCodeEnabled) return;
@@ -6323,16 +6412,24 @@ function CustomerView({
                           </p>
                         </div>
                       </div>
-                      {externalCodeUrl ? (
-                        <a
-                          href={externalCodeUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
+                      {externalCodeUsed ? (
+                        <button
+                          type="button"
+                          disabled
+                          className="mt-4 flex min-h-12 w-full cursor-not-allowed items-center justify-center gap-2 rounded-2xl bg-zinc-200 px-4 text-sm font-black text-zinc-500"
+                        >
+                          <LockKeyhole className="h-5 w-5" />
+                          تم استهلاك رابط جلب الكود (صلاحية لمرة واحدة)
+                        </button>
+                      ) : usesExternalCodeLink ? (
+                        <button
+                          type="button"
+                          onClick={openExternalCodeWarning}
                           className="mt-4 flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#8B35F5] px-4 text-sm font-black text-white shadow-[0_14px_32px_rgba(139,53,245,0.24)] transition hover:-translate-y-0.5 hover:bg-[#7626DD]"
                         >
                           <ExternalLink className="h-5 w-5" />
-                          جلب الكود
-                        </a>
+                          جلب الكود عبر الرابط الخارجي
+                        </button>
                       ) : (
                         <p className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-center text-sm font-black text-rose-700">
                           رابط جلب الكود غير متوفر حالياً، يرجى التواصل مع المتجر.
@@ -6868,6 +6965,60 @@ function CustomerView({
                     className="h-12 rounded-2xl bg-[#8B35F5] px-4 text-sm font-black text-white shadow-[0_12px_28px_rgba(139,53,245,0.24)] transition hover:bg-[#7626DD] disabled:cursor-not-allowed disabled:opacity-45"
                   >
                     متابعة
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {showExternalCodeWarning && (
+            <div
+              className="fixed inset-0 z-[110] flex items-center justify-center overflow-y-auto bg-zinc-950/70 p-4 backdrop-blur-sm"
+              dir="rtl"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="external-code-warning-title"
+            >
+              <div className="my-auto w-full max-w-xl rounded-[2rem] border border-amber-200 bg-white p-5 shadow-2xl md:p-7">
+                <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-3xl bg-amber-100 text-amber-600 shadow-[0_14px_35px_rgba(217,119,6,0.20)]">
+                  <TriangleAlert className="h-11 w-11" />
+                </div>
+                <h2 id="external-code-warning-title" className="mt-5 text-center text-2xl font-black text-zinc-950 md:text-3xl">
+                  تنبيه وشروط الاستخدام الهامة
+                </h2>
+                <div className="mt-4 space-y-3 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm font-black leading-8 text-zinc-900">
+                  <p>الكود مخصص للاستخدام على جهاز واحد فقط.</p>
+                  <p>لا يمكن تبديل الجهاز أو طلب كود جديد إلا بإرفاق فيديو واضح يوثق عملية تسجيل الخروج من الجهاز الأول.</p>
+                  <p>تسجيل الدخول من أكثر من جهاز يعتبر مخالفة صريحة تؤدي إلى إلغاء الاشتراك وإغلاق الحساب نهائياً دون أي تعويض أو استرداد للمبلغ.</p>
+                  <p className="text-rose-700">تنبيه: هذا الرابط صالح للاستخدام والفتح لمرة واحدة فقط.</p>
+                </div>
+                <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-2xl border border-[#E0D4F8] bg-[#FAF8FD] p-4 text-sm font-black leading-7 text-zinc-800">
+                  <input
+                    type="checkbox"
+                    checked={agreeExternalCodeTerms}
+                    onChange={(event) => setAgreeExternalCodeTerms(event.target.checked)}
+                    className="mt-1 h-5 w-5 shrink-0 accent-[#8B35F5]"
+                  />
+                  <span>أوافق وأتعهد بالالتزام بشروط الجهاز الواحد وسياسة الاستخدام.</span>
+                </label>
+                <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowExternalCodeWarning(false);
+                      setAgreeExternalCodeTerms(false);
+                    }}
+                    className="h-12 rounded-2xl border border-zinc-200 bg-white px-4 text-sm font-black text-zinc-600 transition hover:bg-zinc-50"
+                  >
+                    إلغاء
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!agreeExternalCodeTerms}
+                    onClick={continueToExternalCode}
+                    className="min-h-12 rounded-2xl bg-[#8B35F5] px-4 py-3 text-sm font-black text-white shadow-[0_12px_28px_rgba(139,53,245,0.24)] transition hover:bg-[#7626DD] disabled:cursor-not-allowed disabled:opacity-45"
+                  >
+                    موافقة والانتقال لصفحة الكود
                   </button>
                 </div>
               </div>

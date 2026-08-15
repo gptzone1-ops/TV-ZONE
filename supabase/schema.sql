@@ -46,6 +46,8 @@ create table if not exists public.customer_links (
   tv_approval_url text,
   has_used_tv_link boolean not null default false,
   tv_link_used_at timestamptz,
+  external_code_used boolean not null default false,
+  external_code_used_at timestamptz,
   updated_at timestamptz not null default now(),
   created_at timestamptz not null default now()
 );
@@ -136,6 +138,30 @@ alter table public.customer_links
 
 alter table public.customer_links
   add column if not exists tv_link_used_at timestamptz;
+
+alter table public.customer_links
+  add column if not exists external_code_used boolean not null default false;
+
+alter table public.customer_links
+  add column if not exists external_code_used_at timestamptz;
+
+create or replace function public.protect_external_code_access_state()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  if coalesce(auth.role(), '') <> 'service_role' then
+    raise exception 'external_code_access_state_is_server_managed';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists protect_external_code_access_state_trigger on public.customer_links;
+create trigger protect_external_code_access_state_trigger
+before update of external_code_used, external_code_used_at on public.customer_links
+for each row execute function public.protect_external_code_access_state();
 
 alter table public.customer_links
   add column if not exists updated_at timestamptz not null default now();
