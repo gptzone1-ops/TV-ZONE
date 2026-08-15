@@ -119,6 +119,7 @@ const verificationCodeLifetimeMs = 120 * 1000;
 const verificationCodeFallbackWindowMs = 15 * 60 * 1000;
 const tvApprovalFallbackWindowMs = 15 * 60 * 1000;
 const tvApprovalSearchDurationMs = 15 * 1000;
+const externalCodeAccessDurationMs = 5 * 60 * 1000;
 const adminAccountsPageSize = 10;
 const extraCreditReasons: ExtraCreditReason[] = [
   "كود خاطئ",
@@ -211,8 +212,9 @@ async function hydrateCustomerLinkPassword(rawData: unknown) {
   if (!account) return customerLink;
 
   const needsCompensationUrl = account.account_type === "compensation";
+  const needsExternalCodeUrl = account.code_fetch_method === "external_link";
   const needsPassword = account.hide_password_from_client !== true;
-  if (!needsPassword && !needsCompensationUrl) {
+  if (!needsPassword && !needsCompensationUrl && !needsExternalCodeUrl) {
     return { ...customerLink, accounts: { ...account, password: "" } } as CustomerLink;
   }
 
@@ -232,7 +234,7 @@ async function hydrateCustomerLinkPassword(rawData: unknown) {
     accounts: {
       ...account,
       password: needsPassword ? String(data?.password || "") : "",
-      supplier_code_url: needsCompensationUrl ? String(data?.supplier_code_url || "") : null,
+      supplier_code_url: needsCompensationUrl || needsExternalCodeUrl ? String(data?.supplier_code_url || "") : null,
     },
   } as CustomerLink;
 }
@@ -1891,7 +1893,12 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       setLinks((current) =>
         current.map((link) =>
           link.id === linkId
-            ? { ...link, external_code_used: false, external_code_used_at: null }
+            ? {
+                ...link,
+                external_code_used: false,
+                external_code_used_at: null,
+                external_code_first_opened_at: null,
+              }
             : link,
         ),
       );
@@ -5378,6 +5385,7 @@ function CustomerView({
   const [showExternalCodeWarning, setShowExternalCodeWarning] = useState(false);
   const [agreeExternalCodeTerms, setAgreeExternalCodeTerms] = useState(false);
   const [isExternalCodeUsed, setIsExternalCodeUsed] = useState(false);
+  const [externalCodeFirstOpenedAt, setExternalCodeFirstOpenedAt] = useState<string | null>(null);
   const [externalCodeSubmitting, setExternalCodeSubmitting] = useState(false);
   const [externalCodeError, setExternalCodeError] = useState<string | null>(null);
   const [tvRequestState, setTvRequestState] = useState<"idle" | "searching" | "ready" | "failed" | "expired">("idle");
@@ -5391,6 +5399,7 @@ function CustomerView({
   const countdownRef = useRef<number | null>(null);
   const codeSearchActiveRef = useRef(false);
   const tvSearchActiveRef = useRef(false);
+  const externalCodeExpiryRequestRef = useRef(false);
   const requestBaselineRef = useRef<{
     messageId: string | null;
     code: string | null;
@@ -5471,7 +5480,9 @@ function CustomerView({
 
   useEffect(() => {
     setIsExternalCodeUsed(link?.external_code_used === true);
-  }, [link?.id, link?.external_code_used]);
+    setExternalCodeFirstOpenedAt(link?.external_code_first_opened_at || null);
+    externalCodeExpiryRequestRef.current = link?.external_code_used === true;
+  }, [link?.id, link?.external_code_used, link?.external_code_first_opened_at]);
 
   useEffect(() => {
     const shouldLock =
@@ -5537,7 +5548,14 @@ function CustomerView({
     service === "netflix" &&
     (account?.account_type === "private" || account?.account_type === "shared") &&
     account?.code_fetch_method === "external_link";
-  const externalCodeUsed = isExternalCodeUsed;
+  const externalCodeFirstOpenedMs = externalCodeFirstOpenedAt
+    ? new Date(externalCodeFirstOpenedAt).getTime()
+    : null;
+  const externalCodeRemainingSeconds = externalCodeFirstOpenedMs && Number.isFinite(externalCodeFirstOpenedMs)
+    ? Math.max(0, Math.ceil((externalCodeFirstOpenedMs + externalCodeAccessDurationMs - nowTick) / 1000))
+    : null;
+  const externalCodeUsed = isExternalCodeUsed || externalCodeRemainingSeconds === 0;
+  const externalCodeDirectUrl = String(account?.supplier_code_url || "").trim();
   const customerTutorialVideoUrl = usesExternalCodeLink ? externalCodeCustomerVideoUrl : videoUrl;
   const forwardedEmailCodeEnabled = account?.imap_enabled === true && account?.email_provider === "outlook";
   const codeRequestLimit = Math.max(0, link?.code_request_limit ?? 1);
@@ -5567,72 +5585,87 @@ function CustomerView({
     ? Math.max(0, Math.ceil((tvDisplayExpiresAt - nowTick) / 1000))
     : 0;
 
+  useEffect(() => {
+    if (
+      !link?.id ||
+      !externalCodeFirstOpenedAt ||
+      externalCodeRemainingSeconds !== 0 ||
+      externalCodeExpiryRequestRef.current
+    ) return;
+
+    externalCodeExpiryRequestRef.current = true;
+    setIsExternalCodeUsed(true);
+    setLink((current) => current
+      ? { ...current, external_code_used: true, external_code_used_at: new Date().toISOString() }
+      : current);
+    void fetch("/api/use-external-code", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ link_id: link.id, mode: "expire" }),
+    }).catch((error) => console.error("External code expiry persistence failed:", error));
+  }, [externalCodeFirstOpenedAt, externalCodeRemainingSeconds, link?.id]);
+
   function openExternalCodeWarning() {
-    if (!link?.id || !usesExternalCodeLink || externalCodeUsed) return;
+    if (!link?.id || !usesExternalCodeLink || externalCodeUsed || externalCodeSubmitting) return;
     setAgreeExternalCodeTerms(false);
     setExternalCodeError(null);
     setShowExternalCodeWarning(true);
   }
 
-  async function continueToExternalCode() {
+  function continueToExternalCode() {
     if (!link?.id || !agreeExternalCodeTerms || externalCodeUsed || externalCodeSubmitting) return;
     const customerLinkId = link.id;
-    const pendingTab = window.open("about:blank", "_blank");
-    if (pendingTab) {
-      pendingTab.opener = null;
+    if (!isValidHttpUrl(externalCodeDirectUrl)) {
+      setExternalCodeError("رابط جلب الكود غير متوفر حالياً، يرجى التواصل مع المتجر.");
+      return;
     }
 
-    setIsExternalCodeUsed(true);
+    const openedTab = window.open(externalCodeDirectUrl, "_blank");
+    if (!openedTab) {
+      setExternalCodeError("تعذر فتح الرابط بسبب إعدادات المتصفح. اسمح بالنوافذ المنبثقة ثم حاول مجدداً.");
+      return;
+    }
+    openedTab.opener = null;
+
+    const optimisticFirstOpenedAt = externalCodeFirstOpenedAt || new Date().toISOString();
+    setExternalCodeFirstOpenedAt(optimisticFirstOpenedAt);
+    setLink((current) => current
+      ? { ...current, external_code_first_opened_at: optimisticFirstOpenedAt }
+      : current);
     setShowExternalCodeWarning(false);
     setAgreeExternalCodeTerms(false);
     setExternalCodeSubmitting(true);
     setExternalCodeError(null);
-    try {
-      const response = await fetch("/api/use-external-code", {
+    void fetch("/api/use-external-code", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ link_id: customerLinkId }),
-      });
-      const payload = await response.json().catch(() => null) as {
+        body: JSON.stringify({ link_id: customerLinkId, mode: "start" }),
+      })
+      .then(async (response) => {
+        const payload = await response.json().catch(() => null) as {
         success?: boolean;
         url?: string;
-        external_url?: string;
-        used_at?: string;
+        first_opened_at?: string;
         error?: string;
-      } | null;
-
-      const externalUrl = payload?.url || payload?.external_url;
-      if (!response.ok || !payload?.success || !externalUrl) {
-        if (pendingTab && !pendingTab.closed) pendingTab.close();
-        if (response.status === 410 || payload?.error === "external_code_already_used") {
+        } | null;
+        if (response.status === 410 || payload?.error === "external_code_expired") {
           setIsExternalCodeUsed(true);
           setLink((current) => current ? { ...current, external_code_used: true } : current);
           return;
         }
-        throw new Error(payload?.error || "external_code_request_failed");
-      }
-
-      setIsExternalCodeUsed(true);
-      setLink((current) => current
-        ? {
-            ...current,
-            external_code_used: true,
-            external_code_used_at: payload.used_at || new Date().toISOString(),
-          }
-        : current);
-      if (pendingTab && !pendingTab.closed) {
-        pendingTab.location.href = externalUrl;
-      } else {
-        window.location.assign(externalUrl);
-      }
-    } catch (error) {
-      if (pendingTab && !pendingTab.closed) pendingTab.close();
-      console.error("External code access failed:", error);
-      setIsExternalCodeUsed(false);
-      setToast({ label: "تعذر فتح الرابط، يرجى المحاولة لاحقاً", at: Date.now() });
-    } finally {
-      setExternalCodeSubmitting(false);
-    }
+        if (!response.ok || !payload?.success || !payload.first_opened_at) {
+          throw new Error(payload?.error || "external_code_timer_failed");
+        }
+        setExternalCodeFirstOpenedAt(payload.first_opened_at);
+        setLink((current) => current
+          ? { ...current, external_code_first_opened_at: payload.first_opened_at }
+          : current);
+      })
+      .catch((error) => {
+        console.error("External code timer registration failed:", error);
+        setToast({ label: "تم فتح الرابط، لكن تعذر مزامنة العداد. يرجى التواصل مع المتجر.", at: Date.now() });
+      })
+      .finally(() => setExternalCodeSubmitting(false));
   }
 
   useEffect(() => {
@@ -6477,17 +6510,26 @@ function CustomerView({
                           className="mt-4 flex min-h-12 w-full cursor-not-allowed items-center justify-center gap-2 rounded-2xl bg-zinc-200 px-4 text-sm font-black text-zinc-500"
                         >
                           <LockKeyhole className="h-5 w-5" />
-                          تم استهلاك رابط الكود (صلاحية لمرة واحدة)
+                          انتهت صلاحية رابط الكود
                         </button>
                       ) : usesExternalCodeLink ? (
-                        <button
-                          type="button"
-                          onClick={openExternalCodeWarning}
-                          className="mt-4 flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#8B35F5] px-4 text-sm font-black text-white shadow-[0_14px_32px_rgba(139,53,245,0.24)] transition hover:-translate-y-0.5 hover:bg-[#7626DD]"
-                        >
-                          <ExternalLink className="h-5 w-5" />
-                          جلب الكود عبر الرابط الخارجي
-                        </button>
+                        <div className="mt-4 space-y-3">
+                          <button
+                            type="button"
+                            disabled={externalCodeSubmitting}
+                            onClick={openExternalCodeWarning}
+                            className="flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#8B35F5] px-4 text-sm font-black text-white shadow-[0_14px_32px_rgba(139,53,245,0.24)] transition hover:-translate-y-0.5 hover:bg-[#7626DD] disabled:cursor-wait disabled:opacity-70"
+                          >
+                            <ExternalLink className="h-5 w-5" />
+                            جلب الكود عبر الرابط الخارجي
+                          </button>
+                          {externalCodeRemainingSeconds != null && externalCodeRemainingSeconds > 0 && (
+                            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-center text-sm font-black text-amber-800" role="timer">
+                              متبقي على انتهاء صلاحية الرابط: {String(Math.floor(externalCodeRemainingSeconds / 60)).padStart(2, "0")}:
+                              {String(externalCodeRemainingSeconds % 60).padStart(2, "0")}
+                            </div>
+                          )}
+                        </div>
                       ) : (
                         <p className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-center text-sm font-black text-rose-700">
                           رابط جلب الكود غير متوفر حالياً، يرجى التواصل مع المتجر.

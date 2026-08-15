@@ -53,6 +53,7 @@ export type CustomerLink = {
   tv_link_used_at?: string | null;
   external_code_used?: boolean | null;
   external_code_used_at?: string | null;
+  external_code_first_opened_at?: string | null;
   updated_at?: string | null;
   uuid: string;
   short_id?: string | null;

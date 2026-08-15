@@ -25,7 +25,11 @@ export default async function handler(req, res) {
   });
   const { data, error } = await supabase
     .from("customer_links")
-    .update({ external_code_used: false, external_code_used_at: null })
+    .update({
+      external_code_used: false,
+      external_code_used_at: null,
+      external_code_first_opened_at: null,
+    })
     .eq("id", linkId)
     .select("*")
     .maybeSingle();

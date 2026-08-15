@@ -48,6 +48,7 @@ create table if not exists public.customer_links (
   tv_link_used_at timestamptz,
   external_code_used boolean not null default false,
   external_code_used_at timestamptz,
+  external_code_first_opened_at timestamptz,
   updated_at timestamptz not null default now(),
   created_at timestamptz not null default now()
 );
@@ -145,6 +146,9 @@ alter table public.customer_links
 alter table public.customer_links
   add column if not exists external_code_used_at timestamptz;
 
+alter table public.customer_links
+  add column if not exists external_code_first_opened_at timestamptz;
+
 create or replace function public.protect_external_code_access_state()
 returns trigger
 language plpgsql
@@ -160,7 +164,7 @@ $$;
 
 drop trigger if exists protect_external_code_access_state_trigger on public.customer_links;
 create trigger protect_external_code_access_state_trigger
-before update of external_code_used, external_code_used_at on public.customer_links
+before update of external_code_used, external_code_used_at, external_code_first_opened_at on public.customer_links
 for each row execute function public.protect_external_code_access_state();
 
 alter table public.customer_links
