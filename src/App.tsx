@@ -105,7 +105,7 @@ type ServiceTheme = {
 
 const defaultCustomerVideoUrl = "https://www.youtube.com/embed/77PisEHo9_U?playsinline=1&rel=0&modestbranding=1";
 const externalCodeCustomerVideoUrl = "https://www.youtube.com/embed/77PisEHo9_U?playsinline=1&rel=0&modestbranding=1";
-const osnTelegramTutorialUrl = import.meta.env.VITE_OSN_TELEGRAM_TUTORIAL_URL || defaultCustomerVideoUrl;
+const osnTelegramTutorialUrl = import.meta.env.VITE_OSN_TELEGRAM_TUTORIAL_URL || "https://www.youtube.com/embed/ojL4d9UZEvw?playsinline=1&rel=0&modestbranding=1";
 const osnTelegramUrl = import.meta.env.VITE_OSN_TELEGRAM_URL || "https://t.me/OSNpassbot";
 const videoUrl = import.meta.env.VITE_CUSTOMER_VIDEO_URL || defaultCustomerVideoUrl;
 const tvTutorialVideoUrl = import.meta.env.VITE_TV_TUTORIAL_VIDEO_URL || "https://www.youtube.com/embed/KYo3ZCyB3JY?playsinline=1&rel=0&modestbranding=1";
