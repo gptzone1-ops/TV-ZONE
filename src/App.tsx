@@ -3498,9 +3498,15 @@ function CompensationAdminPage({
       },
       body: JSON.stringify({ action, ...body }),
     });
-    const payload = await response.json().catch(() => ({}));
+    const responseText = await response.text();
+    let payload: Record<string, any> = {};
+    try {
+      payload = responseText ? JSON.parse(responseText) : {};
+    } catch {
+      payload = { error: "invalid_api_response", message: responseText.slice(0, 180) };
+    }
     if (!response.ok || !payload?.success) {
-      const apiError = new Error(payload?.error || "operation_failed");
+      const apiError = new Error(payload?.message || payload?.error || `HTTP ${response.status}`);
       (apiError as Error & { code?: string }).code = payload?.error;
       throw apiError;
     }
@@ -3535,7 +3541,8 @@ function CompensationAdminPage({
       applySnapshot(await callAdminApi("list"));
     } catch (loadError) {
       console.error("Compensation dashboard loading failed:", loadError);
-      setToast({ label: "تعذر تحميل طلبات التعويض", tone: "error", at: Date.now() });
+      const reason = loadError instanceof Error ? loadError.message : "خطأ غير معروف";
+      setToast({ label: `تعذر تحميل طلبات التعويض: ${reason}`, tone: "error", at: Date.now() });
     } finally {
       setLoading(false);
     }

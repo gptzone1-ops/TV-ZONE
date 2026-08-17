@@ -6,7 +6,18 @@ const adminPassword = process.env.ADMIN_PASSWORD || process.env.VITE_ADMIN_PASSW
 const validAccountTypes = new Set(["private", "shared"]);
 
 function send(res, status, payload) {
+  res.setHeader("Cache-Control", "no-store, max-age=0");
   return res.status(status).json(payload);
+}
+
+function databaseErrorPayload(error) {
+  return {
+    success: false,
+    error: "operation_failed",
+    message: String(error?.message || "تعذر تنفيذ عملية طلبات التعويض"),
+    code: error?.code || null,
+    details: error?.details || null,
+  };
 }
 
 function validUrl(value) {
@@ -263,6 +274,6 @@ export default async function handler(req, res) {
     return send(res, 400, { success: false, error: "unknown_action" });
   } catch (error) {
     console.error("Admin compensation endpoint failed:", error);
-    return send(res, 500, { success: false, error: "operation_failed" });
+    return send(res, 500, databaseErrorPayload(error));
   }
 }
