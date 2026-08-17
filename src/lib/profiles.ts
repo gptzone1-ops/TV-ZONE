@@ -16,13 +16,21 @@ export const PREVIOUS_PROFILE_CODES: Record<string, string> = {
   E: "0914",
 };
 
-// Used only when creating new customer links. Existing rows keep their stored PINs.
-export const PROFILE_CODES: Record<string, string> = {
+export const FORMER_PROFILE_CODES: Record<string, string> = {
   A: "8888",
   B: "9000",
   C: "1234",
   D: "6666",
   E: "5556",
+};
+
+// Used only when creating new customer links. Existing rows keep their stored PINs.
+export const PROFILE_CODES: Record<string, string> = {
+  A: "3333",
+  B: "3334",
+  C: "9999",
+  D: "1212",
+  E: "9090",
 };
 
 export const PROFILE_NAMES = Object.keys(PROFILE_CODES);

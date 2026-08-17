@@ -17,11 +17,11 @@ begin
   );
 
   new.profile_code := case profile_key
-    when 'A' then '8888'
-    when 'B' then '9000'
-    when 'C' then '1234'
-    when 'D' then '6666'
-    when 'E' then '5556'
+    when 'A' then '3333'
+    when 'B' then '3334'
+    when 'C' then '9999'
+    when 'D' then '1212'
+    when 'E' then '9090'
     else new.profile_code
   end;
 

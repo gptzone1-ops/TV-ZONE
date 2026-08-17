@@ -42,6 +42,7 @@ import {
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   LEGACY_PROFILE_CODES,
+  FORMER_PROFILE_CODES,
   PREVIOUS_PROFILE_CODES,
   PROFILE_CODES,
   accountTypeLabel,
@@ -121,7 +122,7 @@ const verificationCodeLifetimeMs = 120 * 1000;
 const verificationCodeFallbackWindowMs = 15 * 60 * 1000;
 const tvApprovalFallbackWindowMs = 15 * 60 * 1000;
 const tvApprovalSearchDurationMs = 15 * 1000;
-const externalCodeAccessDurationMs = 5 * 60 * 1000;
+const externalCodeAccessDurationMs = 30 * 60 * 1000;
 const adminAccountsPageSize = 10;
 const extraCreditReasons: ExtraCreditReason[] = [
   "كود خاطئ",
@@ -547,6 +548,7 @@ type VerificationMessageRow = {
 
 const STORED_PROFILE_PINS = new Set([
   ...Object.values(PREVIOUS_PROFILE_CODES),
+  ...Object.values(FORMER_PROFILE_CODES),
   ...Object.values(PROFILE_CODES),
 ]);
 
