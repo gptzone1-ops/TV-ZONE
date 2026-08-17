@@ -62,6 +62,7 @@ export type CustomerLink = {
   profile_name: string;
   profile_label: string;
   profile_code: string;
+  activation_key?: string | null;
   service_type?: ServiceType | null;
   created_at: string;
   accounts?: NetflixAccount;

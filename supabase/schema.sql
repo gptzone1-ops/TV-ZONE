@@ -45,6 +45,7 @@ create table if not exists public.customer_links (
   profile_name text not null,
   profile_label text not null,
   profile_code text not null,
+  activation_key text,
   tv_approval_url text,
   has_used_tv_link boolean not null default false,
   tv_link_used_at timestamptz,
@@ -60,6 +61,13 @@ alter table public.customer_links
 
 alter table public.customer_links
   add column if not exists email text;
+
+alter table public.customer_links
+  add column if not exists activation_key text;
+
+create unique index if not exists customer_links_osn_activation_key_unique
+  on public.customer_links (lower(activation_key))
+  where service_type = 'osn' and nullif(btrim(activation_key), '') is not null;
 
 update public.customer_links as links
 set email = accounts.email

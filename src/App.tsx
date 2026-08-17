@@ -74,6 +74,7 @@ type AccountFormResult = boolean | { ok: boolean; error?: string };
 type AccountCreateForm = {
   email: string;
   password: string;
+  access_keys?: string[];
   account_type: AccountType;
   supplier_code_url?: string;
   code_fetch_method?: CodeFetchMethod;
@@ -104,6 +105,8 @@ type ServiceTheme = {
 
 const defaultCustomerVideoUrl = "https://www.youtube.com/embed/77PisEHo9_U?playsinline=1&rel=0&modestbranding=1";
 const externalCodeCustomerVideoUrl = "https://www.youtube.com/embed/77PisEHo9_U?playsinline=1&rel=0&modestbranding=1";
+const osnTelegramTutorialUrl = import.meta.env.VITE_OSN_TELEGRAM_TUTORIAL_URL || defaultCustomerVideoUrl;
+const osnTelegramUrl = import.meta.env.VITE_OSN_TELEGRAM_URL || "https://t.me/YOUR_BOT_OR_CHANNEL";
 const videoUrl = import.meta.env.VITE_CUSTOMER_VIDEO_URL || defaultCustomerVideoUrl;
 const tvTutorialVideoUrl = import.meta.env.VITE_TV_TUTORIAL_VIDEO_URL || "https://www.youtube.com/embed/KYo3ZCyB3JY?playsinline=1&rel=0&modestbranding=1";
 const defaultCompensationTutorialUrl = "https://www.youtube.com/embed/ga805aqXGH4?playsinline=1&rel=0&modestbranding=1";
@@ -1421,25 +1424,38 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     const expires_at = defaultExpiryDate();
     let slots = buildProfileSlots(form.account_type, selectedService, form.compensation_distribution);
     const normalizedEmail = normalizeEmail(form.email);
+    const accountPassword = selectedService === "osn" ? "" : form.password;
+    const osnAccessKeys = Array.isArray(form.access_keys)
+      ? form.access_keys.map((key) => String(key || "").trim()).filter(Boolean)
+      : [];
     let temporaryShortId: string | null = null;
     const hidePasswordFromClient = selectedService === "netflix" && (form.account_type === "private" || form.account_type === "shared");
     const codeFetchMethod: CodeFetchMethod | null = selectedService === "netflix" && (form.account_type === "private" || form.account_type === "shared")
       ? form.code_fetch_method || "auto_fetch"
       : null;
-    const expectedNewLinks = selectedService === "netflix" && form.account_type === "private"
-      ? 5
-      : selectedService === "netflix" && form.account_type === "shared"
-        ? 10
-        : null;
-    const expectedCreatedLinks = expectedNewLinks ?? (
-      selectedService === "osn"
-        ? form.account_type === "private" ? 5 : 10
-        : null
-    );
+    const expectedNewLinks = (selectedService === "netflix" || selectedService === "osn")
+      ? form.account_type === "private" ? 5 : 10
+      : null;
+    const expectedCreatedLinks = expectedNewLinks;
 
     if (!normalizedEmail) {
       setToast({ label: emptyEmailMessage, at: Date.now(), tone: "error" });
       return { ok: false, error: emptyEmailMessage };
+    }
+
+    if (selectedService === "osn") {
+      const requiredKeys = form.account_type === "private" ? 5 : 10;
+      if (osnAccessKeys.length !== requiredKeys) {
+        const error = `يجب إدخال ${requiredKeys} مفاتيح تفعيل بالضبط، مفتاح في كل سطر.`;
+        setToast({ label: error, at: Date.now(), tone: "error" });
+        return { ok: false, error };
+      }
+      if (new Set(osnAccessKeys.map((key) => key.toLowerCase())).size !== requiredKeys) {
+        const error = "مفاتيح تفعيل OSN يجب أن تكون مختلفة وغير مكررة.";
+        setToast({ label: error, at: Date.now(), tone: "error" });
+        return { ok: false, error };
+      }
+      slots = slots.map((slot, index) => ({ ...slot, activation_key: osnAccessKeys[index] }));
     }
 
     if (expectedCreatedLinks !== null && slots.length !== expectedCreatedLinks) {
@@ -1466,7 +1482,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     const optimisticAccount: NetflixAccount = {
       id: optimisticId,
       email: normalizedEmail,
-      password: form.password,
+      password: accountPassword,
       account_type: form.account_type,
       supplier_code_url: form.supplier_code_url,
       code_fetch_method: codeFetchMethod,
@@ -1541,11 +1557,13 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     setLoading(true);
     let account: NetflixAccount | null = null;
     try {
+      const { access_keys: _accessKeys, ...accountFormData } = form;
       const { data, error: accountError } = await supabase
         .from("accounts")
         .insert({
-          ...form,
+          ...accountFormData,
           email: normalizedEmail,
+          password: accountPassword,
           expires_at,
           service_type: selectedService,
           use_automated_code: selectedService === "netflix" && form.account_type !== "temporary" && form.account_type !== "compensation" && codeFetchMethod !== "external_link",
@@ -4384,6 +4402,7 @@ function AccountForm({
   const [accountType, setAccountType] = useState<AccountType>(initialAccount?.account_type || "private");
   const [email, setEmail] = useState(initialAccount?.email || "");
   const [password, setPassword] = useState(initialAccount?.password || "");
+  const [accessKeysInput, setAccessKeysInput] = useState("");
   const [supplierCodeUrl, setSupplierCodeUrl] = useState(initialAccount?.supplier_code_url || "");
   const [externalCodeLinkEnabled, setExternalCodeLinkEnabled] = useState(
     initialAccount?.code_fetch_method === "external_link",
@@ -4401,10 +4420,26 @@ function AccountForm({
     const supplier_code_url = supplierCodeUrl.trim() || undefined;
     const cleanEmail = normalizeEmail(email);
     const usingExternalLink = canConfigureCodeFetch && externalCodeLinkEnabled;
+    const accessKeys = accessKeysInput
+      .split(/\r?\n/)
+      .map((key) => key.trim())
+      .filter(Boolean);
 
     if (!cleanEmail) {
       setFormError(emptyEmailMessage);
       return;
+    }
+
+    if (!initialAccount && service === "osn") {
+      const requiredKeys = accountType === "private" ? 5 : 10;
+      if (accessKeys.length !== requiredKeys) {
+        setFormError(`أدخل ${requiredKeys} مفاتيح تفعيل بالضبط، مفتاحاً واحداً في كل سطر.`);
+        return;
+      }
+      if (new Set(accessKeys.map((key) => key.toLowerCase())).size !== requiredKeys) {
+        setFormError("يوجد مفتاح مكرر. يجب أن يحصل كل رابط على مفتاح تفعيل مختلف.");
+        return;
+      }
     }
 
     if (usingExternalLink && !supplier_code_url) {
@@ -4458,10 +4493,14 @@ function AccountForm({
     const cleanEmail = normalizeEmail(email);
     const useExternalLink = service === "netflix" && externalCodeLinkEnabled;
     const supplier_code_url = useExternalLink ? supplierCodeUrl.trim() || undefined : undefined;
+    const access_keys = service === "osn"
+      ? accessKeysInput.split(/\r?\n/).map((key) => key.trim()).filter(Boolean)
+      : undefined;
     onClose();
     void onAdd({
       email: cleanEmail,
-      password,
+      password: service === "osn" ? "" : password,
+      access_keys,
       account_type: accountType,
       supplier_code_url,
       code_fetch_method: service === "netflix" ? (useExternalLink ? "external_link" : "auto_fetch") : undefined,
@@ -4534,7 +4573,7 @@ function AccountForm({
           {editing && <p className="mt-2 text-[11px] font-bold text-zinc-400">نوع الحساب ثابت لحماية روابط العملاء المنشأة.</p>}
         </div>
 
-        <div className="grid gap-x-4 sm:grid-cols-2">
+        <div className={cn("grid gap-x-4", service === "osn" && !editing ? "sm:grid-cols-1" : "sm:grid-cols-2")}>
           <Field icon={Mail} label="البريد الإلكتروني">
             <input
               required
@@ -4547,17 +4586,41 @@ function AccountForm({
             />
           </Field>
 
-          <Field icon={KeyRound} label="كلمة المرور">
-            <input
+          {(service !== "osn" || Boolean(initialAccount?.password)) && (
+            <Field icon={KeyRound} label="كلمة المرور">
+              <input
+                required
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                placeholder="أدخل كلمة مرور الحساب"
+                className="admin-modal-input"
+                dir="ltr"
+              />
+            </Field>
+          )}
+        </div>
+
+        {service === "osn" && !editing && (
+          <Field icon={KeyRound} label={`مفاتيح التفعيل / الدخول (${accountType === "private" ? 5 : 10} مفاتيح)`}>
+            <textarea
               required
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              placeholder="أدخل كلمة مرور الحساب"
-              className="admin-modal-input"
+              rows={accountType === "private" ? 6 : 11}
+              value={accessKeysInput}
+              onChange={(event) => {
+                setAccessKeysInput(event.target.value);
+                setFormError("");
+              }}
+              placeholder={accountType === "private"
+                ? "KEY-1\nKEY-2\nKEY-3\nKEY-4\nKEY-5"
+                : "KEY-1\nKEY-2\nKEY-3\nKEY-4\nKEY-5\nKEY-6\nKEY-7\nKEY-8\nKEY-9\nKEY-10"}
+              className="admin-modal-input min-h-40 resize-y py-3 leading-7"
               dir="ltr"
             />
+            <p className="mt-2 text-[11px] font-bold leading-6 text-zinc-500">
+              أدخل مفتاحاً مختلفاً في كل سطر. سيتم توزيعه على روابط العملاء بالترتيب تلقائياً.
+            </p>
           </Field>
-        </div>
+        )}
 
         {canConfigureCodeFetch && (
           <div className="mb-5 rounded-2xl border border-[#E0D0FB] bg-[#F8F4FF] p-4">
@@ -4666,8 +4729,8 @@ function AccountForm({
                 : "سيتم إنشاء 8 روابط تلقائياً بدون رمز ملف."
               : service === "osn"
                 ? accountType === "private"
-                  ? "سيتم إنشاء 5 روابط OSN مستقلة تلقائياً."
-                  : "سيتم إنشاء 10 روابط OSN مستقلة تلقائياً، رابطان لكل ملف."
+                  ? "سيتم إنشاء 5 روابط OSN، ولكل رابط مفتاح تفعيل مستقل."
+                  : "سيتم إنشاء 10 روابط OSN، ولكل رابط مفتاح تفعيل مستقل."
               : accountType === "private"
                 ? "سيتم إنشاء 5 روابط تلقائياً."
                 : "سيتم إنشاء 10 روابط تلقائياً: رابطان مستقلان لكل ملف من A إلى E."}
@@ -5753,6 +5816,9 @@ function CustomerView({
 
   const account = link?.accounts;
   const accountReportedClosed = account?.is_reported_closed === true;
+  const osnActivationKey = String(link?.activation_key || "").trim();
+  const usesOsnAccessKey = serviceOf(account) === "osn" && Boolean(osnActivationKey);
+  const osnTutorialMedia = getTutorialMedia(osnTelegramTutorialUrl);
   const storedVerificationCode = link?.verification_code || account?.verification_code || null;
   const storedVerificationCodeReceivedAt =
     link?.verification_code_received_at || account?.verification_code_received_at || null;
@@ -6699,6 +6765,30 @@ function CustomerView({
             <ClosedAccountCompensationView link={link} navigate={navigate} />
           ) : (
             <div className="space-y-6">
+              {usesOsnAccessKey && (
+                <section className="animate-rise overflow-hidden rounded-[2rem] border border-fuchsia-200 bg-white shadow-premium-lg" aria-labelledby="osn-tutorial-title">
+                  <div className="border-b border-fuchsia-100 bg-fuchsia-50 px-5 py-4 text-center md:px-7">
+                    <p className="text-sm font-black leading-7 text-fuchsia-800">
+                      ⚠️ تنبيه: يرجى متابعة فيديو الشرح لمعرفة طريقة تفعيل الكود عبر التيليجرام
+                    </p>
+                    <h2 id="osn-tutorial-title" className="mt-1 text-xl font-black text-zinc-950">شرح تفعيل حساب OSN</h2>
+                  </div>
+                  {osnTutorialMedia?.kind === "video" ? (
+                    <video controls playsInline preload="metadata" className="aspect-video w-full bg-black" src={osnTutorialMedia.src} />
+                  ) : osnTutorialMedia ? (
+                    <div className="aspect-video w-full bg-black">
+                      <iframe
+                        src={osnTutorialMedia.src}
+                        title="شرح تفعيل OSN عبر التيليجرام"
+                        className="h-full w-full border-0"
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                        referrerPolicy="strict-origin-when-cross-origin"
+                        allowFullScreen
+                      />
+                    </div>
+                  ) : null}
+                </section>
+              )}
               {service !== "osn" && (
                 <section className="animate-rise" aria-labelledby="tutorials-title">
                   <div className="mb-4 flex items-center gap-3 px-1">
@@ -6766,7 +6856,31 @@ function CustomerView({
                     <LoginCopyCard label="كلمة المرور" value={account.password} icon={KeyRound} setToast={setToast} theme={theme} />
                   )}
                   {!normalClientLayout && link.client_code && <CompensationCodeCard code={link.client_code} showPageLink />}
-                  {service === "osn" ? (
+                  {service === "osn" && usesOsnAccessKey ? (
+                    <div className="rounded-[1.75rem] border border-fuchsia-200 bg-gradient-to-l from-white to-fuchsia-50 p-4 shadow-card">
+                      <div className="flex items-center gap-4">
+                        <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-fuchsia-100 text-fuchsia-700">
+                          <KeyRound className="h-7 w-7" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-lg font-black text-zinc-950">مفتاح تفعيل الكود</p>
+                          <p className="mt-1 text-xs font-bold leading-6 text-zinc-600">هذا المفتاح مخصص لرابطك فقط. انسخه ثم استخدمه في خدمة التفعيل عبر تيليجرام.</p>
+                        </div>
+                      </div>
+                      <div className="mt-4">
+                        <LoginCopyCard label="مفتاح التفعيل" value={osnActivationKey} icon={KeyRound} setToast={setToast} theme={theme} />
+                      </div>
+                      <a
+                        href={osnTelegramUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-4 flex min-h-14 w-full items-center justify-center gap-2 rounded-2xl bg-fuchsia-700 px-4 text-center text-base font-black text-white shadow-[0_14px_32px_rgba(162,28,175,0.24)] transition hover:-translate-y-0.5 hover:bg-fuchsia-800"
+                      >
+                        <ExternalLink className="h-5 w-5 shrink-0" />
+                        الانتقال لتفعيل الكود عبر التيليجرام ↗
+                      </a>
+                    </div>
+                  ) : service === "osn" ? (
                     <div className="rounded-[1.75rem] border border-emerald-200 bg-gradient-to-l from-white to-emerald-50 p-4 shadow-card">
                       <div className="flex items-center gap-4">
                         <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-700">

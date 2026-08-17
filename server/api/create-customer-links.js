@@ -19,31 +19,40 @@ const PROFILE_STRUCTURES = {
   },
 };
 
-function hasValidStructure(links, accountType) {
+function hasValidStructure(links, accountType, serviceType) {
   const structure = PROFILE_STRUCTURES[accountType];
   if (!structure || links.length !== structure.names.length) return false;
+
+  const activationKeys = serviceType === "osn"
+    ? links.map((link) => String(link?.activation_key || "").trim())
+    : [];
+  if (serviceType === "osn" && (
+    activationKeys.some((key) => !key)
+    || new Set(activationKeys.map((key) => key.toLowerCase())).size !== activationKeys.length
+  )) return false;
 
   return links.every((link, index) => (
     link
     && String(link.uuid || "").trim()
     && String(link.short_id || "").trim()
     && String(link.profile_code || "").trim()
-    && String(link.service_type || "netflix") === "netflix"
+    && String(link.service_type || "netflix") === serviceType
     && String(link.profile_name || "") === structure.names[index]
     && String(link.profile_label || "") === structure.labels[index]
   ));
 }
 
-function sanitizeLinkRows(links, accountId, email) {
+function sanitizeLinkRows(links, accountId, email, serviceType) {
   return links.map((link) => ({
     account_id: accountId,
     email,
     uuid: String(link.uuid).trim(),
     short_id: String(link.short_id).trim(),
-    service_type: "netflix",
+    service_type: serviceType,
     profile_name: String(link.profile_name).trim(),
     profile_label: String(link.profile_label).trim(),
     profile_code: String(link.profile_code).trim(),
+    ...(serviceType === "osn" ? { activation_key: String(link.activation_key).trim() } : {}),
   }));
 }
 
@@ -84,13 +93,14 @@ export default async function handler(req, res) {
   }
 
   if (!account) return send(res, 404, { success: false, error: "account_not_found" });
-  if ((account.service_type || "netflix") !== "netflix" || !PROFILE_STRUCTURES[account.account_type]) {
+  const serviceType = account.service_type || "netflix";
+  if (!["netflix", "osn"].includes(serviceType) || !PROFILE_STRUCTURES[account.account_type]) {
     return send(res, 409, { success: false, error: "unsupported_account_type" });
   }
   if (String(account.email || "").trim().toLowerCase() !== email) {
     return send(res, 409, { success: false, error: "account_email_mismatch" });
   }
-  if (!hasValidStructure(links, account.account_type)) {
+  if (!hasValidStructure(links, account.account_type, serviceType)) {
     return send(res, 409, { success: false, error: "invalid_links_structure" });
   }
 
@@ -110,7 +120,7 @@ export default async function handler(req, res) {
   // PostgREST sends this array as one INSERT statement, so all rows commit together.
   // Keep this payload compatible with databases that have not applied optional
   // tracking migrations. Only established customer_links columns are inserted.
-  const rows = sanitizeLinkRows(links, accountId, email);
+  const rows = sanitizeLinkRows(links, accountId, email, serviceType);
   const { data, error } = await supabase
     .from("customer_links")
     .insert(rows)

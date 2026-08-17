@@ -64,7 +64,7 @@ export default async function handler(req, res) {
   const accountId = String(req.body?.account_id || "").trim();
   const email = normalizeEmail(req.body?.email);
   const password = String(req.body?.password || "");
-  if (!accountId || !email || !password) {
+  if (!accountId || !email) {
     return send(res, 400, { success: false, error: "invalid_account_data" });
   }
 
@@ -85,6 +85,12 @@ export default async function handler(req, res) {
   if (!existingAccount) {
     return send(res, 404, { success: false, error: "account_not_found" });
   }
+  if ((existingAccount.service_type || "netflix") !== "osn" && !password) {
+    return send(res, 400, { success: false, error: "invalid_account_data" });
+  }
+  const passwordToSave = (existingAccount.service_type || "netflix") === "osn" && !password
+    ? String(existingAccount.password || "")
+    : password;
 
   const supplierCodeUrl = syncEmailInLinkedUrl(
     req.body?.supplier_code_url,
@@ -104,7 +110,7 @@ export default async function handler(req, res) {
   }
   const updatePayload = {
     email,
-    password,
+    password: passwordToSave,
     supplier_code_url: supplierCodeUrl,
   };
 
