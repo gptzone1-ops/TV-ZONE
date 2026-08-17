@@ -4,7 +4,6 @@ import fetchImapCode from "../server/api/fetch-imap-code.js";
 import notifyExtraCredit from "../server/api/notify-extra-credit.js";
 import receiveCode from "../server/api/receive-code.js";
 import resetCompensationLinks from "../server/api/reset-compensation-links.js";
-import resetExternalCodeAccess from "../server/api/reset-external-code-access.js";
 import reviewCreditRequest from "../server/api/review-credit-request.js";
 import saveImapCredential from "../server/api/save-imap-credential.js";
 import telegramWebhook from "../server/api/telegram-webhook.js";
@@ -20,7 +19,6 @@ const handlers = {
   "notify-extra-credit": notifyExtraCredit,
   "receive-code": receiveCode,
   "reset-compensation-links": resetCompensationLinks,
-  "reset-external-code-access": resetExternalCodeAccess,
   "review-credit-request": reviewCreditRequest,
   "save-imap-credential": saveImapCredential,
   "telegram-webhook": telegramWebhook,

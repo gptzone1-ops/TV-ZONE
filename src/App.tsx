@@ -1946,13 +1946,28 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
         },
         body: JSON.stringify({ link_id: linkId }),
       });
-      const result = (await response.json().catch(() => null)) as {
-        success?: boolean;
-        link?: CustomerLink;
-        error?: string;
-      } | null;
+      const responseText = await response.text();
+      const result = (() => {
+        try {
+          return JSON.parse(responseText) as {
+            success?: boolean;
+            link?: CustomerLink;
+            error?: string;
+            code?: string | null;
+            details?: string | null;
+            hint?: string | null;
+          };
+        } catch {
+          return null;
+        }
+      })();
       if (!response.ok || !result?.success || !result.link) {
-        throw new Error(result?.error || "reset_failed");
+        throw {
+          message: result?.error || `reset_external_code_http_${response.status}`,
+          code: result?.code || undefined,
+          details: result?.details || responseText.slice(0, 300) || undefined,
+          hint: result?.hint || undefined,
+        };
       }
 
       setLinks((current) =>
@@ -1961,8 +1976,9 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       setToast({ label: "تمت إعادة تفعيل رابط الكود لهذا العميل", at: Date.now() });
       return true;
     } catch (error) {
-      console.error("External code access reset request failed:", error);
-      setToast({ label: "تعذرت إعادة تفعيل رابط الكود", at: Date.now(), tone: "error" });
+      const databaseError = formatDatabaseError(error);
+      console.error("External code access reset request failed:", { error, formattedError: databaseError, linkId });
+      setToast({ label: `تعذرت إعادة تفعيل رابط الكود: ${databaseError}`, at: Date.now(), tone: "error" });
       return false;
     }
   }

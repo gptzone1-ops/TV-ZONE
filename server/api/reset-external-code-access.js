@@ -5,6 +5,7 @@ const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPA
 const adminPassword = process.env.ADMIN_PASSWORD || process.env.VITE_ADMIN_PASSWORD || "Gpt123Gpt@@";
 
 function send(res, status, payload) {
+  res.setHeader("Cache-Control", "no-store");
   return res.status(status).json(payload);
 }
 
@@ -36,7 +37,13 @@ export default async function handler(req, res) {
 
   if (error) {
     console.error("External code access reset failed:", error);
-    return send(res, 500, { success: false, error: "reset_failed" });
+    return send(res, 500, {
+      success: false,
+      error: error.message || "reset_failed",
+      code: error.code || null,
+      details: error.details || null,
+      hint: error.hint || null,
+    });
   }
   if (!data) return send(res, 404, { success: false, error: "customer_link_not_found" });
   return send(res, 200, { success: true, link: data });
