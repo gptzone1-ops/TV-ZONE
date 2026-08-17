@@ -860,13 +860,27 @@ function CompensationPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ client_code: normalizedCode }),
       });
-      const payload = await response.json().catch(() => ({}));
+      const responseText = await response.text();
+      const payload = (() => {
+        try {
+          return JSON.parse(responseText);
+        } catch {
+          return null;
+        }
+      })();
 
       if (!response.ok || !payload?.success || !payload?.request) {
         if (payload?.error === "invalid_client_code") {
           setError("رمز التعويض غير صحيح، يرجى نسخه من صفحة بيانات اشتراكك والمحاولة مجدداً.");
           localStorage.removeItem(storageKey);
         } else {
+          console.error("Compensation API error:", {
+            status: response.status,
+            error: payload?.error,
+            message: payload?.message,
+            code: payload?.code,
+            response: responseText.slice(0, 300),
+          });
           setError("تعذر التحقق من الطلب حالياً، يرجى المحاولة مرة أخرى بعد قليل.");
         }
         return;
@@ -2425,7 +2439,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
         onCopyAllLinks={copyAllCustomerLinksForAccount}
         onResetCompensationLinks={resetSharedCompensationLinks}
         onUpdateCustomerCodeBalance={updateCustomerCodeBalance}
-        onResetCustomerDevice={resetCustomerDevice}
+        onResetExternalCodeAccess={resetExternalCodeAccess}
         pendingCreditRequests={extraCreditRequests.filter((request) => request.status === "pending").length}
         onOpenCreditRequests={() => setScreen("credit-requests")}
         onOpenCompensations={() => setScreen("compensations")}
@@ -2606,7 +2620,7 @@ function Dashboard({
   onCopyAllLinks,
   onResetCompensationLinks,
   onUpdateCustomerCodeBalance,
-  onResetCustomerDevice,
+  onResetExternalCodeAccess,
   pendingCreditRequests,
   onOpenCreditRequests,
   onOpenCompensations,
@@ -2637,7 +2651,7 @@ function Dashboard({
     codeRequestLimit: number,
     resetRequestedCount: boolean,
   ) => Promise<boolean>;
-  onResetCustomerDevice: (linkId: string) => Promise<boolean>;
+  onResetExternalCodeAccess: (linkId: string) => Promise<boolean>;
   pendingCreditRequests: number;
   onOpenCreditRequests: () => void;
   onOpenCompensations: () => void;
@@ -2845,17 +2859,25 @@ function Dashboard({
                     نسخ رابط الموافقة
                   </button>
                 )}
-                <button
-                  type="button"
-                  onClick={async () => {
-                    if (!window.confirm("هل تريد إعادة ضبط الجهاز المختار لهذا العميل؟")) return;
-                    await onResetCustomerDevice(customerSearchResult.link.id);
-                  }}
-                  className="flex h-11 items-center justify-center gap-2 rounded-2xl border border-amber-200 bg-amber-50 px-4 text-xs font-black text-amber-700 transition hover:bg-amber-100"
-                >
-                  <RefreshCw className="h-4 w-4" />
-                  إعادة ضبط الجهاز
-                </button>
+                {customerSearchResult.account.code_fetch_method === "external_link" && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!window.confirm("هل تريد إعادة تعيين حد رابط جلب الكود ومنح العميل صلاحية جديدة؟")) return;
+                      await onResetExternalCodeAccess(customerSearchResult.link.id);
+                    }}
+                    disabled={
+                      customerSearchResult.link.external_code_used !== true &&
+                      !customerSearchResult.link.external_code_first_opened_at
+                    }
+                    className="flex min-h-11 items-center justify-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-xs font-black text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-45"
+                  >
+                    <RefreshCw className="h-4 w-4" />
+                    {customerSearchResult.link.external_code_used || customerSearchResult.link.external_code_first_opened_at
+                      ? "إعادة تعيين حد رابط جلب الكود"
+                      : "رابط جلب الكود متاح"}
+                  </button>
+                )}
               </div>
             </div>
           </section>

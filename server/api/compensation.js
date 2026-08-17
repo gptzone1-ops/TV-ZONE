@@ -4,6 +4,7 @@ const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY;
 
 function send(res, status, payload) {
+  res.setHeader("Cache-Control", "no-store");
   return res.status(status).json(payload);
 }
 
@@ -48,7 +49,12 @@ export default async function handler(req, res) {
 
     if (customerError) {
       console.error("Compensation customer lookup failed:", customerError);
-      return send(res, 500, { success: false, error: "customer_lookup_failed" });
+      return send(res, 500, {
+        success: false,
+        error: "customer_lookup_failed",
+        message: customerError.message || null,
+        code: customerError.code || null,
+      });
     }
     if (!customer) {
       return send(res, 404, { success: false, error: "invalid_client_code" });
@@ -63,7 +69,12 @@ export default async function handler(req, res) {
 
     if (requestLookupError) {
       console.error("Compensation request lookup failed:", requestLookupError);
-      return send(res, 500, { success: false, error: "request_lookup_failed" });
+      return send(res, 500, {
+        success: false,
+        error: "request_lookup_failed",
+        message: requestLookupError.message || null,
+        code: requestLookupError.code || null,
+      });
     }
 
     if (existingRequest) {
@@ -90,7 +101,12 @@ export default async function handler(req, res) {
 
     if (createError || !createdRequest) {
       console.error("Compensation request creation failed:", createError);
-      return send(res, 500, { success: false, error: "request_creation_failed" });
+      return send(res, 500, {
+        success: false,
+        error: "request_creation_failed",
+        message: createError?.message || null,
+        code: createError?.code || null,
+      });
     }
 
     const { data: assignmentRows, error: assignmentError } = await supabase.rpc("assign_compensation_link", {
