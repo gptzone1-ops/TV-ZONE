@@ -5417,6 +5417,7 @@ function CustomerView({
   const [agreeExternalCodeTerms, setAgreeExternalCodeTerms] = useState(false);
   const [isExternalCodeUsed, setIsExternalCodeUsed] = useState(false);
   const [externalCodeFirstOpenedAt, setExternalCodeFirstOpenedAt] = useState<string | null>(null);
+  const [externalCodeDeadlineAt, setExternalCodeDeadlineAt] = useState<number | null>(null);
   const [externalCodeSubmitting, setExternalCodeSubmitting] = useState(false);
   const [externalCodeError, setExternalCodeError] = useState<string | null>(null);
   const [tvRequestState, setTvRequestState] = useState<"idle" | "searching" | "ready" | "failed" | "expired">("idle");
@@ -5511,7 +5512,10 @@ function CustomerView({
 
   useEffect(() => {
     setIsExternalCodeUsed(link?.external_code_used === true);
-    setExternalCodeFirstOpenedAt(link?.external_code_first_opened_at || null);
+    const firstOpenedAt = link?.external_code_first_opened_at || null;
+    const firstOpenedMs = firstOpenedAt ? Date.parse(firstOpenedAt) : Number.NaN;
+    setExternalCodeFirstOpenedAt(firstOpenedAt);
+    setExternalCodeDeadlineAt(Number.isFinite(firstOpenedMs) ? firstOpenedMs + externalCodeAccessDurationMs : null);
     externalCodeExpiryRequestRef.current = link?.external_code_used === true;
   }, [link?.id, link?.external_code_used, link?.external_code_first_opened_at]);
 
@@ -5579,11 +5583,8 @@ function CustomerView({
     service === "netflix" &&
     (account?.account_type === "private" || account?.account_type === "shared") &&
     account?.code_fetch_method === "external_link";
-  const externalCodeFirstOpenedMs = externalCodeFirstOpenedAt
-    ? new Date(externalCodeFirstOpenedAt).getTime()
-    : null;
-  const externalCodeRemainingSeconds = externalCodeFirstOpenedMs && Number.isFinite(externalCodeFirstOpenedMs)
-    ? Math.max(0, Math.ceil((externalCodeFirstOpenedMs + externalCodeAccessDurationMs - nowTick) / 1000))
+  const externalCodeRemainingSeconds = externalCodeDeadlineAt
+    ? Math.max(0, Math.ceil((externalCodeDeadlineAt - nowTick) / 1000))
     : null;
   const externalCodeUsed = isExternalCodeUsed || externalCodeRemainingSeconds === 0;
   const externalCodeDirectUrl = String(account?.supplier_code_url || "").trim();
@@ -5617,6 +5618,49 @@ function CustomerView({
     : 0;
 
   useEffect(() => {
+    if (!link?.id || !usesExternalCodeLink) return;
+    const customerLinkId = link.id;
+    let cancelled = false;
+
+    void fetch("/api/use-external-code", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ link_id: customerLinkId, mode: "status" }),
+    })
+      .then(async (response) => {
+        const payload = await response.json().catch(() => null) as {
+          success?: boolean;
+          first_opened_at?: string | null;
+          remaining_seconds?: number | null;
+          error?: string;
+        } | null;
+        if (cancelled) return;
+        if (response.status === 410 || payload?.error === "external_code_expired") {
+          setIsExternalCodeUsed(true);
+          setExternalCodeDeadlineAt(null);
+          setLink((current) => current ? { ...current, external_code_used: true } : current);
+          return;
+        }
+        if (!response.ok || !payload?.success) throw new Error(payload?.error || "external_code_status_failed");
+
+        const firstOpenedAt = payload.first_opened_at || null;
+        const remainingSeconds = typeof payload.remaining_seconds === "number"
+          ? Math.max(0, payload.remaining_seconds)
+          : null;
+        setExternalCodeFirstOpenedAt(firstOpenedAt);
+        setExternalCodeDeadlineAt(remainingSeconds == null ? null : Date.now() + remainingSeconds * 1000);
+        setLink((current) => current
+          ? { ...current, external_code_first_opened_at: firstOpenedAt }
+          : current);
+      })
+      .catch((error) => console.error("External code server status failed:", error));
+
+    return () => {
+      cancelled = true;
+    };
+  }, [link?.id, usesExternalCodeLink]);
+
+  useEffect(() => {
     if (
       !link?.id ||
       !externalCodeFirstOpenedAt ||
@@ -5643,7 +5687,7 @@ function CustomerView({
     setShowExternalCodeWarning(true);
   }
 
-  function continueToExternalCode() {
+  async function continueToExternalCode() {
     if (!link?.id || !agreeExternalCodeTerms || externalCodeUsed || externalCodeSubmitting) return;
     const customerLinkId = link.id;
     if (!isValidHttpUrl(externalCodeDirectUrl)) {
@@ -5651,52 +5695,55 @@ function CustomerView({
       return;
     }
 
-    const openedTab = window.open(externalCodeDirectUrl, "_blank");
+    const openedTab = window.open("about:blank", "_blank");
     if (!openedTab) {
       setExternalCodeError("تعذر فتح الرابط بسبب إعدادات المتصفح. اسمح بالنوافذ المنبثقة ثم حاول مجدداً.");
       return;
     }
-    openedTab.opener = null;
-
-    const optimisticFirstOpenedAt = externalCodeFirstOpenedAt || new Date().toISOString();
-    setExternalCodeFirstOpenedAt(optimisticFirstOpenedAt);
-    setLink((current) => current
-      ? { ...current, external_code_first_opened_at: optimisticFirstOpenedAt }
-      : current);
-    setShowExternalCodeWarning(false);
-    setAgreeExternalCodeTerms(false);
     setExternalCodeSubmitting(true);
     setExternalCodeError(null);
-    void fetch("/api/use-external-code", {
+    try {
+      const response = await fetch("/api/use-external-code", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ link_id: customerLinkId, mode: "start" }),
-      })
-      .then(async (response) => {
-        const payload = await response.json().catch(() => null) as {
+      });
+      const payload = await response.json().catch(() => null) as {
         success?: boolean;
         url?: string;
         first_opened_at?: string;
+        remaining_seconds?: number;
         error?: string;
-        } | null;
-        if (response.status === 410 || payload?.error === "external_code_expired") {
-          setIsExternalCodeUsed(true);
-          setLink((current) => current ? { ...current, external_code_used: true } : current);
-          return;
-        }
-        if (!response.ok || !payload?.success || !payload.first_opened_at) {
-          throw new Error(payload?.error || "external_code_timer_failed");
-        }
-        setExternalCodeFirstOpenedAt(payload.first_opened_at);
-        setLink((current) => current
-          ? { ...current, external_code_first_opened_at: payload.first_opened_at }
-          : current);
-      })
-      .catch((error) => {
-        console.error("External code timer registration failed:", error);
-        setToast({ label: "تم فتح الرابط، لكن تعذر مزامنة العداد. يرجى التواصل مع المتجر.", at: Date.now() });
-      })
-      .finally(() => setExternalCodeSubmitting(false));
+      } | null;
+      if (response.status === 410 || payload?.error === "external_code_expired") {
+        setIsExternalCodeUsed(true);
+        setExternalCodeDeadlineAt(null);
+        setLink((current) => current ? { ...current, external_code_used: true } : current);
+        throw new Error("external_code_expired");
+      }
+      if (!response.ok || !payload?.success || !payload.first_opened_at || !isValidHttpUrl(payload.url || "")) {
+        throw new Error(payload?.error || "external_code_timer_failed");
+      }
+
+      const remainingSeconds = Math.max(0, Number(payload.remaining_seconds) || 0);
+      setExternalCodeFirstOpenedAt(payload.first_opened_at);
+      setExternalCodeDeadlineAt(Date.now() + remainingSeconds * 1000);
+      setLink((current) => current
+        ? { ...current, external_code_first_opened_at: payload.first_opened_at }
+        : current);
+      setShowExternalCodeWarning(false);
+      setAgreeExternalCodeTerms(false);
+      openedTab.opener = null;
+      openedTab.location.replace(payload.url);
+    } catch (error) {
+      openedTab.close();
+      console.error("External code timer registration failed:", error);
+      if (!(error instanceof Error && error.message === "external_code_expired")) {
+        setExternalCodeError("تعذر تثبيت صلاحية الرابط، يرجى المحاولة مرة أخرى.");
+      }
+    } finally {
+      setExternalCodeSubmitting(false);
+    }
   }
 
   useEffect(() => {

@@ -34,7 +34,8 @@ export default async function handler(req, res) {
   }
 
   const identifier = String(req.body?.link_id || req.body?.codeId || req.body?.code || "").trim();
-  const mode = req.body?.mode === "expire" ? "expire" : "start";
+  const requestedMode = String(req.body?.mode || "start");
+  const mode = requestedMode === "expire" || requestedMode === "status" ? requestedMode : "start";
   if (!identifier) return send(res, 400, { success: false, error: "invalid_link_id" });
 
   const supabase = createClient(supabaseUrl, serviceRoleKey, {
@@ -112,7 +113,18 @@ export default async function handler(req, res) {
   }
 
   const firstOpenedMs = validTimestamp(firstOpenedAt);
-  if (!firstOpenedMs) return send(res, 409, { success: false, error: "external_code_not_started" });
+  if (!firstOpenedMs) {
+    if (mode === "status") {
+      return send(res, 200, {
+        success: true,
+        available: true,
+        first_opened_at: null,
+        expires_at: null,
+        remaining_seconds: null,
+      });
+    }
+    return send(res, 409, { success: false, error: "external_code_not_started" });
+  }
 
   const expiresAtMs = firstOpenedMs + accessDurationMs;
   const expired = nowMs >= expiresAtMs;

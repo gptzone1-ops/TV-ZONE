@@ -10,7 +10,6 @@ import saveImapCredential from "../server/api/save-imap-credential.js";
 import telegramWebhook from "../server/api/telegram-webhook.js";
 import temporaryAccount from "../server/api/temporary-account.js";
 import updateAccount from "../server/api/update-account.js";
-import useExternalCode from "../server/api/use-external-code.js";
 
 export const config = { maxDuration: 300 };
 
@@ -27,7 +26,6 @@ const handlers = {
   "telegram-webhook": telegramWebhook,
   "temporary-account": temporaryAccount,
   "update-account": updateAccount,
-  "use-external-code": useExternalCode,
 };
 
 export default async function handler(req, res) {
