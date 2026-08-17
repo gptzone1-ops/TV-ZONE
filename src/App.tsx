@@ -101,10 +101,10 @@ type ServiceTheme = {
   hoverBg: string;
 };
 
-const defaultCustomerVideoUrl = "https://www.youtube.com/embed/ALEeqFXBWjQ?playsinline=1&rel=0&modestbranding=1";
-const externalCodeCustomerVideoUrl = "https://www.youtube.com/embed/lYq_HNApRk4?playsinline=1&rel=0&modestbranding=1";
+const defaultCustomerVideoUrl = "https://www.youtube.com/embed/77PisEHo9_U?playsinline=1&rel=0&modestbranding=1";
+const externalCodeCustomerVideoUrl = "https://www.youtube.com/embed/77PisEHo9_U?playsinline=1&rel=0&modestbranding=1";
 const videoUrl = import.meta.env.VITE_CUSTOMER_VIDEO_URL || defaultCustomerVideoUrl;
-const tvTutorialVideoUrl = import.meta.env.VITE_TV_TUTORIAL_VIDEO_URL || "https://www.youtube.com/embed/i1_gY9XJawg?playsinline=1&rel=0&modestbranding=1";
+const tvTutorialVideoUrl = import.meta.env.VITE_TV_TUTORIAL_VIDEO_URL || "https://www.youtube.com/embed/KYo3ZCyB3JY?playsinline=1&rel=0&modestbranding=1";
 const defaultCompensationTutorialUrl = "https://www.youtube.com/embed/ga805aqXGH4?playsinline=1&rel=0&modestbranding=1";
 const netflixServiceOutage = ["1", "true", "yes", "on"].includes(
   String(import.meta.env.VITE_NETFLIX_SERVICE_OUTAGE ?? "true").trim().toLowerCase(),
