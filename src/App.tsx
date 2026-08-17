@@ -22,6 +22,7 @@ import {
   Mail,
   MessageCircle,
   MonitorPlay,
+  Play,
   Plus,
   RefreshCw,
   Search,
@@ -103,6 +104,7 @@ type ServiceTheme = {
 const defaultCustomerVideoUrl = "https://www.youtube.com/embed/ALEeqFXBWjQ?playsinline=1&rel=0&modestbranding=1";
 const externalCodeCustomerVideoUrl = "https://www.youtube.com/embed/lYq_HNApRk4?playsinline=1&rel=0&modestbranding=1";
 const videoUrl = import.meta.env.VITE_CUSTOMER_VIDEO_URL || defaultCustomerVideoUrl;
+const tvTutorialVideoUrl = import.meta.env.VITE_TV_TUTORIAL_VIDEO_URL || "https://www.youtube.com/embed/i1_gY9XJawg?playsinline=1&rel=0&modestbranding=1";
 const defaultCompensationTutorialUrl = "https://www.youtube.com/embed/ga805aqXGH4?playsinline=1&rel=0&modestbranding=1";
 const netflixServiceOutage = ["1", "true", "yes", "on"].includes(
   String(import.meta.env.VITE_NETFLIX_SERVICE_OUTAGE ?? "true").trim().toLowerCase(),
@@ -278,6 +280,35 @@ function isValidHttpUrl(value: string) {
     return url.protocol === "https:" || url.protocol === "http:";
   } catch {
     return false;
+  }
+}
+
+function youtubeVideoId(value: string) {
+  try {
+    const url = new URL(value);
+    if (url.hostname === "youtu.be") return url.pathname.split("/").filter(Boolean)[0] || null;
+    const segments = url.pathname.split("/").filter(Boolean);
+    const embeddedIndex = segments.findIndex((segment) => segment === "embed" || segment === "shorts");
+    if (embeddedIndex >= 0) return segments[embeddedIndex + 1] || null;
+    return url.searchParams.get("v");
+  } catch {
+    return null;
+  }
+}
+
+function tutorialThumbnailUrl(value: string) {
+  const videoId = youtubeVideoId(value);
+  return videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : null;
+}
+
+function autoplayVideoUrl(value: string) {
+  try {
+    const url = new URL(value);
+    url.searchParams.set("autoplay", "1");
+    url.searchParams.set("playsinline", "1");
+    return url.toString();
+  } catch {
+    return value;
   }
 }
 
@@ -5436,6 +5467,7 @@ function CustomerView({
   const [externalCodeDeadlineAt, setExternalCodeDeadlineAt] = useState<number | null>(null);
   const [externalCodeSubmitting, setExternalCodeSubmitting] = useState(false);
   const [externalCodeError, setExternalCodeError] = useState<string | null>(null);
+  const [activeTutorial, setActiveTutorial] = useState<{ title: string; url: string } | null>(null);
   const [tvRequestState, setTvRequestState] = useState<"idle" | "searching" | "ready" | "failed" | "expired">("idle");
   const [tvSearchDeadlineAt, setTvSearchDeadlineAt] = useState<number | null>(null);
   const [tvDisplayExpiresAt, setTvDisplayExpiresAt] = useState<number | null>(null);
@@ -5544,13 +5576,14 @@ function CustomerView({
         showTvRequestModal ||
         showProfilePinWarning ||
         showExternalCodeWarning ||
+        Boolean(activeTutorial) ||
         showExtraCreditModal);
     const previous = document.body.style.overflow;
     if (shouldLock) document.body.style.overflow = "hidden";
     return () => {
       document.body.style.overflow = previous;
     };
-  }, [link?.accounts?.account_type, showDisclaimer, showReminder, pendingDeviceView, showTvRequestModal, showProfilePinWarning, showExternalCodeWarning, showExtraCreditModal]);
+  }, [link?.accounts?.account_type, showDisclaimer, showReminder, pendingDeviceView, showTvRequestModal, showProfilePinWarning, showExternalCodeWarning, activeTutorial, showExtraCreditModal]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNowTick(Date.now()), 1000);
@@ -5563,6 +5596,15 @@ function CustomerView({
       tvSearchActiveRef.current = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!activeTutorial) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setActiveTutorial(null);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [activeTutorial]);
 
   const account = link?.accounts;
   const storedVerificationCode = link?.verification_code || account?.verification_code || null;
@@ -5605,6 +5647,20 @@ function CustomerView({
   const externalCodeUsed = isExternalCodeUsed || externalCodeRemainingSeconds === 0;
   const externalCodeDirectUrl = String(account?.supplier_code_url || "").trim();
   const customerTutorialVideoUrl = usesExternalCodeLink ? externalCodeCustomerVideoUrl : videoUrl;
+  const tutorialCards = [
+    {
+      id: "mobile",
+      title: "شرح الدخول: الجوال، الآيباد، الكمبيوتر",
+      url: customerTutorialVideoUrl,
+      icon: Smartphone,
+    },
+    {
+      id: "tv",
+      title: "شرح الدخول: الشاشات الذكية والبلايستيشن",
+      url: tvTutorialVideoUrl,
+      icon: Tv,
+    },
+  ];
   const forwardedEmailCodeEnabled = account?.imap_enabled === true && account?.email_provider === "outlook";
   const codeRequestLimit = Math.max(0, link?.code_request_limit ?? 1);
   const codeRequestedCount = Math.max(0, link?.code_requested_count ?? 0);
@@ -6496,32 +6552,55 @@ function CustomerView({
           {link && account && (
             <div className="space-y-6">
               {service !== "osn" && (
-                <section className="animate-rise overflow-hidden rounded-[2rem] bg-white p-4 shadow-video-glow md:p-5">
-                <div className="flex justify-center overflow-hidden rounded-[1.6rem] bg-zinc-950/95">
-                  {customerTutorialVideoUrl ? (
-                    <iframe
-                      className="aspect-[9/16] w-full max-w-[360px] bg-zinc-950"
-                      src={customerTutorialVideoUrl}
-                      title="شرح طريقة الدخول"
-                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                      allowFullScreen
-                    />
-                  ) : (
-                    <div className="flex aspect-[9/16] w-full max-w-[360px] flex-col items-center justify-center bg-zinc-950 px-5 text-center text-white">
-                      <MonitorPlay className={cn("mb-4 h-14 w-14", theme.accent)} />
-                      <p className="text-2xl font-black">شرح طريقة الدخول</p>
-                      <p className="mt-3 max-w-md text-sm leading-7 text-zinc-300">
-                        أضف رابط فيديو الشرح في `VITE_CUSTOMER_VIDEO_URL` ليظهر هنا مباشرة.
-                      </p>
+                <section className="animate-rise" aria-labelledby="tutorials-title">
+                  <div className="mb-4 flex items-center gap-3 px-1">
+                    <div className={cn("flex h-11 w-11 shrink-0 items-center justify-center rounded-xl", theme.soft)}>
+                      <MonitorPlay className="h-5 w-5" />
                     </div>
-                  )}
-                </div>
-                <div className="px-6 py-5 text-right">
-                  <p className={cn("bg-gradient-to-l bg-clip-text text-sm font-black text-transparent", theme.gradient)}>
-                    ابدأ من هنا
-                  </p>
-                  <h2 className="text-2xl font-black md:text-3xl">شرح طريقة الدخول</h2>
-                </div>
+                    <div>
+                      <p className={cn("text-xs font-black", theme.accent)}>ابدأ من هنا</p>
+                      <h2 id="tutorials-title" className="text-xl font-black text-zinc-950 md:text-2xl">شرح طريقة الدخول</h2>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 md:gap-4">
+                    {tutorialCards.map((tutorial) => {
+                      const TutorialIcon = tutorial.icon;
+                      const thumbnail = tutorialThumbnailUrl(tutorial.url);
+                      return (
+                        <button
+                          key={tutorial.id}
+                          type="button"
+                          onClick={() => setActiveTutorial({ title: tutorial.title, url: tutorial.url })}
+                          className="group min-w-0 overflow-hidden rounded-2xl border border-zinc-200 bg-white text-right shadow-card transition hover:-translate-y-1 hover:border-[#CDB4F5] hover:shadow-[0_18px_38px_rgba(80,45,135,0.16)] focus:outline-none focus:ring-4 focus:ring-[#8B35F5]/15"
+                        >
+                          <span className="relative block aspect-[4/3] overflow-hidden bg-zinc-900">
+                            {thumbnail ? (
+                              <img
+                                src={thumbnail}
+                                alt=""
+                                loading="lazy"
+                                className="h-full w-full object-cover transition duration-300 group-hover:scale-105"
+                              />
+                            ) : (
+                              <span className="flex h-full w-full items-center justify-center bg-zinc-900 text-white">
+                                <TutorialIcon className="h-10 w-10" />
+                              </span>
+                            )}
+                            <span className="absolute inset-0 bg-zinc-950/20 transition group-hover:bg-zinc-950/10" />
+                            <span className="absolute inset-0 flex items-center justify-center">
+                              <span className="flex h-12 w-12 items-center justify-center rounded-full bg-white/95 text-[#8B35F5] shadow-xl transition group-hover:scale-110">
+                                <Play className="h-5 w-5 fill-current" />
+                              </span>
+                            </span>
+                          </span>
+                          <span className="flex min-h-[88px] items-start gap-2 p-3 md:min-h-[82px] md:p-4">
+                            <TutorialIcon className="mt-0.5 h-5 w-5 shrink-0 text-[#8B35F5]" />
+                            <span className="text-xs font-black leading-6 text-zinc-900 sm:text-sm">{tutorial.title}</span>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </section>
               )}
 
@@ -6724,23 +6803,6 @@ function CustomerView({
                     </div>
                   ) : !deviceView ? null : deviceView === "screen" ? (
                     <div className="rounded-[1.75rem] border border-[#E0D4F8] bg-gradient-to-l from-white to-[#F7F2FF] p-4 shadow-card">
-                      <div className="mb-4 rounded-[1.5rem] border border-red-100 bg-white p-4 shadow-card">
-                        <h3 className="text-center text-base font-black leading-7 text-zinc-900 md:text-lg">
-                          🎥 شرح طريقة التفعيل والدخول على الشاشة / السوني
-                        </h3>
-                        <div className="mx-auto mt-4 aspect-[9/16] w-full max-w-[320px] overflow-hidden rounded-[1.35rem] bg-black shadow-[0_14px_34px_rgba(0,0,0,0.16)]">
-                          <iframe
-                            src="https://www.youtube.com/embed/i1_gY9XJawg?playsinline=1&rel=0&modestbranding=1"
-                            title="شرح طريقة التفعيل والدخول على الشاشة والسوني"
-                            className="h-full w-full border-0"
-                            loading="lazy"
-                            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                            referrerPolicy="strict-origin-when-cross-origin"
-                            allowFullScreen
-                          />
-                        </div>
-                      </div>
-
                       <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-4 text-right shadow-[0_10px_26px_rgba(217,119,6,0.10)]">
                         <p className="text-sm font-black leading-7 text-amber-900">
                           💡 ملاحظة مهمة: إذا كانت شاشتك تظهر كوداً رقمياً بدلاً من الرابط، يمكنك التحويل إلى قسم (جوال / آيباد / بي سي / لابتوب) وأخذ الكود المباشر من هناك وتسجيل الدخول به في شاشتك بسهولة!
@@ -7091,6 +7153,48 @@ function CustomerView({
                 )}
               </section>
 
+            </div>
+          )}
+
+          {activeTutorial && (
+            <div
+              className="fixed inset-0 z-[120] flex items-center justify-center overflow-y-auto bg-zinc-950/75 p-3 backdrop-blur-md md:p-6"
+              dir="rtl"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="tutorial-video-title"
+              onClick={() => setActiveTutorial(null)}
+            >
+              <div
+                className="my-auto w-full max-w-[430px] overflow-hidden rounded-2xl border border-white/15 bg-zinc-950 shadow-2xl"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <div className="flex min-h-14 items-center justify-between gap-3 border-b border-white/10 px-4 py-3 text-white">
+                  <h2 id="tutorial-video-title" className="text-sm font-black leading-6 md:text-base">
+                    {activeTutorial.title}
+                  </h2>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTutorial(null)}
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/10 text-white transition hover:bg-white/20"
+                    aria-label="إغلاق الفيديو"
+                    title="إغلاق"
+                  >
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
+                <div className="aspect-[9/16] w-full bg-black">
+                  <iframe
+                    key={activeTutorial.url}
+                    src={autoplayVideoUrl(activeTutorial.url)}
+                    title={activeTutorial.title}
+                    className="h-full w-full border-0"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                    referrerPolicy="strict-origin-when-cross-origin"
+                    allowFullScreen
+                  />
+                </div>
+              </div>
             </div>
           )}
 
