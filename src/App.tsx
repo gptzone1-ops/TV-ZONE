@@ -134,7 +134,7 @@ const duplicateEmailMessage = "عفواً، هذا البريد الإلكترو
 const duplicateEmailSaveMessage = duplicateEmailMessage;
 const duplicateProfileMessage = (profileName: string) => `هذا الملف (${profileName}) مسجل مسبقاً لهذا الحساب`;
 const emptyEmailMessage = "أدخل البريد الإلكتروني أولاً";
-const customerAccountPublicSelect = "*,accounts(id,email,use_automated_code,code_fetch_method,compensation_tutorial_url,verification_code,verification_code_received_at,service_type,account_type,compensation_distribution,expires_at,created_at,email_provider,imap_enabled,normal_client_layout,hide_password_from_client)";
+const customerAccountPublicSelect = "*,accounts(id,email,use_automated_code,code_fetch_method,compensation_tutorial_url,verification_code,verification_code_received_at,service_type,account_type,compensation_distribution,expires_at,created_at,email_provider,imap_enabled,normal_client_layout,hide_password_from_client,is_reported_closed,reported_closed_at)";
 const legacyCustomerAccountSelect = "*,accounts(id,email,password,use_automated_code,supplier_code_url,compensation_tutorial_url,verification_code,verification_code_received_at,service_type,account_type,compensation_distribution,expires_at,created_at,email_provider,imap_enabled,normal_client_layout)";
 
 const serviceThemes: Record<ServiceType, ServiceTheme> = {
@@ -254,7 +254,7 @@ async function loadCustomerLinkRecord(column: "short_id" | "uuid" | "id", value:
     return hydrateCustomerLinkPassword(primaryResult.data);
   }
 
-  const missingNewPublicColumn = ["hide_password_from_client", "code_fetch_method"].some((column) =>
+  const missingNewPublicColumn = ["hide_password_from_client", "code_fetch_method", "is_reported_closed", "reported_closed_at"].some((column) =>
     String(primaryResult.error?.message || "").includes(column),
   );
   if (!missingNewPublicColumn) {
@@ -2030,6 +2030,55 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     }
   }
 
+  async function toggleAccountClosedReport(account: NetflixAccount) {
+    const nextClosed = account.is_reported_closed !== true;
+    const confirmation = nextClosed
+      ? "هل تريد الإبلاغ أن هذا الحساب مغلق؟ ستظهر واجهة التعويض فوراً لجميع العملاء المرتبطين به."
+      : "هل عاد الحساب للعمل؟ سيتم إلغاء البلاغ وإعادة واجهة الاشتراك لجميع روابط العملاء.";
+    if (!window.confirm(confirmation)) return;
+
+    if (!supabase) {
+      setAccounts((current) => current.map((item) => item.id === account.id
+        ? { ...item, is_reported_closed: nextClosed, reported_closed_at: nextClosed ? new Date().toISOString() : null }
+        : item));
+      setToast({ label: nextClosed ? "تم إبلاغ العملاء أن الحساب مغلق" : "تم إلغاء بلاغ إغلاق الحساب", at: Date.now() });
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const response = await fetch("/api/update-account", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-admin-password": adminPassword,
+        },
+        body: JSON.stringify({
+          account_id: account.id,
+          email: account.email,
+          password: account.password,
+          supplier_code_url: account.supplier_code_url,
+          ...(account.code_fetch_method ? { code_fetch_method: account.code_fetch_method } : {}),
+          is_reported_closed: nextClosed,
+        }),
+      });
+      const result = await response.json().catch(() => null) as { success?: boolean; error?: string; account?: NetflixAccount } | null;
+      if (!response.ok || !result?.success || !result.account) {
+        throw new Error(result?.error || `report_account_http_${response.status}`);
+      }
+      setAccounts((current) => current.map((item) => item.id === account.id ? result.account as NetflixAccount : item));
+      setToast({
+        label: nextClosed ? "تم إبلاغ جميع عملاء الحساب وإظهار رمز التعويض" : "تم إلغاء البلاغ وعادت صفحة الحساب للعمل",
+        at: Date.now(),
+      });
+    } catch (error) {
+      console.error("Account closed report update failed:", error);
+      setToast({ label: "تعذر تحديث حالة الحساب. تأكد من تنفيذ SQL الخاص بميزة البلاغ.", at: Date.now(), tone: "error" });
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function reviewExtraCreditRequest(
     requestId: string,
     status: Exclude<ExtraCreditRequestStatus, "pending">,
@@ -2438,6 +2487,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
         }}
         onCopyAllLinks={copyAllCustomerLinksForAccount}
         onResetCompensationLinks={resetSharedCompensationLinks}
+        onToggleClosedReport={toggleAccountClosedReport}
         onUpdateCustomerCodeBalance={updateCustomerCodeBalance}
         onResetExternalCodeAccess={resetExternalCodeAccess}
         pendingCreditRequests={extraCreditRequests.filter((request) => request.status === "pending").length}
@@ -2619,6 +2669,7 @@ function Dashboard({
   onCopyTemporaryLink,
   onCopyAllLinks,
   onResetCompensationLinks,
+  onToggleClosedReport,
   onUpdateCustomerCodeBalance,
   onResetExternalCodeAccess,
   pendingCreditRequests,
@@ -2646,6 +2697,7 @@ function Dashboard({
   onCopyTemporaryLink: (account: NetflixAccount) => void;
   onCopyAllLinks: (accountId: string) => Promise<void>;
   onResetCompensationLinks: (accountId: string) => Promise<void>;
+  onToggleClosedReport: (account: NetflixAccount) => Promise<void>;
   onUpdateCustomerCodeBalance: (
     linkId: string,
     codeRequestLimit: number,
@@ -2929,6 +2981,7 @@ function Dashboard({
                     onCopyTemporaryLink={onCopyTemporaryLink}
                     onCopyAllLinks={onCopyAllLinks}
                     onResetCompensationLinks={onResetCompensationLinks}
+                    onToggleClosedReport={onToggleClosedReport}
                     onOpenSupplierCode={(url) => window.open(url, "_blank", "noopener,noreferrer")}
                   />
                 ))}
@@ -2948,6 +3001,7 @@ function Dashboard({
                 onCopyTemporaryLink={onCopyTemporaryLink}
                 onCopyAllLinks={onCopyAllLinks}
                 onResetCompensationLinks={onResetCompensationLinks}
+                onToggleClosedReport={onToggleClosedReport}
                 onOpenSupplierCode={(url) => window.open(url, "_blank", "noopener,noreferrer")}
               />
             ))}
@@ -3143,6 +3197,7 @@ function AccountCard({
   onCopyTemporaryLink,
   onCopyAllLinks,
   onResetCompensationLinks,
+  onToggleClosedReport,
   onOpenSupplierCode,
 }: {
   account: NetflixAccount;
@@ -3153,9 +3208,11 @@ function AccountCard({
   onCopyTemporaryLink: (account: NetflixAccount) => void;
   onCopyAllLinks: (accountId: string) => Promise<void>;
   onResetCompensationLinks: (accountId: string) => Promise<void>;
+  onToggleClosedReport: (account: NetflixAccount) => Promise<void>;
   onOpenSupplierCode: (url: string) => void;
 }) {
   const expired = isExpired(account.expires_at);
+  const reportedClosed = account.is_reported_closed === true;
   const canOpenSupplierCode = Boolean(account.supplier_code_url);
 
   return (
@@ -3184,11 +3241,15 @@ function AccountCard({
           <span
             className={cn(
               "flex shrink-0 items-center gap-1 rounded-full border px-3 py-1 text-xs font-black",
-              expired ? "border-amber-200 bg-amber-50 text-amber-700" : "border-emerald-200 bg-emerald-50 text-emerald-600",
+              reportedClosed
+                ? "border-rose-200 bg-rose-50 text-rose-700"
+                : expired
+                  ? "border-amber-200 bg-amber-50 text-amber-700"
+                  : "border-emerald-200 bg-emerald-50 text-emerald-600",
             )}
           >
-            {expired ? <CircleX className="h-3.5 w-3.5" /> : <CircleCheck className="h-3.5 w-3.5" />}
-            {expired ? "منتهي" : "فعال"}
+            {reportedClosed || expired ? <CircleX className="h-3.5 w-3.5" /> : <CircleCheck className="h-3.5 w-3.5" />}
+            {reportedClosed ? "مغلق - التعويض مفعل" : expired ? "منتهي" : "فعال"}
           </span>
           <span className="rounded-full border border-[#DCC9FA] bg-[#F4EDFF] px-3 py-1 text-xs font-black text-[#6F22D6]">
             {accountTypeLabel(account.account_type)}
@@ -3277,6 +3338,22 @@ function AccountCard({
             <RefreshCw className="h-4 w-4" />
           </button>
         )}
+        {account.account_type !== "temporary" && account.account_type !== "compensation" && (
+          <button
+            type="button"
+            onClick={() => void onToggleClosedReport(account)}
+            title={account.is_reported_closed ? "إلغاء بلاغ إغلاق الحساب" : "إبلاغ أن الحساب مغلق"}
+            aria-label={account.is_reported_closed ? "إلغاء بلاغ إغلاق الحساب" : "إبلاغ أن الحساب مغلق"}
+            className={cn(
+              "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border transition",
+              account.is_reported_closed
+                ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                : "border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100",
+            )}
+          >
+            {account.is_reported_closed ? <CircleCheck className="h-4 w-4" /> : <TriangleAlert className="h-4 w-4" />}
+          </button>
+        )}
         <button
           type="button"
           onClick={() => onOpenSupplierCode(account.supplier_code_url || "")}
@@ -3308,6 +3385,7 @@ function AccountRow({
   onCopyTemporaryLink,
   onCopyAllLinks,
   onResetCompensationLinks,
+  onToggleClosedReport,
   onOpenSupplierCode,
 }: {
   account: NetflixAccount;
@@ -3318,9 +3396,11 @@ function AccountRow({
   onCopyTemporaryLink: (account: NetflixAccount) => void;
   onCopyAllLinks: (accountId: string) => Promise<void>;
   onResetCompensationLinks: (accountId: string) => Promise<void>;
+  onToggleClosedReport: (account: NetflixAccount) => Promise<void>;
   onOpenSupplierCode: (url: string) => void;
 }) {
   const expired = isExpired(account.expires_at);
+  const reportedClosed = account.is_reported_closed === true;
   const canOpenSupplierCode = Boolean(account.supplier_code_url);
   const service = serviceOf(account);
 
@@ -3383,11 +3463,15 @@ function AccountRow({
         <span
           className={cn(
             "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-black",
-            expired ? "border-amber-200 bg-amber-50 text-amber-700" : "border-emerald-200 bg-emerald-50 text-emerald-600",
+            reportedClosed
+              ? "border-rose-200 bg-rose-50 text-rose-700"
+              : expired
+                ? "border-amber-200 bg-amber-50 text-amber-700"
+                : "border-emerald-200 bg-emerald-50 text-emerald-600",
           )}
         >
-          <span className={cn("h-1.5 w-1.5 rounded-full", expired ? "bg-amber-500" : "bg-emerald-500")} />
-          {expired ? "منتهي" : "فعال"}
+          <span className={cn("h-1.5 w-1.5 rounded-full", reportedClosed ? "bg-rose-500" : expired ? "bg-amber-500" : "bg-emerald-500")} />
+          {reportedClosed ? "مغلق - تعويض" : expired ? "منتهي" : "فعال"}
         </span>
       </td>
       <td className="px-4 py-5 text-[15px] font-bold text-zinc-700">{formatDate(account.expires_at)}</td>
@@ -3435,6 +3519,22 @@ function AccountRow({
               className="flex h-9 w-9 items-center justify-center rounded-lg text-amber-700 transition hover:bg-amber-50"
             >
               <RefreshCw className="h-4 w-4" />
+            </button>
+          )}
+          {account.account_type !== "temporary" && account.account_type !== "compensation" && (
+            <button
+              type="button"
+              onClick={() => void onToggleClosedReport(account)}
+              title={account.is_reported_closed ? "إلغاء بلاغ إغلاق الحساب" : "إبلاغ أن الحساب مغلق"}
+              aria-label={account.is_reported_closed ? "إلغاء بلاغ إغلاق الحساب" : "إبلاغ أن الحساب مغلق"}
+              className={cn(
+                "flex h-9 w-9 items-center justify-center rounded-lg transition",
+                account.is_reported_closed
+                  ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                  : "bg-rose-50 text-rose-600 hover:bg-rose-100",
+              )}
+            >
+              {account.is_reported_closed ? <CircleCheck className="h-4 w-4" /> : <TriangleAlert className="h-4 w-4" />}
             </button>
           )}
           <button
@@ -5572,6 +5672,19 @@ function CustomerView({
         { event: "UPDATE", schema: "public", table: "customer_links", filter: `id=eq.${customerId}` },
         (payload) => setLink((current) => (current ? { ...current, ...(payload.new as Partial<CustomerLink>) } : current)),
       )
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "accounts", filter: `id=eq.${link.account_id}` },
+        (payload) => setLink((current) => current
+          ? {
+              ...current,
+              accounts: {
+                ...(current.accounts as NetflixAccount),
+                ...(payload.new as Partial<NetflixAccount>),
+              },
+            }
+          : current),
+      )
       .subscribe();
 
     return () => {
@@ -5601,6 +5714,7 @@ function CustomerView({
   useEffect(() => {
     const shouldLock =
       link?.accounts?.account_type !== "compensation" &&
+      link?.accounts?.is_reported_closed !== true &&
       (showDisclaimer ||
         showReminder ||
         Boolean(pendingDeviceView) ||
@@ -5614,7 +5728,7 @@ function CustomerView({
     return () => {
       document.body.style.overflow = previous;
     };
-  }, [link?.accounts?.account_type, showDisclaimer, showReminder, pendingDeviceView, showTvRequestModal, showProfilePinWarning, showExternalCodeWarning, activeTutorial, showExtraCreditModal]);
+  }, [link?.accounts?.account_type, link?.accounts?.is_reported_closed, showDisclaimer, showReminder, pendingDeviceView, showTvRequestModal, showProfilePinWarning, showExternalCodeWarning, activeTutorial, showExtraCreditModal]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNowTick(Date.now()), 1000);
@@ -5638,6 +5752,7 @@ function CustomerView({
   }, [activeTutorial]);
 
   const account = link?.accounts;
+  const accountReportedClosed = account?.is_reported_closed === true;
   const storedVerificationCode = link?.verification_code || account?.verification_code || null;
   const storedVerificationCodeReceivedAt =
     link?.verification_code_received_at || account?.verification_code_received_at || null;
@@ -6561,7 +6676,7 @@ function CustomerView({
                 <UserRound className="h-6 w-6" />
               </button>
             </div>
-            {!normalClientLayout && link?.client_code && (
+            {!accountReportedClosed && !normalClientLayout && link?.client_code && (
               <div className="mt-4 border-t border-[#EEE7F8] pt-4">
                 <CompensationCodeCard code={link.client_code} compact showPageLink />
               </div>
@@ -6580,7 +6695,9 @@ function CustomerView({
             </div>
           )}
 
-          {link && account && (
+          {link && account && (accountReportedClosed ? (
+            <ClosedAccountCompensationView link={link} navigate={navigate} />
+          ) : (
             <div className="space-y-6">
               {service !== "osn" && (
                 <section className="animate-rise" aria-labelledby="tutorials-title">
@@ -7185,7 +7302,7 @@ function CustomerView({
               </section>
 
             </div>
-          )}
+          ))}
 
           {activeTutorial && (
             <div
@@ -7229,7 +7346,7 @@ function CustomerView({
             </div>
           )}
 
-          {showDisclaimer && (
+          {showDisclaimer && !accountReportedClosed && (
             <DisclaimerModal
               onToggle={(checked) => setAgreeDisclaimer(checked)}
               onContinue={() => {
@@ -7403,7 +7520,7 @@ function CustomerView({
             />
           )}
 
-          {link && account && (
+          {link && account && !accountReportedClosed && (
             <a
               href={floatingSupportWhatsAppUrl}
               target="_blank"
@@ -7882,6 +7999,68 @@ function ExtraCreditRequestModal({
       </form>
 
     </div>
+  );
+}
+
+function ClosedAccountCompensationView({
+  link,
+  navigate,
+}: {
+  link: CustomerLink;
+  navigate: (path: string) => void;
+}) {
+  const compensationCode = String(link.client_code || "").trim().toUpperCase();
+
+  function openCompensationPage() {
+    if (compensationCode) localStorage.setItem("zone-compensation-client-code", compensationCode);
+    navigate("/compensation");
+  }
+
+  return (
+    <section className="animate-rise overflow-hidden rounded-[2rem] border border-rose-200 bg-white shadow-[0_24px_70px_rgba(190,24,55,0.14)]">
+      <div className="bg-gradient-to-b from-rose-50 to-white px-5 py-7 text-center md:px-8 md:py-9">
+        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-rose-100 text-rose-600 shadow-[0_12px_28px_rgba(225,29,72,0.16)]">
+          <TriangleAlert className="h-8 w-8" />
+        </div>
+        <p className="mt-4 text-xs font-black text-rose-600">تنبيه مهم بخصوص اشتراكك</p>
+        <h2 className="mt-2 text-2xl font-black text-zinc-950 md:text-3xl">هذا الحساب مغلق حالياً</h2>
+        <p className="mx-auto mt-3 max-w-md text-sm font-bold leading-8 text-zinc-700">
+          لا تحاول تسجيل الدخول ببيانات الحساب الحالية. تم تخصيص رمز تعويض لك، ومن خلاله تستطيع تقديم طلبك ومتابعة حالته حتى يظهر رابط الحساب البديل.
+        </p>
+      </div>
+
+      <div className="border-t border-rose-100 p-5 md:p-8">
+        {compensationCode ? (
+          <CompensationCodeCard code={compensationCode} />
+        ) : (
+          <p className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-center text-sm font-black leading-7 text-amber-800">
+            لم يتم إنشاء رمز التعويض لهذا الرابط بعد. يرجى التواصل مع الدعم الفني.
+          </p>
+        )}
+
+        <div className="mt-5 rounded-2xl border border-[#DED0F6] bg-[#FAF7FF] p-4 md:p-5">
+          <h3 className="text-base font-black text-[#6F22D6]">طريقة تقديم طلب التعويض</h3>
+          <ol className="mt-3 space-y-3 text-sm font-bold leading-7 text-zinc-700">
+            <li>1. انسخ رمز التعويض الظاهر أعلاه واحتفظ به.</li>
+            <li>2. اضغط زر «فتح صفحة التعويض»؛ سيتم نقل الرمز إلى الصفحة تلقائياً.</li>
+            <li>3. تابع حالة طلبك من الصفحة نفسها، وعند اكتمال التعويض سيظهر رابط الحساب الجديد.</li>
+          </ol>
+          <p className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-black leading-6 text-amber-900">
+            الوقت المتوقع لتوفير التعويض: من ساعة إلى 24 ساعة كحد أقصى.
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={openCompensationPage}
+          disabled={!compensationCode}
+          className="mt-5 flex min-h-14 w-full items-center justify-center gap-2 rounded-2xl bg-[#8B35F5] px-5 text-base font-black text-white shadow-[0_14px_32px_rgba(139,53,245,0.28)] transition hover:-translate-y-0.5 hover:bg-[#7626DD] disabled:cursor-not-allowed disabled:bg-zinc-300 disabled:shadow-none"
+        >
+          <ArrowRight className="h-5 w-5 rotate-180" />
+          فتح صفحة التعويض وتقديم الطلب
+        </button>
+      </div>
+    </section>
   );
 }
 

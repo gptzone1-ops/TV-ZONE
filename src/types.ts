@@ -26,6 +26,8 @@ export type NetflixAccount = {
   imap_enabled?: boolean | null;
   normal_client_layout?: boolean | null;
   hide_password_from_client?: boolean | null;
+  is_reported_closed?: boolean | null;
+  reported_closed_at?: string | null;
   compensation_distribution?: CompensationDistribution | null;
   compensation_tutorial_url?: string | null;
   verification_code?: string | null;

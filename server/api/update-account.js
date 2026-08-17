@@ -44,6 +44,7 @@ function syncEmailInLinkedUrl(url, previousEmail, nextEmail) {
 }
 
 function send(res, status, payload) {
+  res.setHeader("Cache-Control", "no-store, max-age=0");
   return res.status(status).json(payload);
 }
 
@@ -120,6 +121,12 @@ export default async function handler(req, res) {
     updatePayload.compensation_tutorial_url = tutorialUrl;
   }
 
+  if (Object.prototype.hasOwnProperty.call(req.body || {}, "is_reported_closed")) {
+    const isReportedClosed = req.body.is_reported_closed === true;
+    updatePayload.is_reported_closed = isReportedClosed;
+    updatePayload.reported_closed_at = isReportedClosed ? new Date().toISOString() : null;
+  }
+
   if (req.body?.created_at) updatePayload.created_at = req.body.created_at;
   if (req.body?.expires_at) updatePayload.expires_at = req.body.expires_at;
 
@@ -166,6 +173,8 @@ export default async function handler(req, res) {
         code_fetch_method: existingAccount.code_fetch_method,
         use_automated_code: existingAccount.use_automated_code,
         compensation_tutorial_url: existingAccount.compensation_tutorial_url,
+        is_reported_closed: existingAccount.is_reported_closed,
+        reported_closed_at: existingAccount.reported_closed_at,
         created_at: existingAccount.created_at,
         expires_at: existingAccount.expires_at,
       })

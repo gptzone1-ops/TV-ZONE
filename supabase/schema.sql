@@ -18,6 +18,8 @@ create table if not exists public.accounts (
   imap_enabled boolean not null default false,
   normal_client_layout boolean not null default false,
   hide_password_from_client boolean not null default false,
+  is_reported_closed boolean not null default false,
+  reported_closed_at timestamptz,
   expires_at date not null,
   created_at timestamptz not null default now(),
   constraint accounts_compensation_distribution_check check (

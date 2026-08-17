@@ -6,7 +6,6 @@ import reviewCreditRequest from "../server/api/review-credit-request.js";
 import saveImapCredential from "../server/api/save-imap-credential.js";
 import telegramWebhook from "../server/api/telegram-webhook.js";
 import temporaryAccount from "../server/api/temporary-account.js";
-import updateAccount from "../server/api/update-account.js";
 
 export const config = { maxDuration: 300 };
 
@@ -19,7 +18,6 @@ const handlers = {
   "save-imap-credential": saveImapCredential,
   "telegram-webhook": telegramWebhook,
   "temporary-account": temporaryAccount,
-  "update-account": updateAccount,
 };
 
 export default async function handler(req, res) {
