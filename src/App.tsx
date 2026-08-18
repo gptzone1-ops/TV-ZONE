@@ -60,6 +60,7 @@ import type {
   ExtraCreditRequest,
   ExtraCreditRequestStatus,
   NetflixAccount,
+  OsnSubscriptionMode,
   ServiceType,
 } from "./types";
 
@@ -80,6 +81,7 @@ type AccountCreateForm = {
   code_fetch_method?: CodeFetchMethod;
   compensation_tutorial_url?: string;
   compensation_distribution?: CompensationDistribution;
+  osn_subscription_mode?: OsnSubscriptionMode;
 };
 type PublicCompensationRequest = Omit<CompensationRequest, "id">;
 type CompensationPoolLink = {
@@ -137,7 +139,7 @@ const duplicateEmailMessage = "عفواً، هذا البريد الإلكترو
 const duplicateEmailSaveMessage = duplicateEmailMessage;
 const duplicateProfileMessage = (profileName: string) => `هذا الملف (${profileName}) مسجل مسبقاً لهذا الحساب`;
 const emptyEmailMessage = "أدخل البريد الإلكتروني أولاً";
-const customerAccountPublicSelect = "*,accounts(id,email,use_automated_code,code_fetch_method,compensation_tutorial_url,verification_code,verification_code_received_at,service_type,account_type,compensation_distribution,expires_at,created_at,email_provider,imap_enabled,normal_client_layout,hide_password_from_client,is_reported_closed,reported_closed_at)";
+const customerAccountPublicSelect = "*,accounts(id,email,use_automated_code,code_fetch_method,compensation_tutorial_url,verification_code,verification_code_received_at,service_type,account_type,compensation_distribution,osn_subscription_mode,osn_cycle_number,osn_cycle_started_at,osn_cycle_ends_at,expires_at,created_at,email_provider,imap_enabled,normal_client_layout,hide_password_from_client,is_reported_closed,reported_closed_at)";
 const legacyCustomerAccountSelect = "*,accounts(id,email,password,use_automated_code,supplier_code_url,compensation_tutorial_url,verification_code,verification_code_received_at,service_type,account_type,compensation_distribution,expires_at,created_at,email_provider,imap_enabled,normal_client_layout)";
 
 const serviceThemes: Record<ServiceType, ServiceTheme> = {
@@ -194,6 +196,24 @@ function addDays(date: Date, days: number) {
 
 function defaultExpiryDate() {
   return addDays(new Date(), 30).toISOString().slice(0, 10);
+}
+
+function osnMonthlyAccountDates() {
+  const now = new Date();
+  return {
+    expiresAt: addDays(now, 90).toISOString().slice(0, 10),
+    cycleStartedAt: now.toISOString(),
+    cycleEndsAt: addDays(now, 30).toISOString(),
+  };
+}
+
+function isOsnMonthlyRotation(account?: NetflixAccount | null) {
+  return serviceOf(account) === "osn" && account?.osn_subscription_mode === "monthly_rotation";
+}
+
+function isOsnCycleExpired(account: NetflixAccount) {
+  if (!isOsnMonthlyRotation(account) || !account.osn_cycle_ends_at) return false;
+  return new Date(account.osn_cycle_ends_at).getTime() <= Date.now();
 }
 
 function daysRemaining(expiresAt: string) {
@@ -257,7 +277,16 @@ async function loadCustomerLinkRecord(column: "short_id" | "uuid" | "id", value:
     return hydrateCustomerLinkPassword(primaryResult.data);
   }
 
-  const missingNewPublicColumn = ["hide_password_from_client", "code_fetch_method", "is_reported_closed", "reported_closed_at"].some((column) =>
+  const missingNewPublicColumn = [
+    "hide_password_from_client",
+    "code_fetch_method",
+    "is_reported_closed",
+    "reported_closed_at",
+    "osn_subscription_mode",
+    "osn_cycle_number",
+    "osn_cycle_started_at",
+    "osn_cycle_ends_at",
+  ].some((column) =>
     String(primaryResult.error?.message || "").includes(column),
   );
   if (!missingNewPublicColumn) {
@@ -1421,7 +1450,11 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       return { ok: false, error };
     }
 
-    const expires_at = defaultExpiryDate();
+    const osnSubscriptionMode: OsnSubscriptionMode | null = selectedService === "osn"
+      ? form.osn_subscription_mode || "telegram_keys"
+      : null;
+    const monthlyDates = osnSubscriptionMode === "monthly_rotation" ? osnMonthlyAccountDates() : null;
+    const expires_at = monthlyDates?.expiresAt || defaultExpiryDate();
     let slots = buildProfileSlots(form.account_type, selectedService, form.compensation_distribution);
     const normalizedEmail = normalizeEmail(form.email);
     const accountPassword = selectedService === "osn" ? "" : form.password;
@@ -1443,7 +1476,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       return { ok: false, error: emptyEmailMessage };
     }
 
-    if (selectedService === "osn") {
+    if (selectedService === "osn" && osnSubscriptionMode === "telegram_keys") {
       const requiredKeys = form.account_type === "private" ? 5 : 10;
       if (osnAccessKeys.length !== requiredKeys) {
         const error = `يجب إدخال ${requiredKeys} مفاتيح تفعيل بالضبط، مفتاح في كل سطر.`;
@@ -1495,6 +1528,10 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       compensation_distribution: form.account_type === "compensation" ? form.compensation_distribution : null,
       expires_at,
       service_type: selectedService,
+      osn_subscription_mode: osnSubscriptionMode,
+      osn_cycle_number: monthlyDates ? 1 : null,
+      osn_cycle_started_at: monthlyDates?.cycleStartedAt || null,
+      osn_cycle_ends_at: monthlyDates?.cycleEndsAt || null,
       use_automated_code: selectedService === "netflix" && form.account_type !== "compensation" && codeFetchMethod !== "external_link",
       created_at: new Date().toISOString(),
     };
@@ -1557,7 +1594,11 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     setLoading(true);
     let account: NetflixAccount | null = null;
     try {
-      const { access_keys: _accessKeys, ...accountFormData } = form;
+      const {
+        access_keys: _accessKeys,
+        osn_subscription_mode: _osnSubscriptionMode,
+        ...accountFormData
+      } = form;
       const { data, error: accountError } = await supabase
         .from("accounts")
         .insert({
@@ -1566,6 +1607,12 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
           password: accountPassword,
           expires_at,
           service_type: selectedService,
+          ...(monthlyDates ? {
+            osn_subscription_mode: "monthly_rotation" as const,
+            osn_cycle_number: 1,
+            osn_cycle_started_at: monthlyDates.cycleStartedAt,
+            osn_cycle_ends_at: monthlyDates.cycleEndsAt,
+          } : {}),
           use_automated_code: selectedService === "netflix" && form.account_type !== "temporary" && form.account_type !== "compensation" && codeFetchMethod !== "external_link",
           code_fetch_method: codeFetchMethod,
           temporary_short_id: temporaryShortId,
@@ -1576,7 +1623,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
           compensation_distribution: form.account_type === "compensation" ? form.compensation_distribution : null,
           compensation_tutorial_url: form.account_type === "compensation" ? form.compensation_tutorial_url || null : null,
         })
-        .select("id,email,password,account_type,compensation_distribution,compensation_tutorial_url,expires_at,created_at,service_type,use_automated_code,supplier_code_url,code_fetch_method,temporary_short_id,email_provider,imap_enabled,normal_client_layout,hide_password_from_client")
+        .select("*")
         .single();
 
       if (accountError) throw accountError;
@@ -2279,6 +2326,87 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     }
   }
 
+  async function rotateOsnMonthlyCycle(account: NetflixAccount) {
+    if (!isOsnMonthlyRotation(account)) {
+      setToast({ label: "هذا الإجراء مخصص لاشتراكات OSN ذات الدورات الشهرية", at: Date.now(), tone: "error" });
+      return;
+    }
+    if (!isOsnCycleExpired(account)) {
+      setToast({ label: "الدورة الحالية لم تنتهِ بعد", at: Date.now(), tone: "error" });
+      return;
+    }
+    if ((account.osn_cycle_number || 1) >= 3) {
+      setToast({ label: "اكتملت الدورات الشهرية الثلاث لهذا الحساب", at: Date.now(), tone: "error" });
+      return;
+    }
+
+    const nextCycle = (account.osn_cycle_number || 1) + 1;
+    const confirmed = window.confirm(
+      `سيتم إبطال روابط عملاء الدورة الحالية وإنشاء روابط جديدة للدورة ${nextCycle} من 3. هل تريد المتابعة؟`,
+    );
+    if (!confirmed) return;
+
+    if (!supabase) {
+      const now = new Date();
+      const generatedLinks = buildProfileSlots(account.account_type, "osn").map((slot) => ({
+        ...slot,
+        id: crypto.randomUUID(),
+        account_id: account.id,
+        email: account.email,
+        created_at: now.toISOString(),
+      })) as CustomerLink[];
+      setLinks((current) => [...current.filter((link) => link.account_id !== account.id), ...generatedLinks]);
+      setAccounts((current) => current.map((item) => item.id === account.id ? {
+        ...item,
+        osn_cycle_number: nextCycle,
+        osn_cycle_started_at: now.toISOString(),
+        osn_cycle_ends_at: addDays(now, 30).toISOString(),
+      } : item));
+      setToast({ label: `تم تجهيز روابط الدورة ${nextCycle} من 3`, at: Date.now() });
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const response = await fetch("/api/rotate-osn-monthly-cycle", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-admin-password": adminPassword,
+        },
+        body: JSON.stringify({ account_id: account.id }),
+      });
+      const result = (await response.json().catch(() => null)) as {
+        success?: boolean;
+        error?: string;
+        account?: NetflixAccount;
+        links?: CustomerLink[];
+      } | null;
+
+      if (!response.ok || !result?.success || !result.account || !Array.isArray(result.links)) {
+        throw new Error(result?.error || "rotation_failed");
+      }
+
+      setAccounts((current) => current.map((item) => item.id === account.id ? result.account as NetflixAccount : item));
+      setLinks((current) => [
+        ...current.filter((link) => link.account_id !== account.id),
+        ...(result.links || []),
+      ]);
+      setToast({ label: `تم تجديد الحساب للدورة ${result.account.osn_cycle_number} من 3 وإنشاء روابط جديدة`, at: Date.now() });
+    } catch (error) {
+      console.error("OSN monthly cycle rotation request failed:", error);
+      const message = error instanceof Error ? error.message : "";
+      const label = /current_cycle_not_finished/i.test(message)
+        ? "الدورة الحالية لم تنتهِ بعد"
+        : /all_monthly_cycles_completed/i.test(message)
+          ? "اكتملت الدورات الشهرية الثلاث لهذا الحساب"
+          : "تعذر تجديد الدورة الشهرية؛ لم تتغير الروابط الحالية";
+      setToast({ label, at: Date.now(), tone: "error" });
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function deleteAccount(accountId: string) {
     if (!window.confirm("هل تريد حذف هذا الحساب وجميع روابط العملاء التابعة له؟")) return;
 
@@ -2505,6 +2633,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
         }}
         onCopyAllLinks={copyAllCustomerLinksForAccount}
         onResetCompensationLinks={resetSharedCompensationLinks}
+        onRotateOsnMonthlyCycle={rotateOsnMonthlyCycle}
         onToggleClosedReport={toggleAccountClosedReport}
         onUpdateCustomerCodeBalance={updateCustomerCodeBalance}
         onResetExternalCodeAccess={resetExternalCodeAccess}
@@ -2687,6 +2816,7 @@ function Dashboard({
   onCopyTemporaryLink,
   onCopyAllLinks,
   onResetCompensationLinks,
+  onRotateOsnMonthlyCycle,
   onToggleClosedReport,
   onUpdateCustomerCodeBalance,
   onResetExternalCodeAccess,
@@ -2715,6 +2845,7 @@ function Dashboard({
   onCopyTemporaryLink: (account: NetflixAccount) => void;
   onCopyAllLinks: (accountId: string) => Promise<void>;
   onResetCompensationLinks: (accountId: string) => Promise<void>;
+  onRotateOsnMonthlyCycle: (account: NetflixAccount) => Promise<void>;
   onToggleClosedReport: (account: NetflixAccount) => Promise<void>;
   onUpdateCustomerCodeBalance: (
     linkId: string,
@@ -2733,6 +2864,7 @@ function Dashboard({
   const [filterOpen, setFilterOpen] = useState(false);
   const [accountTypeFilter, setAccountTypeFilter] = useState<AccountTypeFilter>("all");
   const [editingCustomerBalance, setEditingCustomerBalance] = useState<CustomerLink | null>(null);
+  const [, setCycleClock] = useState(Date.now());
 
   const openAddForm = () => {
     setEditingAccount(null);
@@ -2999,6 +3131,7 @@ function Dashboard({
                     onCopyTemporaryLink={onCopyTemporaryLink}
                     onCopyAllLinks={onCopyAllLinks}
                     onResetCompensationLinks={onResetCompensationLinks}
+                    onRotateOsnMonthlyCycle={onRotateOsnMonthlyCycle}
                     onToggleClosedReport={onToggleClosedReport}
                     onOpenSupplierCode={(url) => window.open(url, "_blank", "noopener,noreferrer")}
                   />
@@ -3019,6 +3152,7 @@ function Dashboard({
                 onCopyTemporaryLink={onCopyTemporaryLink}
                 onCopyAllLinks={onCopyAllLinks}
                 onResetCompensationLinks={onResetCompensationLinks}
+                onRotateOsnMonthlyCycle={onRotateOsnMonthlyCycle}
                 onToggleClosedReport={onToggleClosedReport}
                 onOpenSupplierCode={(url) => window.open(url, "_blank", "noopener,noreferrer")}
               />
@@ -3215,6 +3349,7 @@ function AccountCard({
   onCopyTemporaryLink,
   onCopyAllLinks,
   onResetCompensationLinks,
+  onRotateOsnMonthlyCycle,
   onToggleClosedReport,
   onOpenSupplierCode,
 }: {
@@ -3226,12 +3361,16 @@ function AccountCard({
   onCopyTemporaryLink: (account: NetflixAccount) => void;
   onCopyAllLinks: (accountId: string) => Promise<void>;
   onResetCompensationLinks: (accountId: string) => Promise<void>;
+  onRotateOsnMonthlyCycle: (account: NetflixAccount) => Promise<void>;
   onToggleClosedReport: (account: NetflixAccount) => Promise<void>;
   onOpenSupplierCode: (url: string) => void;
 }) {
   const expired = isExpired(account.expires_at);
   const reportedClosed = account.is_reported_closed === true;
   const canOpenSupplierCode = Boolean(account.supplier_code_url);
+  const monthlyRotation = isOsnMonthlyRotation(account);
+  const cycleExpired = isOsnCycleExpired(account);
+  const cycleComplete = (account.osn_cycle_number || 1) >= 3;
 
   return (
     <article
@@ -3272,7 +3411,20 @@ function AccountCard({
           <span className="rounded-full border border-[#DCC9FA] bg-[#F4EDFF] px-3 py-1 text-xs font-black text-[#6F22D6]">
             {accountTypeLabel(account.account_type)}
           </span>
+          {monthlyRotation && (
+            <span className={cn(
+              "rounded-full border px-3 py-1 text-xs font-black",
+              cycleExpired ? "border-amber-300 bg-amber-50 text-amber-800" : "border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700",
+            )}>
+              دورة الشهر: {account.osn_cycle_number || 1} من 3
+            </span>
+          )}
         </div>
+        {monthlyRotation && cycleExpired && !cycleComplete && (
+          <p className="mt-3 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-black leading-6 text-amber-900">
+            ⚠️ انتهى شهر العملاء - يرجى تسجيل خروج الأجهزة وتدوير الحساب
+          </p>
+        )}
       </div>
 
       <div className="grid min-w-0 gap-2 sm:grid-cols-2">
@@ -3356,6 +3508,19 @@ function AccountCard({
             <RefreshCw className="h-4 w-4" />
           </button>
         )}
+        {monthlyRotation && (
+          <button
+            type="button"
+            onClick={() => void onRotateOsnMonthlyCycle(account)}
+            disabled={!cycleExpired || cycleComplete}
+            title={cycleComplete ? "اكتملت الدورات الثلاث" : cycleExpired ? "تجديد للدورة الشهرية التالية" : "الدورة الحالية لم تنتهِ بعد"}
+            aria-label="تجديد للدورة الشهرية التالية"
+            className="flex h-11 min-w-0 flex-1 items-center justify-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 text-xs font-black text-amber-800 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-45"
+          >
+            <RefreshCw className="h-4 w-4" />
+            {cycleComplete ? "اكتملت الدورات" : "تجديد الدورة"}
+          </button>
+        )}
         {account.account_type !== "temporary" && account.account_type !== "compensation" && (
           <button
             type="button"
@@ -3403,6 +3568,7 @@ function AccountRow({
   onCopyTemporaryLink,
   onCopyAllLinks,
   onResetCompensationLinks,
+  onRotateOsnMonthlyCycle,
   onToggleClosedReport,
   onOpenSupplierCode,
 }: {
@@ -3414,6 +3580,7 @@ function AccountRow({
   onCopyTemporaryLink: (account: NetflixAccount) => void;
   onCopyAllLinks: (accountId: string) => Promise<void>;
   onResetCompensationLinks: (accountId: string) => Promise<void>;
+  onRotateOsnMonthlyCycle: (account: NetflixAccount) => Promise<void>;
   onToggleClosedReport: (account: NetflixAccount) => Promise<void>;
   onOpenSupplierCode: (url: string) => void;
 }) {
@@ -3421,6 +3588,9 @@ function AccountRow({
   const reportedClosed = account.is_reported_closed === true;
   const canOpenSupplierCode = Boolean(account.supplier_code_url);
   const service = serviceOf(account);
+  const monthlyRotation = isOsnMonthlyRotation(account);
+  const cycleExpired = isOsnCycleExpired(account);
+  const cycleComplete = (account.osn_cycle_number || 1) >= 3;
 
   return (
     <tr
@@ -3475,6 +3645,19 @@ function AccountRow({
           <span className={cn("text-[11px] font-black", service === "shahid" ? "text-cyan-600" : service === "osn" ? "text-fuchsia-700" : "text-[#8B35F5]")}>
             {service === "shahid" ? "شاهد" : service === "osn" ? "OSN" : "Netflix"}
           </span>
+          {monthlyRotation && (
+            <span className={cn(
+              "rounded-full border px-2 py-1 text-[10px] font-black",
+              cycleExpired ? "border-amber-300 bg-amber-50 text-amber-800" : "border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700",
+            )}>
+              دورة {account.osn_cycle_number || 1} من 3
+            </span>
+          )}
+          {monthlyRotation && cycleExpired && !cycleComplete && (
+            <span className="max-w-40 text-[10px] font-black leading-5 text-amber-800">
+              ⚠️ انتهى شهر العملاء، يلزم تدوير الحساب
+            </span>
+          )}
         </div>
       </td>
       <td className="px-4 py-5">
@@ -3535,6 +3718,18 @@ function AccountRow({
               title="إعادة تعيين الروابط"
               aria-label="إعادة تعيين الروابط"
               className="flex h-9 w-9 items-center justify-center rounded-lg text-amber-700 transition hover:bg-amber-50"
+            >
+              <RefreshCw className="h-4 w-4" />
+            </button>
+          )}
+          {monthlyRotation && (
+            <button
+              type="button"
+              onClick={() => void onRotateOsnMonthlyCycle(account)}
+              disabled={!cycleExpired || cycleComplete}
+              title={cycleComplete ? "اكتملت الدورات الثلاث" : cycleExpired ? "تجديد للدورة الشهرية التالية" : "الدورة الحالية لم تنتهِ بعد"}
+              aria-label="تجديد للدورة الشهرية التالية"
+              className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-50 text-amber-700 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-35"
             >
               <RefreshCw className="h-4 w-4" />
             </button>
@@ -3669,6 +3864,12 @@ function CompensationAdminPage({
   useEffect(() => {
     void loadRequests();
   }, []);
+
+  useEffect(() => {
+    if (service !== "osn") return;
+    const intervalId = window.setInterval(() => setCycleClock(Date.now()), 60_000);
+    return () => window.clearInterval(intervalId);
+  }, [service]);
 
   async function importLinks(linkType: "private" | "shared") {
     const input = linkType === "private" ? privateLinksInput : sharedLinksInput;
@@ -4403,6 +4604,9 @@ function AccountForm({
   const [email, setEmail] = useState(initialAccount?.email || "");
   const [password, setPassword] = useState(initialAccount?.password || "");
   const [accessKeysInput, setAccessKeysInput] = useState("");
+  const [osnSubscriptionMode, setOsnSubscriptionMode] = useState<OsnSubscriptionMode>(
+    initialAccount?.osn_subscription_mode || "telegram_keys",
+  );
   const [supplierCodeUrl, setSupplierCodeUrl] = useState(initialAccount?.supplier_code_url || "");
   const [externalCodeLinkEnabled, setExternalCodeLinkEnabled] = useState(
     initialAccount?.code_fetch_method === "external_link",
@@ -4410,7 +4614,9 @@ function AccountForm({
   const [compensationTutorialUrl, setCompensationTutorialUrl] = useState(initialAccount?.compensation_tutorial_url || "");
   const [formError, setFormError] = useState("");
   const [showCompensationDistribution, setShowCompensationDistribution] = useState(false);
-  const calculatedExpiry = defaultExpiryDate();
+  const calculatedExpiry = service === "osn" && osnSubscriptionMode === "monthly_rotation"
+    ? osnMonthlyAccountDates().expiresAt
+    : defaultExpiryDate();
   const theme = serviceThemes[service];
   const canConfigureCodeFetch = service === "netflix" && (accountType === "private" || accountType === "shared");
 
@@ -4430,7 +4636,7 @@ function AccountForm({
       return;
     }
 
-    if (!initialAccount && service === "osn") {
+    if (!initialAccount && service === "osn" && osnSubscriptionMode === "telegram_keys") {
       const requiredKeys = accountType === "private" ? 5 : 10;
       if (accessKeys.length !== requiredKeys) {
         setFormError(`أدخل ${requiredKeys} مفاتيح تفعيل بالضبط، مفتاحاً واحداً في كل سطر.`);
@@ -4493,7 +4699,7 @@ function AccountForm({
     const cleanEmail = normalizeEmail(email);
     const useExternalLink = service === "netflix" && externalCodeLinkEnabled;
     const supplier_code_url = useExternalLink ? supplierCodeUrl.trim() || undefined : undefined;
-    const access_keys = service === "osn"
+    const access_keys = service === "osn" && osnSubscriptionMode === "telegram_keys"
       ? accessKeysInput.split(/\r?\n/).map((key) => key.trim()).filter(Boolean)
       : undefined;
     onClose();
@@ -4506,6 +4712,7 @@ function AccountForm({
       code_fetch_method: service === "netflix" ? (useExternalLink ? "external_link" : "auto_fetch") : undefined,
       compensation_tutorial_url: accountType === "compensation" ? compensationTutorialUrl.trim() || undefined : undefined,
       compensation_distribution: accountType === "compensation" ? compensationDistribution : undefined,
+      osn_subscription_mode: service === "osn" ? osnSubscriptionMode : undefined,
     });
   }
 
@@ -4601,6 +4808,35 @@ function AccountForm({
         </div>
 
         {service === "osn" && !editing && (
+          <div className="mb-5">
+            <p className="mb-2 text-sm font-black text-zinc-700">نوع / مدة اشتراك OSN</p>
+            <div className="grid gap-2 rounded-2xl border-2 border-fuchsia-100 bg-fuchsia-50/60 p-1.5 sm:grid-cols-2">
+              {([
+                { value: "telegram_keys", label: "اشتراك عادي / مفاتيح تيليجرام" },
+                { value: "monthly_rotation", label: "اشتراك 3 أشهر / دورات شهرية" },
+              ] as Array<{ value: OsnSubscriptionMode; label: string }>).map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => {
+                    setOsnSubscriptionMode(option.value);
+                    setFormError("");
+                  }}
+                  className={cn(
+                    "min-h-14 rounded-xl px-3 py-2 text-sm font-black leading-6 transition",
+                    osnSubscriptionMode === option.value
+                      ? "bg-fuchsia-700 text-white shadow-[0_10px_24px_rgba(162,28,175,0.20)]"
+                      : "bg-white text-zinc-600 hover:bg-fuchsia-100",
+                  )}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {service === "osn" && !editing && osnSubscriptionMode === "telegram_keys" && (
           <Field icon={KeyRound} label={`مفاتيح التفعيل / الدخول (${accountType === "private" ? 5 : 10} مفاتيح)`}>
             <textarea
               required
@@ -4709,7 +4945,11 @@ function AccountForm({
               {editing ? "تاريخ انتهاء الحساب" : "تاريخ الانتهاء التلقائي"}
             </div>
             <p className="mt-1 text-[11px] font-bold text-zinc-400">
-              {editing ? "يبقى تاريخ الانتهاء الحالي دون تغيير." : "يتم احتسابه بعد 30 يوماً من تاريخ الإضافة."}
+              {editing
+                ? "يبقى تاريخ الانتهاء الحالي دون تغيير."
+                : service === "osn" && osnSubscriptionMode === "monthly_rotation"
+                  ? "مدة الاشتراك 90 يوماً، وتبدأ الدورة الأولى لمدة 30 يوماً."
+                  : "يتم احتسابه بعد 30 يوماً من تاريخ الإضافة."}
             </p>
           </div>
           <p className="shrink-0 text-sm font-black text-[#6F22D6]">
@@ -4728,9 +4968,13 @@ function AccountForm({
                 ? "سيتم إنشاء 4 روابط تلقائياً بدون رمز ملف."
                 : "سيتم إنشاء 8 روابط تلقائياً بدون رمز ملف."
               : service === "osn"
-                ? accountType === "private"
-                  ? "سيتم إنشاء 5 روابط OSN، ولكل رابط مفتاح تفعيل مستقل."
-                  : "سيتم إنشاء 10 روابط OSN، ولكل رابط مفتاح تفعيل مستقل."
+                ? osnSubscriptionMode === "monthly_rotation"
+                  ? accountType === "private"
+                    ? "سيتم إنشاء 5 روابط للدورة الأولى. طلب الكود عبر واتساب، ومدة الحساب 90 يوماً."
+                    : "سيتم إنشاء 10 روابط للدورة الأولى. طلب الكود عبر واتساب، ومدة الحساب 90 يوماً."
+                  : accountType === "private"
+                    ? "سيتم إنشاء 5 روابط OSN، ولكل رابط مفتاح تفعيل مستقل."
+                    : "سيتم إنشاء 10 روابط OSN، ولكل رابط مفتاح تفعيل مستقل."
               : accountType === "private"
                 ? "سيتم إنشاء 5 روابط تلقائياً."
                 : "سيتم إنشاء 10 روابط تلقائياً: رابطان مستقلان لكل ملف من A إلى E."}
@@ -5817,7 +6061,8 @@ function CustomerView({
   const account = link?.accounts;
   const accountReportedClosed = account?.is_reported_closed === true;
   const osnActivationKey = String(link?.activation_key || "").trim();
-  const usesOsnAccessKey = serviceOf(account) === "osn" && Boolean(osnActivationKey);
+  const usesOsnMonthlyRotation = isOsnMonthlyRotation(account);
+  const usesOsnAccessKey = serviceOf(account) === "osn" && !usesOsnMonthlyRotation && Boolean(osnActivationKey);
   const osnTutorialMedia = getTutorialMedia(osnTelegramTutorialUrl);
   const storedVerificationCode = link?.verification_code || account?.verification_code || null;
   const storedVerificationCodeReceivedAt =

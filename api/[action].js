@@ -2,6 +2,7 @@ import fetchImapCode from "../server/api/fetch-imap-code.js";
 import notifyExtraCredit from "../server/api/notify-extra-credit.js";
 import receiveCode from "../server/api/receive-code.js";
 import resetCompensationLinks from "../server/api/reset-compensation-links.js";
+import rotateOsnMonthlyCycle from "../server/api/rotate-osn-monthly-cycle.js";
 import reviewCreditRequest from "../server/api/review-credit-request.js";
 import saveImapCredential from "../server/api/save-imap-credential.js";
 import telegramWebhook from "../server/api/telegram-webhook.js";
@@ -14,6 +15,7 @@ const handlers = {
   "notify-extra-credit": notifyExtraCredit,
   "receive-code": receiveCode,
   "reset-compensation-links": resetCompensationLinks,
+  "rotate-osn-monthly-cycle": rotateOsnMonthlyCycle,
   "review-credit-request": reviewCreditRequest,
   "save-imap-credential": saveImapCredential,
   "telegram-webhook": telegramWebhook,

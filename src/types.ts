@@ -2,6 +2,7 @@ export type AccountType = "private" | "shared" | "temporary" | "compensation";
 export type CompensationDistribution = "private" | "shared";
 export type ServiceType = "netflix" | "shahid" | "osn";
 export type CodeFetchMethod = "auto_fetch" | "external_link";
+export type OsnSubscriptionMode = "telegram_keys" | "monthly_rotation";
 export type ExtraCreditReason =
   | "كود خاطئ"
   | "استبدال الجهاز أو الدخول بجهاز آخر"
@@ -33,6 +34,10 @@ export type NetflixAccount = {
   verification_code?: string | null;
   verification_code_received_at?: string | null;
   service_type?: ServiceType | null;
+  osn_subscription_mode?: OsnSubscriptionMode | null;
+  osn_cycle_number?: number | null;
+  osn_cycle_started_at?: string | null;
+  osn_cycle_ends_at?: string | null;
   account_type: AccountType;
   expires_at: string;
   created_at: string;

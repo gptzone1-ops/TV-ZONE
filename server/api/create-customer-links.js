@@ -19,14 +19,15 @@ const PROFILE_STRUCTURES = {
   },
 };
 
-function hasValidStructure(links, accountType, serviceType) {
+function hasValidStructure(links, accountType, serviceType, osnSubscriptionMode) {
   const structure = PROFILE_STRUCTURES[accountType];
   if (!structure || links.length !== structure.names.length) return false;
 
-  const activationKeys = serviceType === "osn"
+  const requiresActivationKeys = serviceType === "osn" && osnSubscriptionMode !== "monthly_rotation";
+  const activationKeys = requiresActivationKeys
     ? links.map((link) => String(link?.activation_key || "").trim())
     : [];
-  if (serviceType === "osn" && (
+  if (requiresActivationKeys && (
     activationKeys.some((key) => !key)
     || new Set(activationKeys.map((key) => key.toLowerCase())).size !== activationKeys.length
   )) return false;
@@ -52,7 +53,9 @@ function sanitizeLinkRows(links, accountId, email, serviceType) {
     profile_name: String(link.profile_name).trim(),
     profile_label: String(link.profile_label).trim(),
     profile_code: String(link.profile_code).trim(),
-    ...(serviceType === "osn" ? { activation_key: String(link.activation_key).trim() } : {}),
+    ...(serviceType === "osn" && String(link.activation_key || "").trim()
+      ? { activation_key: String(link.activation_key).trim() }
+      : {}),
   }));
 }
 
@@ -83,7 +86,7 @@ export default async function handler(req, res) {
 
   const { data: account, error: accountError } = await supabase
     .from("accounts")
-    .select("id,email,account_type,service_type")
+    .select("*")
     .eq("id", accountId)
     .maybeSingle();
 
@@ -100,7 +103,7 @@ export default async function handler(req, res) {
   if (String(account.email || "").trim().toLowerCase() !== email) {
     return send(res, 409, { success: false, error: "account_email_mismatch" });
   }
-  if (!hasValidStructure(links, account.account_type, serviceType)) {
+  if (!hasValidStructure(links, account.account_type, serviceType, account.osn_subscription_mode)) {
     return send(res, 409, { success: false, error: "invalid_links_structure" });
   }
 

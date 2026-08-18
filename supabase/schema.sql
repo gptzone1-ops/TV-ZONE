@@ -10,6 +10,10 @@ create table if not exists public.accounts (
   verification_code text,
   verification_code_received_at timestamptz,
   service_type text not null default 'netflix' check (service_type in ('netflix', 'shahid', 'osn')),
+  osn_subscription_mode text check (osn_subscription_mode in ('telegram_keys', 'monthly_rotation') or osn_subscription_mode is null),
+  osn_cycle_number integer check (osn_cycle_number between 1 and 3 or osn_cycle_number is null),
+  osn_cycle_started_at timestamptz,
+  osn_cycle_ends_at timestamptz,
   account_type text not null check (account_type in ('private', 'shared', 'temporary', 'compensation')),
   compensation_distribution text check (compensation_distribution in ('private', 'shared')),
   compensation_tutorial_url text,
@@ -55,6 +59,12 @@ create table if not exists public.customer_links (
   updated_at timestamptz not null default now(),
   created_at timestamptz not null default now()
 );
+
+alter table public.accounts
+  add column if not exists osn_subscription_mode text,
+  add column if not exists osn_cycle_number integer,
+  add column if not exists osn_cycle_started_at timestamptz,
+  add column if not exists osn_cycle_ends_at timestamptz;
 
 alter table public.customer_links
   add column if not exists short_id text;
