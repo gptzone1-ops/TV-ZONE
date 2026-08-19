@@ -119,7 +119,8 @@ const adminPassword = import.meta.env.VITE_ADMIN_PASSWORD || "Net123213Net@";
 const adminEmail = import.meta.env.VITE_ADMIN_EMAIL || "admin@zonestore.sa";
 const adminAuthKey = "zone-admin-auth";
 const adminAuthValue = `remembered:${adminPassword}`;
-const whatsappNumber = "966581688656";
+const netflixWhatsAppNumber = import.meta.env.VITE_NETFLIX_WHATSAPP_NUMBER || "966571976515";
+const otherServicesWhatsAppNumber = "966581688656";
 const extraCreditStorageBucket = "extra_credit_requests";
 const disclaimerStorageKey = "disclaimer_accepted";
 const dayMs = 1000 * 60 * 60 * 24;
@@ -425,11 +426,13 @@ function buildSupportWhatsAppUrl({
   email,
   customerCode,
   deviceType,
+  phoneNumber = netflixWhatsAppNumber,
 }: {
   issue: SupportIssue;
   email: string;
   customerCode: string;
   deviceType: DeviceView;
+  phoneNumber?: string;
 }) {
   const deviceName = deviceType === "screen" ? "شاشة / سوني" : "جوال / آيباد / بي سي / لابتوب";
   void issue;
@@ -439,7 +442,7 @@ function buildSupportWhatsAppUrl({
 - نوع الجهاز: ${deviceName}
 - نوع المشكلة: استنفاذ المحاولات`;
 
-  return `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(message)}`;
+  return `https://wa.me/${phoneNumber}?text=${encodeURIComponent(message)}`;
 }
 
 function isDuplicateEmailError(error: unknown) {
@@ -6068,6 +6071,7 @@ function CustomerView({
   const storedVerificationCodeReceivedAt =
     link?.verification_code_received_at || account?.verification_code_received_at || null;
   const service = serviceOf(account);
+  const supportWhatsAppNumber = service === "netflix" ? netflixWhatsAppNumber : otherServicesWhatsAppNumber;
   const normalClientLayout = account?.normal_client_layout === true && account?.account_type !== "temporary";
   const serviceOutageActive = service === "netflix" && netflixServiceOutage && !normalClientLayout;
   const theme = serviceThemes[service];
@@ -6076,12 +6080,13 @@ function CustomerView({
   const osnCodeSupportMessage = `مرحباً، أرغب بالحصول على كود التفعيل لحساب OSN التالي:
 - البريد الإلكتروني: ${supportEmail}
 - رمز الطلب/العميل: ${customerCode}`;
-  const osnCodeSupportWhatsAppUrl = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(osnCodeSupportMessage)}`;
+  const osnCodeSupportWhatsAppUrl = `https://wa.me/${otherServicesWhatsAppNumber}?text=${encodeURIComponent(osnCodeSupportMessage)}`;
   const unavailableResultWhatsAppUrl = buildSupportWhatsAppUrl({
     issue: "unavailable",
     email: supportEmail,
     customerCode,
     deviceType: "mobile",
+    phoneNumber: supportWhatsAppNumber,
   });
   const deviceLabel = (device: DeviceView) => (device === "mobile" ? "جوال / آيباد / بي سي / لابتوب" : "شاشة / سوني");
   const codeSecondsRemaining = codeDisplayExpiresAt
@@ -6138,6 +6143,7 @@ function CustomerView({
     email: supportEmail,
     customerCode,
     deviceType: floatingSupportDevice,
+    phoneNumber: supportWhatsAppNumber,
   });
   const tvSearchSecondsRemaining = tvSearchDeadlineAt
     ? Math.max(0, Math.ceil((tvSearchDeadlineAt - nowTick) / 1000))
