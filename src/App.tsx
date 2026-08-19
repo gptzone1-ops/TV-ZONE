@@ -115,7 +115,7 @@ const defaultCompensationTutorialUrl = "https://www.youtube.com/embed/ga805aqXGH
 const netflixServiceOutage = ["1", "true", "yes", "on"].includes(
   String(import.meta.env.VITE_NETFLIX_SERVICE_OUTAGE ?? "true").trim().toLowerCase(),
 );
-const adminPassword = import.meta.env.VITE_ADMIN_PASSWORD || "Gpt123Gpt@@";
+const adminPassword = import.meta.env.VITE_ADMIN_PASSWORD || "Net123213Net@";
 const adminEmail = import.meta.env.VITE_ADMIN_EMAIL || "admin@zonestore.sa";
 const adminAuthKey = "zone-admin-auth";
 const adminAuthValue = `remembered:${adminPassword}`;
