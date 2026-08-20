@@ -490,6 +490,8 @@ function buildTelegramMessage({ request, email, customerCode, deviceType, assess
     ? request.customer_links[0]
     : request.customer_links;
   const profileName = linkedCustomer?.profile_label || linkedCustomer?.profile_name || "غير متوفر";
+  const customerSlug = linkedCustomer?.short_id || linkedCustomer?.uuid || "";
+  const customerUrl = customerSlug ? `https://tv-zone.vercel.app/v/${customerSlug}` : "غير متوفر";
   const confidence = Math.round((assessment?.confidence || 0) * 100);
   const heading =
     outcome.decision === "auto_approved"
@@ -501,12 +503,14 @@ function buildTelegramMessage({ request, email, customerCode, deviceType, assess
   return [
     heading,
     "-----------------------------",
+    "🎬 *نوع الخدمة:* نتفليكس",
     `📧 *البريد الإلكتروني:* ${escapeMarkdown(email)}`,
     `🆔 *رقم العميل:* ${escapeMarkdown(customerCode)}`,
     `👤 *اسم البروفايل:* ${escapeMarkdown(profileName)}`,
     `📱 *نوع الجهاز:* ${escapeMarkdown(deviceType)}`,
     `❓ *سبب المشكلة:* ${escapeMarkdown(request.reason_type)}`,
     `📝 *وصف العميل:* ${escapeMarkdown(request.description)}`,
+    `🔗 *رابط العميل:* ${escapeMarkdown(customerUrl)}`,
     `🧠 *تحليل Gemini:* ${escapeMarkdown(assessment?.summary || outcome.reason)}`,
     `📊 *درجة الثقة:* ${confidence}%`,
     `⚖️ *سبب القرار:* ${escapeMarkdown(outcome.reason)}`,
@@ -552,7 +556,7 @@ export default async function handler(req, res) {
   const { data: request, error: requestError } = await supabase
     .from("extra_credit_requests")
     .select(
-      "id,reason_type,description,image_url,attachment_type,status,ai_decision,ai_reviewed_at,customer_links(id,email,link_number,short_id,selected_device,profile_name,profile_label,accounts(email))",
+      "id,customer_id,reason_type,description,image_url,attachment_type,status,ai_decision,ai_reviewed_at,customer_links(id,email,link_number,short_id,uuid,selected_device,profile_name,profile_label,accounts(email))",
     )
     .eq("id", requestId)
     .eq("status", "pending")
@@ -695,6 +699,21 @@ export default async function handler(req, res) {
   if (reviewError || !reviewed) {
     console.error("Automatic extra credit review failed:", reviewError);
     return res.status(500).json({ success: false, error: "automatic_review_failed" });
+  }
+
+  if (reviewedStatus === "approved") {
+    const { error: resetError } = await supabase
+      .from("customer_links")
+      .update({
+        external_code_used: false,
+        external_code_used_at: null,
+        external_code_first_opened_at: null,
+      })
+      .eq("id", request.customer_id);
+    if (resetError) {
+      console.error("Automatic external code access reset failed:", resetError);
+      return res.status(500).json({ success: false, error: "external_code_reset_failed" });
+    }
   }
 
   const { error: metadataError } = await supabase

@@ -52,7 +52,7 @@ export default async function handler(req, res) {
 
   const { data: request, error: requestError } = await supabase
     .from("extra_credit_requests")
-    .select("id,image_url,status")
+    .select("id,customer_id,image_url,status")
     .eq("id", requestId)
     .eq("status", "pending")
     .maybeSingle();
@@ -95,6 +95,21 @@ export default async function handler(req, res) {
 
   if (!data) {
     return res.status(409).json({ success: false, error: "request_already_reviewed" });
+  }
+
+  if (status === "approved") {
+    const { error: resetError } = await supabase
+      .from("customer_links")
+      .update({
+        external_code_used: false,
+        external_code_used_at: null,
+        external_code_first_opened_at: null,
+      })
+      .eq("id", request.customer_id);
+    if (resetError) {
+      console.error("Approved external code access reset failed:", resetError);
+      return res.status(500).json({ success: false, error: "external_code_reset_failed" });
+    }
   }
 
   return res.status(200).json({ success: true });

@@ -136,6 +136,12 @@ const extraCreditReasons: ExtraCreditReason[] = [
   "عدم تطبيق الخطوات وذهاب الكود",
   "أخرى",
 ];
+const extraCreditReasonLabels: Record<ExtraCreditReason, string> = {
+  "استبدال الجهاز أو الدخول بجهاز آخر": "تغيير الجهاز / تسجيل الدخول من جهاز آخر",
+  "كود خاطئ": "مشكلة في الكود / لم يفتح الحساب",
+  "عدم تطبيق الخطوات وذهاب الكود": "الحساب لا يعمل / مشكلة تسجيل دخول",
+  "أخرى": "أخرى",
+};
 const duplicateEmailMessage = "عفواً، هذا البريد الإلكتروني مسجل مسبقاً ولا يمكن تكراره";
 const duplicateEmailSaveMessage = duplicateEmailMessage;
 const duplicateProfileMessage = (profileName: string) => `هذا الملف (${profileName}) مسجل مسبقاً لهذا الحساب`;
@@ -2555,6 +2561,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
           loading={loading}
           onBack={() => setScreen("netflix")}
           onReview={reviewExtraCreditRequest}
+          onResetExternalCode={resetExternalCodeAccess}
           onLogout={logout}
         />
       </Shell>
@@ -4344,6 +4351,7 @@ function ExtraCreditRequestsPage({
   loading,
   onBack,
   onReview,
+  onResetExternalCode,
   onLogout,
 }: {
   requests: ExtraCreditRequest[];
@@ -4351,6 +4359,7 @@ function ExtraCreditRequestsPage({
   loading: boolean;
   onBack: () => void;
   onReview: (requestId: string, status: Exclude<ExtraCreditRequestStatus, "pending">) => Promise<boolean>;
+  onResetExternalCode: (linkId: string) => Promise<boolean>;
   onLogout: () => void;
 }) {
   const [processingId, setProcessingId] = useState<string | null>(null);
@@ -4505,6 +4514,17 @@ function ExtraCreditRequestsPage({
                         رفض الطلب
                       </button>
                     </div>
+                    {customer?.id && customer?.accounts?.code_fetch_method === "external_link" ? (
+                      <button
+                        type="button"
+                        disabled={Boolean(processingId)}
+                        onClick={() => void onResetExternalCode(customer.id)}
+                        className="flex min-h-12 w-full items-center justify-center gap-2 rounded-xl border border-[#DCCBFA] bg-[#F7F2FF] px-4 text-sm font-black text-[#6E25CF] transition hover:bg-[#EEE4FF] disabled:opacity-50"
+                      >
+                        <RefreshCw className="h-4 w-4" />
+                        إعادة تفعيل الرابط / فتح لـ 30 دقيقة
+                      </button>
+                    ) : null}
                   </div>
                 </article>
               );
@@ -6730,6 +6750,10 @@ function CustomerView({
 
       setExtraCreditRequest(data as ExtraCreditRequest);
       onProgress?.(35);
+      setToast({
+        label: "تم إرسال طلبك بنجاح، سيتم مراجعته والتنفيذ في أقرب وقت",
+        at: Date.now(),
+      });
       processExtraCreditRequestInBackground(data.id);
       return data as ExtraCreditRequest;
     } catch (error) {
@@ -7204,14 +7228,24 @@ function CustomerView({
                         </div>
                       </div>
                       {externalCodeUsed ? (
-                        <button
-                          type="button"
-                          disabled
-                          className="mt-4 flex min-h-12 w-full cursor-not-allowed items-center justify-center gap-2 rounded-2xl bg-zinc-200 px-4 text-sm font-black text-zinc-500"
-                        >
-                          <LockKeyhole className="h-5 w-5" />
-                          انتهت صلاحية رابط الكود
-                        </button>
+                        <div className="mt-4 space-y-3">
+                          <button
+                            type="button"
+                            disabled
+                            className="flex min-h-12 w-full cursor-not-allowed items-center justify-center gap-2 rounded-2xl bg-zinc-200 px-4 text-sm font-black text-zinc-500"
+                          >
+                            <LockKeyhole className="h-5 w-5" />
+                            انتهت صلاحية رابط الكود
+                          </button>
+                          <ExtraCreditRequestAction
+                            status={extraCreditRequest?.status}
+                            aiDecision={extraCreditRequest?.ai_decision}
+                            rejectionReason={extraCreditRequest?.ai_rejection_reason || extraCreditRequest?.review_reason}
+                            onOpen={() => setShowExtraCreditModal(true)}
+                            label="🔄 طلب إعادة فتح الكود / رصيد إضافي"
+                            allowAfterApproval
+                          />
+                        </div>
                       ) : usesExternalCodeLink ? (
                         <div className="mt-4 space-y-3">
                           <button
@@ -7934,11 +7968,15 @@ function ExtraCreditRequestAction({
   aiDecision,
   rejectionReason,
   onOpen,
+  label = "طلب رصيد إضافي",
+  allowAfterApproval = false,
 }: {
   status?: ExtraCreditRequestStatus;
   aiDecision?: ExtraCreditRequest["ai_decision"];
   rejectionReason?: string | null;
   onOpen: () => void;
+  label?: string;
+  allowAfterApproval?: boolean;
 }) {
   if (status === "rejected") {
     return (
@@ -7971,7 +8009,7 @@ function ExtraCreditRequestAction({
     );
   }
 
-  if (status === "approved") {
+  if (status === "approved" && !allowAfterApproval) {
     return (
       <div className="mt-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-center text-sm font-black leading-6 text-emerald-700">
         تم قبول طلبك وإضافة محاولة جديدة إلى حسابك
@@ -7986,7 +8024,7 @@ function ExtraCreditRequestAction({
       className="mt-3 flex min-h-[56px] w-full items-center justify-center gap-2.5 rounded-2xl bg-[#8B35F5] px-5 py-3.5 text-base font-bold text-white shadow-[0_14px_32px_rgba(139,53,245,0.28)] transition hover:-translate-y-0.5 hover:bg-[#7626DD] hover:shadow-[0_18px_36px_rgba(139,53,245,0.34)] active:translate-y-0"
     >
       <Sparkles className="h-5 w-5 shrink-0" />
-      طلب رصيد إضافي
+      {label}
     </button>
   );
 }
@@ -8283,7 +8321,9 @@ function ExtraCreditRequestModal({
             }}
             className="h-13 w-full rounded-xl border-2 border-[#E0D4F8] bg-[#FCFAFF] px-4 text-sm font-black outline-none transition focus:border-[#8B35F5]"
           >
-            {extraCreditReasons.map((reason) => <option key={reason} value={reason}>{reason}</option>)}
+            {extraCreditReasons.map((reason) => (
+              <option key={reason} value={reason}>{extraCreditReasonLabels[reason]}</option>
+            ))}
           </select>
         </label>
 
@@ -8352,7 +8392,7 @@ function ExtraCreditRequestModal({
               className="mt-1 h-5 w-5 shrink-0 accent-[#8B35F5]"
             />
             <span className="text-sm font-black leading-7 text-zinc-900">
-              أقر وأتعهد أمام الله تعالى بأنني سأستخدم الحساب على جهاز واحد فقط، ولن أقوم بإدخاله أو تشغيله على أكثر من جهاز في وقت واحد.
+              أتعهد بأنني لم أسجل الدخول في جهازين في نفس الوقت، وأتحمل مسؤولية إلغاء الاشتراك في حال المخالفة.
             </span>
           </label>
 
