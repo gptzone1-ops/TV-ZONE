@@ -5,7 +5,7 @@ const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPA
 const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN;
 const telegramChatId = process.env.TELEGRAM_CHAT_ID;
 const geminiApiKey = process.env.GEMINI_API_KEY;
-const geminiModel = process.env.GEMINI_MODEL || "gemini-3.6-flash";
+const geminiModel = "gemini-3.7-flash";
 const storageBucket = "extra_credit_requests";
 const replacementReason = "استبدال الجهاز أو الدخول بجهاز آخر";
 const devicePolicyRejection =
@@ -318,6 +318,10 @@ async function analyzeAttachment(supabase, request, customer, email) {
             },
           ],
           generationConfig: {
+            maxOutputTokens: 200,
+            thinkingConfig: {
+              thinkingLevel: "low",
+            },
             responseMimeType: "application/json",
             responseSchema: {
               type: "object",
