@@ -17,6 +17,66 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function checkRemoteService(url, options = {}) {
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: AbortSignal.timeout(8_000),
+    });
+    const payload = await response.json().catch(() => null);
+    return { ok: response.ok && payload?.error == null, status: response.status, payload };
+  } catch (error) {
+    return { ok: false, status: 0, error: String(error?.message || error) };
+  }
+}
+
+async function healthCheck(res) {
+  const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}`;
+  const telegramBaseUrl = telegramBotToken
+    ? `https://api.telegram.org/bot${telegramBotToken}`
+    : null;
+  const [gemini, telegramBot, telegramChat, telegramWebhook] = await Promise.all([
+    geminiApiKey
+      ? checkRemoteService(geminiUrl, { headers: { "x-goog-api-key": geminiApiKey } })
+      : Promise.resolve({ ok: false, status: 0, error: "not_configured" }),
+    telegramBaseUrl
+      ? checkRemoteService(`${telegramBaseUrl}/getMe`)
+      : Promise.resolve({ ok: false, status: 0, error: "not_configured" }),
+    telegramBaseUrl && telegramChatId
+      ? checkRemoteService(`${telegramBaseUrl}/getChat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: telegramChatId }),
+        })
+      : Promise.resolve({ ok: false, status: 0, error: "not_configured" }),
+    telegramBaseUrl
+      ? checkRemoteService(`${telegramBaseUrl}/getWebhookInfo`)
+      : Promise.resolve({ ok: false, status: 0, error: "not_configured" }),
+  ]);
+
+  const webhookResult = telegramWebhook.payload?.result || {};
+  res.setHeader("Cache-Control", "no-store");
+  return res.status(200).json({
+    success: gemini.ok && telegramBot.ok && telegramChat.ok,
+    model: geminiModel,
+    supabase_configured: Boolean(supabaseUrl && serviceRoleKey),
+    gemini: {
+      configured: Boolean(geminiApiKey),
+      reachable: gemini.ok,
+      status: gemini.status,
+    },
+    telegram: {
+      configured: Boolean(telegramBotToken && telegramChatId),
+      bot_reachable: telegramBot.ok,
+      chat_reachable: telegramChat.ok,
+      webhook_reachable: telegramWebhook.ok,
+      webhook_url_configured: String(webhookResult.url || "").includes("/api/telegram-webhook"),
+      pending_updates: Number(webhookResult.pending_update_count || 0),
+      last_error: webhookResult.last_error_message || null,
+    },
+  });
+}
+
 function escapeMarkdown(value) {
   return String(value ?? "غير متوفر").replace(/([\\_*\[\]()`])/g, "\\$1");
 }
@@ -548,6 +608,9 @@ function buildTelegramMessage({ request, email, customerCode, deviceType, assess
 }
 
 export default async function handler(req, res) {
+  if (req.method === "GET" && String(req.query?.health || "") === "1") {
+    return healthCheck(res);
+  }
   if (req.method !== "POST") {
     return res.status(405).json({ success: false, error: "method_not_allowed" });
   }
