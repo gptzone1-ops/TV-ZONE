@@ -5986,7 +5986,11 @@ function CustomerView({
         console.error("Supabase latest extra credit request load error:", error);
         return;
       }
-      setExtraCreditRequest((data || null) as ExtraCreditRequest | null);
+      const latestRequest = (data || null) as ExtraCreditRequest | null;
+      setExtraCreditRequest(latestRequest);
+      if (latestRequest?.status === "pending") {
+        processExtraCreditRequestInBackground(latestRequest.id);
+      }
     }
 
     void loadLatestRequest();
@@ -8092,6 +8096,7 @@ function ExtraCreditRequestModal({
 
   async function waitForDecision(createdRequest: ExtraCreditRequest) {
     let latestRequest = createdRequest;
+    let nextRecoveryAt = Date.now() + 16_000;
 
     while (mountedRef.current) {
       try {
@@ -8100,14 +8105,17 @@ function ExtraCreditRequestModal({
 
         if (
           latestRequest.status === "approved" ||
-          latestRequest.status === "rejected" ||
-          latestRequest.ai_decision === "manual_review"
+          latestRequest.status === "rejected"
         ) {
           return latestRequest;
         }
 
         if (latestRequest.ai_decision === "processing") {
           setReviewProgress((current) => Math.max(current, 45));
+        }
+        if (Date.now() >= nextRecoveryAt) {
+          processExtraCreditRequestInBackground(createdRequest.id);
+          nextRecoveryAt = Date.now() + 16_000;
         }
       } catch (pollError) {
         console.error("Extra credit request polling error:", pollError);

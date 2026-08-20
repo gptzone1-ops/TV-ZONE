@@ -173,6 +173,29 @@ function determineDecision(request, assessment) {
   };
 }
 
+function buildFailSafeAssessment(request, error) {
+  const isReplacement = request.reason_type === replacementReason;
+  const technicalReason = String(error?.message || error || "gemini_unavailable").slice(0, 240);
+  return {
+    descriptionMeaningful: String(request.description || "").trim().length >= 10,
+    attachmentRelevant: !isReplacement,
+    showsNetflixLoginError: false,
+    showsDashboardCodeFailure: false,
+    showsSubscriptionFailure: false,
+    showsSignOutProcess: false,
+    accountIdentifierVisible: false,
+    requestsSimultaneousDevices: false,
+    confidence: isReplacement ? 0 : 0.6,
+    summary: isReplacement
+      ? "تعذر التحقق من فيديو تسجيل الخروج بشكل حاسم، لذلك لم يستوفِ طلب استبدال الجهاز شرط الإثبات الصارم."
+      : "تم تطبيق سياسة القبول المرنة للطلبات العامة بعد تعذر إكمال التحليل المرئي في الوقت المحدد.",
+    diagnosticRejectionReason: isReplacement
+      ? "تعذر التحقق من أن الفيديو يوضح تسجيل الخروج من الجهاز القديم مع ظهور معرّف الحساب بوضوح. يرجى رفع فيديو واضح وكامل ثم إعادة الطلب."
+      : "",
+    evidence: [`fail_safe:${technicalReason}`],
+  };
+}
+
 function buildPrompt(request, customer, email) {
   return `أنت مدقق أدلة لخدمة اشتراكات Netflix. افحص المرفق والوصف وفق سياسة المتجر فقط.
 
@@ -303,6 +326,7 @@ async function analyzeAttachment(supabase, request, customer, email) {
       `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent`,
       {
         method: "POST",
+        signal: AbortSignal.timeout(10_000),
         headers: {
           "x-goog-api-key": geminiApiKey,
           "Content-Type": "application/json",
@@ -318,7 +342,7 @@ async function analyzeAttachment(supabase, request, customer, email) {
             },
           ],
           generationConfig: {
-            maxOutputTokens: 200,
+            maxOutputTokens: 512,
             thinkingConfig: {
               thinkingLevel: "low",
             },
@@ -523,22 +547,6 @@ function buildTelegramMessage({ request, email, customerCode, deviceType, assess
     .join("\n");
 }
 
-async function saveManualReview(supabase, requestId, assessment, reason) {
-  return supabase
-    .from("extra_credit_requests")
-    .update({
-      ai_decision: "manual_review",
-      ai_confidence: assessment?.confidence ?? 0,
-      ai_analysis: assessment?.summary || reason,
-      ai_model: geminiModel,
-      ai_reviewed_at: new Date().toISOString(),
-      ai_rejection_reason: null,
-      review_reason: null,
-    })
-    .eq("id", requestId)
-    .eq("status", "pending");
-}
-
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ success: false, error: "method_not_allowed" });
@@ -578,8 +586,8 @@ export default async function handler(req, res) {
   const processingIsFresh =
     request.ai_decision === "processing" &&
     Number.isFinite(previousStartedAt) &&
-    Date.now() - previousStartedAt < 10 * 60 * 1000;
-  if (processingIsFresh || request.ai_decision === "manual_review") {
+    Date.now() - previousStartedAt < 15 * 1000;
+  if (processingIsFresh) {
     return res.status(200).json({ success: true, already_started: true });
   }
 
@@ -594,7 +602,9 @@ export default async function handler(req, res) {
           .eq("ai_decision", "processing")
           .eq("ai_reviewed_at", request.ai_reviewed_at)
       : claimQuery.eq("ai_decision", "processing").is("ai_reviewed_at", null)
-    : claimQuery.is("ai_decision", null);
+    : request.ai_decision === "manual_review"
+      ? claimQuery.eq("ai_decision", "manual_review")
+      : claimQuery.is("ai_decision", null);
   const { data: claimed, error: claimError } = await claimQuery.select("id").maybeSingle();
   if (claimError) {
     console.error("Extra credit AI claim failed:", claimError);
@@ -614,86 +624,22 @@ export default async function handler(req, res) {
   const customerCode = customer?.link_number || customer?.short_id || customer?.id || "غير متوفر";
   const deviceType = customerDeviceLabel(customer?.selected_device);
 
-  if (!geminiApiKey) {
-    const reason = "تعذر تشغيل الفحص الآلي لأن GEMINI_API_KEY غير مضبوط؛ أحيل الطلب للمراجعة اليدوية.";
-    const fallbackAssessment = { confidence: 0, summary: reason };
-    await saveManualReview(supabase, requestId, fallbackAssessment, reason);
-    await sendTelegram(
-      buildTelegramMessage({
-        request,
-        email,
-        customerCode,
-        deviceType,
-        assessment: fallbackAssessment,
-        outcome: { decision: "manual_review", reason },
-      }),
-      requestId,
-      true,
-      request,
-    );
-    return res.status(200).json({ success: true, decision: "manual_review" });
-  }
-
   let assessment;
-  try {
-    assessment = await analyzeAttachmentWithRetry(supabase, request, customer, email);
-  } catch (error) {
-    console.error("Gemini extra credit analysis failed:", error);
-    const reason = "تعذر إكمال الفحص الآلي بأمان، لذلك أحيل الطلب للمراجعة اليدوية.";
-    const fallbackAssessment = { confidence: 0, summary: reason };
-    await saveManualReview(supabase, requestId, fallbackAssessment, reason);
-    await sendTelegram(
-      buildTelegramMessage({
-        request,
-        email,
-        customerCode,
-        deviceType,
-        assessment: fallbackAssessment,
-        outcome: { decision: "manual_review", reason },
-      }),
-      requestId,
-      true,
-      request,
-    );
-    return res.status(200).json({ success: true, decision: "manual_review" });
+  if (!geminiApiKey) {
+    console.error("Gemini extra credit analysis skipped: GEMINI_API_KEY is missing");
+    assessment = buildFailSafeAssessment(request, new Error("gemini_api_key_missing"));
+  } else {
+    try {
+      assessment = await analyzeAttachmentWithRetry(supabase, request, customer, email);
+    } catch (error) {
+      console.error("Gemini extra credit analysis failed; applying final fail-safe decision:", error);
+      assessment = buildFailSafeAssessment(request, error);
+    }
   }
 
-  let outcome = determineDecision(request, assessment);
-  if (outcome.decision === "manual_review") {
-    const { error: saveError } = await saveManualReview(
-      supabase,
-      requestId,
-      assessment,
-      outcome.reason,
-    );
-    if (saveError) {
-      console.error("Extra credit AI manual review save failed:", saveError);
-      return res.status(500).json({ success: false, error: "ai_result_save_failed" });
-    }
-    await sendTelegram(
-      buildTelegramMessage({ request, email, customerCode, deviceType, assessment, outcome }),
-      requestId,
-      true,
-      request,
-    );
-    return res.status(200).json({ success: true, decision: outcome.decision });
-  }
+  const outcome = determineDecision(request, assessment);
 
   const storageObject = parseStorageObject(request.image_url);
-  if (!storageObject) {
-    outcome = {
-      decision: "manual_review",
-      reason: "تعذر التحقق من مسار المرفق وحذفه بأمان، لذلك أحيل الطلب للمراجعة اليدوية.",
-    };
-    await saveManualReview(supabase, requestId, assessment, outcome.reason);
-    await sendTelegram(
-      buildTelegramMessage({ request, email, customerCode, deviceType, assessment, outcome }),
-      requestId,
-      true,
-      request,
-    );
-    return res.status(200).json({ success: true, decision: outcome.decision });
-  }
 
   const reviewedStatus = outcome.decision === "auto_approved" ? "approved" : "rejected";
   const { data: reviewed, error: reviewError } = await supabase.rpc(
@@ -743,11 +689,13 @@ export default async function handler(req, res) {
     request,
   );
 
-  const { error: removeError } = await supabase.storage
-    .from(storageObject.bucket)
-    .remove([storageObject.path]);
-  if (removeError) {
-    console.error("AI-reviewed attachment deletion failed after Telegram delivery:", removeError);
+  if (storageObject) {
+    const { error: removeError } = await supabase.storage
+      .from(storageObject.bucket)
+      .remove([storageObject.path]);
+    if (removeError) {
+      console.error("AI-reviewed attachment deletion failed after Telegram delivery:", removeError);
+    }
   }
 
   return res.status(200).json({ success: true, decision: outcome.decision });
