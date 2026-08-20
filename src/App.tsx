@@ -2893,6 +2893,12 @@ function Dashboard({
     return () => window.removeEventListener("mousedown", onPointerDown);
   }, []);
 
+  useEffect(() => {
+    if (service !== "osn") return;
+    const intervalId = window.setInterval(() => setCycleClock(Date.now()), 60_000);
+    return () => window.clearInterval(intervalId);
+  }, [service]);
+
   const filterLabel =
     accountTypeFilter === "private"
       ? "خاص"
@@ -3867,12 +3873,6 @@ function CompensationAdminPage({
   useEffect(() => {
     void loadRequests();
   }, []);
-
-  useEffect(() => {
-    if (service !== "osn") return;
-    const intervalId = window.setInterval(() => setCycleClock(Date.now()), 60_000);
-    return () => window.clearInterval(intervalId);
-  }, [service]);
 
   async function importLinks(linkType: "private" | "shared") {
     const input = linkType === "private" ? privateLinksInput : sharedLinksInput;
@@ -6222,7 +6222,7 @@ function CustomerView({
     setShowExternalCodeWarning(true);
   }
 
-  async function continueToExternalCode() {
+  function continueToExternalCode() {
     if (!link?.id || !agreeExternalCodeTerms || externalCodeUsed || externalCodeSubmitting) return;
     const customerLinkId = link.id;
     if (!isValidHttpUrl(externalCodeDirectUrl)) {
@@ -6230,54 +6230,68 @@ function CustomerView({
       return;
     }
 
-    const openedTab = window.open("about:blank", "_blank");
-    if (!openedTab) {
-      setExternalCodeError("تعذر فتح الرابط بسبب إعدادات المتصفح. اسمح بالنوافذ المنبثقة ثم حاول مجدداً.");
-      return;
+    // Keep navigation synchronous with the user's click for Safari and in-app WebViews.
+    let popupBlocked = true;
+    try {
+      const openedTab = window.open(externalCodeDirectUrl, "_blank");
+      popupBlocked = !openedTab || openedTab.closed || typeof openedTab.closed === "undefined";
+      if (!popupBlocked && openedTab) openedTab.opener = null;
+    } catch (error) {
+      console.warn("External code popup was blocked; using same-tab navigation.", error);
     }
+
+    const openedAt = externalCodeFirstOpenedAt || new Date().toISOString();
+    setExternalCodeFirstOpenedAt(openedAt);
+    setExternalCodeDeadlineAt(Date.parse(openedAt) + externalCodeAccessDurationMs);
+    setLink((current) => current
+      ? { ...current, external_code_first_opened_at: openedAt }
+      : current);
+    setShowExternalCodeWarning(false);
+    setAgreeExternalCodeTerms(false);
     setExternalCodeSubmitting(true);
     setExternalCodeError(null);
-    try {
-      const response = await fetch("/api/use-external-code", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ link_id: customerLinkId, mode: "start" }),
-      });
-      const payload = await response.json().catch(() => null) as {
-        success?: boolean;
-        url?: string;
-        first_opened_at?: string;
-        remaining_seconds?: number;
-        error?: string;
-      } | null;
-      if (response.status === 410 || payload?.error === "external_code_expired") {
-        setIsExternalCodeUsed(true);
-        setExternalCodeDeadlineAt(null);
-        setLink((current) => current ? { ...current, external_code_used: true } : current);
-        throw new Error("external_code_expired");
-      }
-      if (!response.ok || !payload?.success || !payload.first_opened_at || !isValidHttpUrl(payload.url || "")) {
-        throw new Error(payload?.error || "external_code_timer_failed");
-      }
 
-      const remainingSeconds = Math.max(0, Number(payload.remaining_seconds) || 0);
-      setExternalCodeFirstOpenedAt(payload.first_opened_at);
-      setExternalCodeDeadlineAt(Date.now() + remainingSeconds * 1000);
-      setLink((current) => current
-        ? { ...current, external_code_first_opened_at: payload.first_opened_at }
-        : current);
-      setShowExternalCodeWarning(false);
-      setAgreeExternalCodeTerms(false);
-      openedTab.opener = null;
-      openedTab.location.replace(payload.url);
-    } catch (error) {
-      openedTab.close();
-      console.error("External code timer registration failed:", error);
-      if (!(error instanceof Error && error.message === "external_code_expired")) {
+    // Register the first-open timestamp separately without delaying navigation.
+    void fetch("/api/use-external-code", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ link_id: customerLinkId, mode: "start" }),
+      keepalive: true,
+    })
+      .then(async (response) => {
+        const payload = await response.json().catch(() => null) as {
+          success?: boolean;
+          url?: string;
+          first_opened_at?: string;
+          remaining_seconds?: number;
+          error?: string;
+        } | null;
+        if (response.status === 410 || payload?.error === "external_code_expired") {
+          setIsExternalCodeUsed(true);
+          setExternalCodeDeadlineAt(null);
+          setLink((current) => current ? { ...current, external_code_used: true } : current);
+          return;
+        }
+        if (!response.ok || !payload?.success || !payload.first_opened_at) {
+          throw new Error(payload?.error || "external_code_timer_failed");
+        }
+
+        const remainingSeconds = Math.max(0, Number(payload.remaining_seconds) || 0);
+        setExternalCodeFirstOpenedAt(payload.first_opened_at);
+        setExternalCodeDeadlineAt(Date.now() + remainingSeconds * 1000);
+        setLink((current) => current
+          ? { ...current, external_code_first_opened_at: payload.first_opened_at }
+          : current);
+      })
+      .catch((error) => {
+        console.error("External code timer registration failed:", error);
         setExternalCodeError("تعذر تثبيت صلاحية الرابط، يرجى المحاولة مرة أخرى.");
-      }
-    } finally {
-      setExternalCodeSubmitting(false);
+        setShowExternalCodeWarning(true);
+      })
+      .finally(() => setExternalCodeSubmitting(false));
+
+    if (popupBlocked) {
+      window.location.assign(externalCodeDirectUrl);
     }
   }
 
@@ -7813,9 +7827,20 @@ function CustomerView({
                   <span>أوافق وأتعهد بالالتزام بشروط الجهاز الواحد.</span>
                 </label>
                 {externalCodeError && (
-                  <p className="mt-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-center text-sm font-black text-rose-700">
-                    {externalCodeError}
-                  </p>
+                  <div className="mt-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-center text-sm font-black text-rose-700">
+                    <p>{externalCodeError}</p>
+                    {isValidHttpUrl(externalCodeDirectUrl) && (
+                      <a
+                        href={externalCodeDirectUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-3 inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-rose-700 px-4 py-2 text-sm font-black text-white transition hover:bg-rose-800"
+                      >
+                        <ExternalLink className="h-4 w-4" />
+                        اضغط هنا لفتح صفحة الكود مباشرة ↗
+                      </a>
+                    )}
+                  </div>
                 )}
                 <div className="mt-5 grid gap-3 sm:grid-cols-2">
                   <button
@@ -7833,7 +7858,7 @@ function CustomerView({
                   <button
                     type="button"
                     disabled={!agreeExternalCodeTerms || externalCodeSubmitting}
-                    onClick={() => void continueToExternalCode()}
+                    onClick={continueToExternalCode}
                     className="min-h-12 rounded-2xl bg-[#8B35F5] px-4 py-3 text-sm font-black text-white shadow-[0_12px_28px_rgba(139,53,245,0.24)] transition hover:bg-[#7626DD] disabled:cursor-not-allowed disabled:opacity-45"
                   >
                     {externalCodeSubmitting ? "جاري تسجيل الاستخدام..." : "موافقة والانتقال لصفحة الكود"}
@@ -8826,7 +8851,7 @@ function StepCard({
   theme,
 }: {
   step: string;
-  icon: LucideIcon;
+  icon: React.ComponentType<{ className?: string }>;
   title: string;
   text: string;
   theme: ServiceTheme;
