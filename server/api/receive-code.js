@@ -92,7 +92,7 @@ export default async function handler(req, res) {
   }
 
   const body = readBody(req.body);
-  const incomingServiceType = String(body.service_type || body.service || "netflix").trim().toLowerCase();
+  const explicitServiceType = String(body.service_type || body.service || "").trim().toLowerCase();
   const rawAccountEmail = String(body.accountEmail || body.account_email || "").trim();
   const accountEmail = normalizeEmail(rawAccountEmail);
   const hasAccountEmail = rawAccountEmail.length > 0;
@@ -105,10 +105,15 @@ export default async function handler(req, res) {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  // OSN auto OTP is an explicit new payload mode. Legacy Netflix payloads do
-  // not include service_type=osn and continue through the unchanged path below.
-  if (incomingServiceType === "osn") {
-    const code = String(body.code || "").replace(/\s+/g, "").trim();
+  const incomingCode = String(body.code || "").replace(/\s+/g, "").trim();
+  const mayBeOsnAutoOtp =
+    explicitServiceType === "osn" ||
+    (!explicitServiceType && hasAccountEmail && /^\d{4}$/.test(incomingCode));
+
+  // New Workers identify OSN explicitly. Existing Workers are supported by an
+  // account lookup that is restricted to new monthly OSN subscriptions only.
+  if (mayBeOsnAutoOtp) {
+    const code = incomingCode;
     if (!hasAccountEmail || !validEmailPattern.test(accountEmail)) {
       return send(res, 400, { success: false, error: "invalid_account_email" });
     }
@@ -130,27 +135,28 @@ export default async function handler(req, res) {
       console.error("OSN auto OTP account lookup failed:", accountError);
       return send(res, 500, { success: false, error: "osn_account_lookup_failed" });
     }
-    if (!account) {
+    if (!account && explicitServiceType === "osn") {
       return send(res, 404, { success: false, error: "osn_auto_otp_account_not_found" });
     }
+    if (account) {
+      const receivedAt = new Date().toISOString();
+      const { error: saveError } = await supabase
+        .from("osn_codes")
+        .upsert({ email: accountEmail, code, updated_at: receivedAt }, { onConflict: "email" });
 
-    const receivedAt = new Date().toISOString();
-    const { error: saveError } = await supabase
-      .from("osn_codes")
-      .upsert({ email: accountEmail, code, updated_at: receivedAt }, { onConflict: "email" });
+      if (saveError) {
+        console.error("OSN auto OTP save failed:", saveError);
+        return send(res, 500, { success: false, error: "osn_code_save_failed" });
+      }
 
-    if (saveError) {
-      console.error("OSN auto OTP save failed:", saveError);
-      return send(res, 500, { success: false, error: "osn_code_save_failed" });
+      return send(res, 200, {
+        success: true,
+        service_type: "osn",
+        account_email: accountEmail,
+        code_saved: true,
+        updated_at: receivedAt,
+      });
     }
-
-    return send(res, 200, {
-      success: true,
-      service_type: "osn",
-      account_email: accountEmail,
-      code_saved: true,
-      updated_at: receivedAt,
-    });
   }
 
   // New Cloudflare payloads are matched strictly by accountEmail. Legacy payloads
@@ -163,7 +169,7 @@ export default async function handler(req, res) {
       ...(Array.isArray(body.original_email_candidates) ? body.original_email_candidates : []),
       body.forwarded_to,
     ]);
-  const code = String(body.code || "").replace(/\s+/g, "").trim();
+  const code = incomingCode;
   const rawEmail = String(body.raw_email || body.rawEmail || "");
   const explicitTvApprovalUrl = String(body.tv_approval_url || "").trim();
   const tvApprovalUrl = explicitTvApprovalUrl || rawEmail.match(netflixTvLinkPattern)?.[0] || "";

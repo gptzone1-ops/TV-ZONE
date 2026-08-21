@@ -51,6 +51,11 @@ function searchableEmailText(rawEmail) {
   return [rawEmail, decodeQuotedPrintable(rawEmail), decodeBase64Parts(rawEmail)].join("\n");
 }
 
+function detectServiceType(rawEmail) {
+  const text = searchableEmailText(rawEmail);
+  return /\bosn\+?\b|osnplus/i.test(text) ? "osn" : "netflix";
+}
+
 function parseHeaders(rawEmail) {
   const headerBlock = String(rawEmail || "").split(/\r?\n\r?\n/, 1)[0] || "";
   const unfolded = headerBlock.replace(/\r?\n[\t ]+/g, " ");
@@ -75,11 +80,17 @@ function extractOriginalEmailCandidates(rawEmail, message, overrideEmail) {
   const headers = parseHeaders(rawEmail);
   const candidates = [];
   const destinationEmail = normalizeEmail(message?.to);
+  const senderEmails = new Set([
+    ...(headers.get("from") || []),
+    ...(headers.get("sender") || []),
+    ...(headers.get("return-path") || []),
+  ].flatMap(emailsFromValue));
   const add = (value, allowDestination = false) => {
     for (const email of emailsFromValue(value)) {
       const domain = email.split("@")[1] || "";
       if (
         !email ||
+        senderEmails.has(email) ||
         domain === "netflix.com" ||
         domain.endsWith(".netflix.com") ||
         (!allowDestination && email === destinationEmail) ||
@@ -125,8 +136,8 @@ function extractSignInCode(rawEmail) {
   const contextual = decodedText.match(codeContextPattern)?.[1]?.replace(/[^0-9]/g, "") || "";
   if (/^\d{4,6}$/.test(contextual)) return contextual;
 
-  const netflixSection = decodedText.match(/netflix[\s\S]{0,2000}/i)?.[0] || "";
-  return netflixSection.match(/\b\d{4,6}\b/)?.[0] || null;
+  const serviceSection = decodedText.match(/(?:netflix|osn\+?)[\s\S]{0,2000}/i)?.[0] || "";
+  return serviceSection.match(/\b\d{4,6}\b/)?.[0] || null;
 }
 
 async function createMessageKey(rawEmail, message) {
@@ -140,11 +151,12 @@ async function createMessageKey(rawEmail, message) {
 export default {
   async email(message, env) {
     const rawEmail = await new Response(message.raw).text();
+    const serviceType = detectServiceType(rawEmail);
     const code = extractSignInCode(rawEmail);
     const tvApprovalUrl = searchableEmailText(rawEmail).match(tvApprovalLinkPattern)?.[0] || null;
 
     if (!code && !tvApprovalUrl) {
-      console.log("Forwarded email ignored: no Netflix code or TV approval link was found.");
+      console.log("Forwarded email ignored: no supported sign-in code or approval link was found.");
       return;
     }
 
@@ -171,6 +183,7 @@ export default {
       method: "POST",
       headers,
       body: JSON.stringify({
+        service_type: serviceType,
         accountEmail,
         email: forwardedTo,
         original_email_candidates: emailCandidates,
@@ -187,7 +200,8 @@ export default {
       throw new Error(`Zone webhook failed with status ${response.status}: ${responseText}`);
     }
 
-    console.log("Netflix forwarding webhook accepted", {
+    console.log("Forwarding webhook accepted", {
+      serviceType,
       accountEmail,
       forwardedTo,
       candidateCount: emailCandidates.length,

@@ -45,7 +45,7 @@ export default async function handler(req, res) {
     }
 
     const email = String(account.email || "").trim().toLowerCase();
-    const cutoff = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    const cutoff = new Date(Date.now() - 20 * 60 * 1000).toISOString();
     const { data: otp, error: otpError } = await supabase
       .from("osn_codes")
       .select("code,updated_at")

@@ -1,4 +1,4 @@
-# Netflix forwarded-email worker
+# Netflix and OSN forwarded-email worker
 
 Deploy `netflix-email-worker.js` as the Email Worker used by the Cloudflare Email Routing address that receives forwarded Outlook messages.
 
@@ -13,4 +13,4 @@ Required Vercel variable:
 
 Do not set `ACCOUNT_EMAIL_OVERRIDE` for a shared routing address. It is only intended for a route permanently dedicated to one account; otherwise it prevents automatic matching of each forwarded message to its original Outlook recipient.
 
-The Worker sends the original Outlook recipient as `accountEmail` and the Cloudflare routing address as legacy `email`. New payloads are matched strictly by `accountEmail`. If an older Worker does not send `accountEmail`, the endpoint preserves the legacy `email` and candidate fallback. Codes are stored in `verification_messages`; consumed messages are ignored and unused messages older than 30 minutes are removed.
+The Worker sends `service_type`, the original recipient as `accountEmail`, and the Cloudflare routing address as legacy `email`. Netflix codes continue to use `verification_messages`; OSN monthly OTP codes use `osn_codes`. The API also detects eligible OSN monthly accounts for compatibility with an older Worker that does not send `service_type`.
