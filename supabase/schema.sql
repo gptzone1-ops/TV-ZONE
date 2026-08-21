@@ -10,7 +10,7 @@ create table if not exists public.accounts (
   verification_code text,
   verification_code_received_at timestamptz,
   service_type text not null default 'netflix' check (service_type in ('netflix', 'shahid', 'osn')),
-  osn_subscription_mode text check (osn_subscription_mode in ('auto_otp', 'telegram_keys', 'monthly_rotation') or osn_subscription_mode is null),
+  osn_subscription_mode text check (osn_subscription_mode in ('telegram_keys', 'monthly_rotation') or osn_subscription_mode is null),
   osn_cycle_number integer check (osn_cycle_number between 1 and 3 or osn_cycle_number is null),
   osn_cycle_started_at timestamptz,
   osn_cycle_ends_at timestamptz,

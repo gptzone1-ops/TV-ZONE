@@ -2,7 +2,7 @@ export type AccountType = "private" | "shared" | "temporary" | "compensation";
 export type CompensationDistribution = "private" | "shared";
 export type ServiceType = "netflix" | "shahid" | "osn";
 export type CodeFetchMethod = "auto_fetch" | "external_link";
-export type OsnSubscriptionMode = "auto_otp" | "telegram_keys" | "monthly_rotation";
+export type OsnSubscriptionMode = "telegram_keys" | "monthly_rotation";
 export type ExtraCreditReason =
   | "كود خاطئ"
   | "استبدال الجهاز أو الدخول بجهاز آخر"

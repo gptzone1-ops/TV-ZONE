@@ -2,6 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY;
+const osnMonthlyAutoOtpLaunchAt = "2026-08-21T03:21:29.272Z";
 
 function send(res, status, payload) {
   res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
@@ -26,13 +27,20 @@ export default async function handler(req, res) {
   try {
     const { data: link, error: linkError } = await supabase
       .from("customer_links")
-      .select("id,account_id,accounts!inner(id,email,service_type,osn_subscription_mode)")
+      .select("id,account_id,accounts!inner(id,email,service_type,osn_subscription_mode,created_at)")
       .eq("id", linkId)
       .maybeSingle();
 
     if (linkError) throw linkError;
     const account = Array.isArray(link?.accounts) ? link.accounts[0] : link?.accounts;
-    if (!link || account?.service_type !== "osn" || account?.osn_subscription_mode !== "auto_otp") {
+    const accountCreatedAtMs = Date.parse(account?.created_at || "");
+    if (
+      !link ||
+      account?.service_type !== "osn" ||
+      account?.osn_subscription_mode !== "monthly_rotation" ||
+      !Number.isFinite(accountCreatedAtMs) ||
+      accountCreatedAtMs < Date.parse(osnMonthlyAutoOtpLaunchAt)
+    ) {
       return send(res, 404, { success: false, error: "auto_otp_link_not_found" });
     }
 

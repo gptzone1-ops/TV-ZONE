@@ -129,6 +129,7 @@ const verificationCodeFallbackWindowMs = 15 * 60 * 1000;
 const tvApprovalFallbackWindowMs = 15 * 60 * 1000;
 const tvApprovalSearchDurationMs = 15 * 1000;
 const externalCodeAccessDurationMs = 30 * 60 * 1000;
+const osnMonthlyAutoOtpLaunchAtMs = Date.parse("2026-08-21T03:21:29.272Z");
 const adminAccountsPageSize = 10;
 const extraCreditReasons: ExtraCreditReason[] = [
   "كود خاطئ",
@@ -1460,7 +1461,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     }
 
     const osnSubscriptionMode: OsnSubscriptionMode | null = selectedService === "osn"
-      ? form.osn_subscription_mode || "auto_otp"
+      ? form.osn_subscription_mode || "telegram_keys"
       : null;
     const monthlyDates = osnSubscriptionMode === "monthly_rotation" ? osnMonthlyAccountDates() : null;
     const expires_at = monthlyDates?.expiresAt || defaultExpiryDate();
@@ -4630,7 +4631,7 @@ function AccountForm({
   const [password, setPassword] = useState(initialAccount?.password || "");
   const [accessKeysInput, setAccessKeysInput] = useState("");
   const [osnSubscriptionMode, setOsnSubscriptionMode] = useState<OsnSubscriptionMode>(
-    initialAccount?.osn_subscription_mode || "auto_otp",
+    initialAccount?.osn_subscription_mode || "telegram_keys",
   );
   const [supplierCodeUrl, setSupplierCodeUrl] = useState(initialAccount?.supplier_code_url || "");
   const [externalCodeLinkEnabled, setExternalCodeLinkEnabled] = useState(
@@ -4835,9 +4836,8 @@ function AccountForm({
         {service === "osn" && !editing && (
           <div className="mb-5">
             <p className="mb-2 text-sm font-black text-zinc-700">نوع / مدة اشتراك OSN</p>
-            <div className="grid gap-2 rounded-2xl border-2 border-fuchsia-100 bg-fuchsia-50/60 p-1.5 sm:grid-cols-3">
+            <div className="grid gap-2 rounded-2xl border-2 border-fuchsia-100 bg-fuchsia-50/60 p-1.5 sm:grid-cols-2">
               {([
-                { value: "auto_otp", label: "سحب تلقائي للكود" },
                 { value: "telegram_keys", label: "اشتراك عادي / مفاتيح تيليجرام" },
                 { value: "monthly_rotation", label: "اشتراك 3 أشهر / دورات شهرية" },
               ] as Array<{ value: OsnSubscriptionMode; label: string }>).map((option) => (
@@ -4994,14 +4994,10 @@ function AccountForm({
                 ? "سيتم إنشاء 4 روابط تلقائياً بدون رمز ملف."
                 : "سيتم إنشاء 8 روابط تلقائياً بدون رمز ملف."
               : service === "osn"
-                ? osnSubscriptionMode === "auto_otp"
+                ? osnSubscriptionMode === "monthly_rotation"
                   ? accountType === "private"
-                    ? "سيتم إنشاء 5 روابط OSN بنظام سحب الكود التلقائي خلال 15 ثانية."
-                    : "سيتم إنشاء 10 روابط OSN بنظام سحب الكود التلقائي خلال 15 ثانية."
-                : osnSubscriptionMode === "monthly_rotation"
-                  ? accountType === "private"
-                    ? "سيتم إنشاء 5 روابط للدورة الأولى. طلب الكود عبر واتساب، ومدة الحساب 90 يوماً."
-                    : "سيتم إنشاء 10 روابط للدورة الأولى. طلب الكود عبر واتساب، ومدة الحساب 90 يوماً."
+                    ? "سيتم إنشاء 5 روابط للدورة الأولى بنظام سحب كود OSN التلقائي، ومدة الحساب 90 يوماً."
+                    : "سيتم إنشاء 10 روابط للدورة الأولى بنظام سحب كود OSN التلقائي، ومدة الحساب 90 يوماً."
                   : accountType === "private"
                     ? "سيتم إنشاء 5 روابط OSN، ولكل رابط مفتاح تفعيل مستقل."
                     : "سيتم إنشاء 10 روابط OSN، ولكل رابط مفتاح تفعيل مستقل."
@@ -6107,7 +6103,11 @@ function CustomerView({
   const accountReportedClosed = account?.is_reported_closed === true;
   const osnActivationKey = String(link?.activation_key || "").trim();
   const usesOsnMonthlyRotation = isOsnMonthlyRotation(account);
-  const usesOsnAutoOtp = serviceOf(account) === "osn" && account?.osn_subscription_mode === "auto_otp";
+  const usesOsnAutoOtp =
+    serviceOf(account) === "osn" &&
+    account?.osn_subscription_mode === "monthly_rotation" &&
+    Number.isFinite(Date.parse(account?.created_at || "")) &&
+    Date.parse(account?.created_at || "") >= osnMonthlyAutoOtpLaunchAtMs;
   const usesOsnAccessKey = serviceOf(account) === "osn" && !usesOsnMonthlyRotation && Boolean(osnActivationKey);
   const osnTutorialMedia = getTutorialMedia(osnTelegramTutorialUrl);
   const storedVerificationCode = link?.verification_code || account?.verification_code || null;
@@ -7240,9 +7240,9 @@ function CustomerView({
                           <Sparkles className="h-7 w-7" />
                         </div>
                         <div className="min-w-0 flex-1">
-                          <p className="text-lg font-black text-zinc-950">كود دخول OSN التلقائي</p>
+                          <p className="text-lg font-black text-zinc-950">كود الدخول السريع OTP ⚡</p>
                           <p className="mt-1 text-xs font-bold leading-6 text-zinc-600">
-                            اطلب كود الدخول من تطبيق OSN أولاً، ثم اضغط الزر ليتم البحث عنه تلقائياً.
+                            أدخل الإيميل في تطبيق OSN واطلب الرمز، ثم اضغط الزر بالأسفل لجلب الكود فوراً.
                           </p>
                         </div>
                       </div>
@@ -7292,6 +7292,17 @@ function CustomerView({
                             <RefreshCw className={cn("h-5 w-5", osnOtpState === "searching" && "animate-spin")} />
                             {osnOtpState === "failed" ? "إعادة المحاولة" : osnOtpState === "searching" ? "جاري البحث..." : "⚡ جلب كود الدخول الآن"}
                           </button>
+                          {osnOtpState === "failed" && (
+                            <a
+                              href={osnCodeSupportWhatsAppUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="mt-3 flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-white px-3 text-xs font-black text-emerald-700 transition hover:bg-emerald-50"
+                            >
+                              <WhatsAppLogo className="h-4 w-4" />
+                              تواصل مع الدعم إذا واجهت مشكلة
+                            </a>
+                          )}
                         </>
                       )}
                     </div>

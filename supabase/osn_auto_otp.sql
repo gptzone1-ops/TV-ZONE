@@ -11,7 +11,7 @@ alter table public.accounts
   add constraint accounts_osn_subscription_mode_check
   check (
     osn_subscription_mode is null
-    or osn_subscription_mode in ('auto_otp', 'telegram_keys', 'monthly_rotation')
+    or osn_subscription_mode in ('telegram_keys', 'monthly_rotation')
   ) not valid;
 
 create table if not exists public.osn_codes (

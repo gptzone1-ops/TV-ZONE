@@ -15,6 +15,7 @@ const jsonHeaders = {
 
 const netflixTvLinkPattern = /https?:\/\/(?:www\.)?netflix\.com\/ilum\?code=[\w-]+/i;
 const validEmailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const osnMonthlyAutoOtpLaunchAt = "2026-08-21T03:21:29.272Z";
 
 function send(res, status, body) {
   Object.entries(jsonHeaders).forEach(([key, value]) => res.setHeader(key, value));
@@ -120,7 +121,8 @@ export default async function handler(req, res) {
       .select("id,email")
       .ilike("email", accountEmail)
       .eq("service_type", "osn")
-      .eq("osn_subscription_mode", "auto_otp")
+      .eq("osn_subscription_mode", "monthly_rotation")
+      .gte("created_at", osnMonthlyAutoOtpLaunchAt)
       .limit(1)
       .maybeSingle();
 
