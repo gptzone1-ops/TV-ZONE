@@ -179,34 +179,51 @@ export default {
       headers.Authorization = `Bearer ${env.RECEIVE_CODE_WEBHOOK_SECRET}`;
     }
 
-    const response = await fetch(webhookUrl, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        service_type: serviceType,
-        accountEmail,
-        email: forwardedTo,
-        original_email_candidates: emailCandidates,
-        forwarded_to: forwardedTo,
-        code,
-        tv_approval_url: tvApprovalUrl,
-        source_key: messageKey,
-        created_at: new Date().toISOString(),
-      }),
-    });
+    let webhookError = null;
+    try {
+      const response = await fetch(webhookUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          service_type: serviceType,
+          accountEmail,
+          email: forwardedTo,
+          original_email_candidates: emailCandidates,
+          forwarded_to: forwardedTo,
+          code,
+          tv_approval_url: tvApprovalUrl,
+          source_key: messageKey,
+          created_at: new Date().toISOString(),
+        }),
+      });
 
-    if (!response.ok) {
-      const responseText = await response.text().catch(() => "");
-      throw new Error(`Zone webhook failed with status ${response.status}: ${responseText}`);
+      if (!response.ok) {
+        const responseText = await response.text().catch(() => "");
+        throw new Error(`Zone webhook failed with status ${response.status}: ${responseText}`);
+      }
+
+      console.log("Forwarding webhook accepted", {
+        serviceType,
+        accountEmail,
+        forwardedTo,
+        candidateCount: emailCandidates.length,
+        hasCode: Boolean(code),
+        hasTvApprovalUrl: Boolean(tvApprovalUrl),
+      });
+    } catch (error) {
+      webhookError = error;
+      console.error("Unable to save the forwarded sign-in code:", error);
     }
 
-    console.log("Forwarding webhook accepted", {
-      serviceType,
-      accountEmail,
-      forwardedTo,
-      candidateCount: emailCandidates.length,
-      hasCode: Boolean(code),
-      hasTvApprovalUrl: Boolean(tvApprovalUrl),
-    });
+    const adminForwardEmail = normalizeEmail(env.ADMIN_FORWARD_EMAIL);
+    if (adminForwardEmail) {
+      try {
+        await message.forward(adminForwardEmail);
+      } catch (error) {
+        console.error("Unable to forward the message to the admin mailbox:", error);
+      }
+    }
+
+    if (webhookError) throw webhookError;
   },
 };

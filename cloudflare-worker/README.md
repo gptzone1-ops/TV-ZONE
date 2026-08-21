@@ -6,6 +6,7 @@ Required Worker variables:
 
 - `RECEIVE_CODE_WEBHOOK_URL=https://tv-zone.vercel.app/api/receive-code`
 - `RECEIVE_CODE_WEBHOOK_SECRET=<same secret configured in Vercel>`
+- `ADMIN_FORWARD_EMAIL=gptzone1@gmail.com` (optional)
 
 Required Vercel variable:
 

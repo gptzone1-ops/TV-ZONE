@@ -106,43 +106,62 @@ export default async function handler(req, res) {
   });
 
   const incomingCode = String(body.code || "").replace(/\s+/g, "").trim();
+  const osnEmailCandidates = uniqueValidEmails([
+    accountEmail,
+    body.original_email,
+    ...(Array.isArray(body.original_email_candidates) ? body.original_email_candidates : []),
+  ]);
   const mayBeOsnAutoOtp =
     explicitServiceType === "osn" ||
-    (!explicitServiceType && hasAccountEmail && /^\d{4}$/.test(incomingCode));
+    (!explicitServiceType && osnEmailCandidates.length > 0 && /^\d{4}$/.test(incomingCode));
 
   // New Workers identify OSN explicitly. Existing Workers are supported by an
   // account lookup that is restricted to new monthly OSN subscriptions only.
   if (mayBeOsnAutoOtp) {
     const code = incomingCode;
-    if (!hasAccountEmail || !validEmailPattern.test(accountEmail)) {
+    if (!osnEmailCandidates.length) {
       return send(res, 400, { success: false, error: "invalid_account_email" });
     }
     if (!/^\d{4}$/.test(code)) {
       return send(res, 400, { success: false, error: "invalid_osn_code" });
     }
 
-    const { data: account, error: accountError } = await supabase
-      .from("accounts")
-      .select("id,email")
-      .ilike("email", accountEmail)
-      .eq("service_type", "osn")
-      .eq("osn_subscription_mode", "monthly_rotation")
-      .gte("created_at", osnMonthlyAutoOtpLaunchAt)
-      .limit(1)
-      .maybeSingle();
+    let account = null;
+    let matchedAccountEmail = "";
+    for (const candidate of osnEmailCandidates) {
+      const { data, error: accountError } = await supabase
+        .from("accounts")
+        .select("id,email")
+        .ilike("email", candidate)
+        .eq("service_type", "osn")
+        .eq("osn_subscription_mode", "monthly_rotation")
+        .gte("created_at", osnMonthlyAutoOtpLaunchAt)
+        .limit(1)
+        .maybeSingle();
 
-    if (accountError) {
-      console.error("OSN auto OTP account lookup failed:", accountError);
-      return send(res, 500, { success: false, error: "osn_account_lookup_failed" });
+      if (accountError) {
+        console.error("OSN auto OTP account lookup failed:", accountError);
+        return send(res, 500, { success: false, error: "osn_account_lookup_failed" });
+      }
+      if (data) {
+        account = data;
+        matchedAccountEmail = normalizeEmail(data.email);
+        break;
+      }
     }
     if (!account && explicitServiceType === "osn") {
-      return send(res, 404, { success: false, error: "osn_auto_otp_account_not_found" });
+      console.warn("No eligible OSN account matched forwarded email candidates:", osnEmailCandidates);
+      return send(res, 404, {
+        success: false,
+        error: "osn_auto_otp_account_not_found",
+        candidates: osnEmailCandidates,
+      });
     }
     if (account) {
       const receivedAt = new Date().toISOString();
       const { error: saveError } = await supabase
         .from("osn_codes")
-        .upsert({ email: accountEmail, code, updated_at: receivedAt }, { onConflict: "email" });
+        .upsert({ email: matchedAccountEmail, code, updated_at: receivedAt }, { onConflict: "email" });
 
       if (saveError) {
         console.error("OSN auto OTP save failed:", saveError);
@@ -152,7 +171,7 @@ export default async function handler(req, res) {
       return send(res, 200, {
         success: true,
         service_type: "osn",
-        account_email: accountEmail,
+        account_email: matchedAccountEmail,
         code_saved: true,
         updated_at: receivedAt,
       });
