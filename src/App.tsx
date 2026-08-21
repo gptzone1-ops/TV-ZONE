@@ -6084,6 +6084,7 @@ function CustomerView({
   const storedVerificationCodeReceivedAt =
     link?.verification_code_received_at || account?.verification_code_received_at || null;
   const service = serviceOf(account);
+  const showsNetflixProfilePin = service === "netflix" && account?.account_type === "private";
   const supportWhatsAppNumber = service === "netflix" ? netflixWhatsAppNumber : otherServicesWhatsAppNumber;
   const normalClientLayout = account?.normal_client_layout === true && account?.account_type !== "temporary";
   const serviceOutageActive = service === "netflix" && netflixServiceOutage && !normalClientLayout;
@@ -7784,12 +7785,16 @@ function CustomerView({
                     <LockKeyhole className="h-6 w-6" />
                   </div>
                   <h2 className="text-3xl font-black md:text-4xl">بيانات ملفك الخاص</h2>
-                  <p className="mt-3 text-sm font-bold text-zinc-500">استخدم اسم الملف والرمز فقط عند تسجيل الدخول.</p>
+                  <p className="mt-3 text-sm font-bold text-zinc-500">
+                    {showsNetflixProfilePin
+                      ? "استخدم اسم الملف والرمز فقط عند تسجيل الدخول."
+                      : "استخدم اسم الملف الموضح فقط عند تسجيل الدخول."}
+                  </p>
                 </div>
 
-                <div className={cn("grid gap-4", service === "netflix" && "sm:grid-cols-2")}>
+                <div className={cn("grid gap-4", showsNetflixProfilePin && "sm:grid-cols-2")}>
                   <ProfileMiniCard label="اسم الملف" value={`ملف ${link.profile_label}`} icon={UserRound} setToast={setToast} theme={theme} />
-                  {service === "netflix" && (
+                  {showsNetflixProfilePin && (
                     profilePinRevealed ? (
                       <ProfileMiniCard label="رمز الملف" value={getProfilePin(link)} icon={LockKeyhole} setToast={setToast} theme={theme} ltr />
                     ) : (
@@ -8018,7 +8023,7 @@ function CustomerView({
             />
           )}
 
-          {showProfilePinWarning && (
+          {showProfilePinWarning && showsNetflixProfilePin && (
             <div className="fixed inset-0 z-[100] flex items-center justify-center bg-zinc-950/65 p-4 backdrop-blur-sm" dir="rtl" role="dialog" aria-modal="true" aria-labelledby="profile-pin-warning-title">
               <div className="w-full max-w-lg rounded-[2rem] border border-amber-200 bg-white p-5 shadow-2xl md:p-7">
                 <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-3xl bg-amber-100 text-amber-600 shadow-[0_14px_35px_rgba(217,119,6,0.20)]">
