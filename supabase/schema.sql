@@ -10,7 +10,7 @@ create table if not exists public.accounts (
   verification_code text,
   verification_code_received_at timestamptz,
   service_type text not null default 'netflix' check (service_type in ('netflix', 'shahid', 'osn')),
-  osn_subscription_mode text check (osn_subscription_mode in ('telegram_keys', 'monthly_rotation') or osn_subscription_mode is null),
+  osn_subscription_mode text check (osn_subscription_mode in ('auto_otp', 'telegram_keys', 'monthly_rotation') or osn_subscription_mode is null),
   osn_cycle_number integer check (osn_cycle_number between 1 and 3 or osn_cycle_number is null),
   osn_cycle_started_at timestamptz,
   osn_cycle_ends_at timestamptz,
@@ -78,6 +78,18 @@ alter table public.customer_links
 create unique index if not exists customer_links_osn_activation_key_unique
   on public.customer_links (lower(activation_key))
   where service_type = 'osn' and nullif(btrim(activation_key), '') is not null;
+
+create table if not exists public.osn_codes (
+  email text primary key,
+  code text not null check (code ~ '^\d{4}$'),
+  updated_at timestamptz not null default now()
+);
+
+create unique index if not exists osn_codes_email_lower_unique
+  on public.osn_codes (lower(btrim(email)));
+
+create index if not exists osn_codes_updated_at_idx
+  on public.osn_codes (updated_at desc);
 
 update public.customer_links as links
 set email = accounts.email

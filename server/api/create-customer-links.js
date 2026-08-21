@@ -23,7 +23,7 @@ function hasValidStructure(links, accountType, serviceType, osnSubscriptionMode)
   const structure = PROFILE_STRUCTURES[accountType];
   if (!structure || links.length !== structure.names.length) return false;
 
-  const requiresActivationKeys = serviceType === "osn" && osnSubscriptionMode !== "monthly_rotation";
+  const requiresActivationKeys = serviceType === "osn" && osnSubscriptionMode === "telegram_keys";
   const activationKeys = requiresActivationKeys
     ? links.map((link) => String(link?.activation_key || "").trim())
     : [];

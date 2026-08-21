@@ -1,7 +1,7 @@
 {
   "routes": [
     {
-      "src": "/api/(fetch-imap-code|notify-extra-credit|receive-code|reset-compensation-links|rotate-osn-monthly-cycle|review-credit-request|save-imap-credential|telegram-webhook|temporary-account)",
+      "src": "/api/(fetch-imap-code|fetch-osn-code|notify-extra-credit|receive-code|reset-compensation-links|rotate-osn-monthly-cycle|review-credit-request|save-imap-credential|telegram-webhook|temporary-account)",
       "dest": "/api/router?action=$1"
     },
     {

@@ -91,12 +91,64 @@ export default async function handler(req, res) {
   }
 
   const body = readBody(req.body);
+  const incomingServiceType = String(body.service_type || body.service || "netflix").trim().toLowerCase();
   const rawAccountEmail = String(body.accountEmail || body.account_email || "").trim();
   const accountEmail = normalizeEmail(rawAccountEmail);
   const hasAccountEmail = rawAccountEmail.length > 0;
 
   if (hasAccountEmail && !validEmailPattern.test(accountEmail)) {
     return send(res, 400, { success: false, error: "invalid_account_email" });
+  }
+
+  const supabase = createClient(supabaseUrl, supabaseKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
+  // OSN auto OTP is an explicit new payload mode. Legacy Netflix payloads do
+  // not include service_type=osn and continue through the unchanged path below.
+  if (incomingServiceType === "osn") {
+    const code = String(body.code || "").replace(/\s+/g, "").trim();
+    if (!hasAccountEmail || !validEmailPattern.test(accountEmail)) {
+      return send(res, 400, { success: false, error: "invalid_account_email" });
+    }
+    if (!/^\d{4}$/.test(code)) {
+      return send(res, 400, { success: false, error: "invalid_osn_code" });
+    }
+
+    const { data: account, error: accountError } = await supabase
+      .from("accounts")
+      .select("id,email")
+      .ilike("email", accountEmail)
+      .eq("service_type", "osn")
+      .eq("osn_subscription_mode", "auto_otp")
+      .limit(1)
+      .maybeSingle();
+
+    if (accountError) {
+      console.error("OSN auto OTP account lookup failed:", accountError);
+      return send(res, 500, { success: false, error: "osn_account_lookup_failed" });
+    }
+    if (!account) {
+      return send(res, 404, { success: false, error: "osn_auto_otp_account_not_found" });
+    }
+
+    const receivedAt = new Date().toISOString();
+    const { error: saveError } = await supabase
+      .from("osn_codes")
+      .upsert({ email: accountEmail, code, updated_at: receivedAt }, { onConflict: "email" });
+
+    if (saveError) {
+      console.error("OSN auto OTP save failed:", saveError);
+      return send(res, 500, { success: false, error: "osn_code_save_failed" });
+    }
+
+    return send(res, 200, {
+      success: true,
+      service_type: "osn",
+      account_email: accountEmail,
+      code_saved: true,
+      updated_at: receivedAt,
+    });
   }
 
   // New Cloudflare payloads are matched strictly by accountEmail. Legacy payloads
@@ -125,10 +177,6 @@ export default async function handler(req, res) {
     return send(res, 400, { success: false, error: "missing_code_or_tv_approval_url" });
   }
   if (Number.isNaN(createdAt.getTime())) return send(res, 400, { success: false, error: "invalid_created_at" });
-
-  const supabase = createClient(supabaseUrl, supabaseKey, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
 
   let matchingLinks = [];
   let matchedEmail = "";

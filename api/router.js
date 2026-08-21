@@ -1,4 +1,5 @@
 import fetchImapCode from "../server/api/fetch-imap-code.js";
+import fetchOsnCode from "../server/api/fetch-osn-code.js";
 import notifyExtraCredit from "../server/api/notify-extra-credit.js";
 import receiveCode from "../server/api/receive-code.js";
 import resetCompensationLinks from "../server/api/reset-compensation-links.js";
@@ -12,6 +13,7 @@ export const config = { maxDuration: 300 };
 
 const handlers = {
   "fetch-imap-code": fetchImapCode,
+  "fetch-osn-code": fetchOsnCode,
   "notify-extra-credit": notifyExtraCredit,
   "receive-code": receiveCode,
   "reset-compensation-links": resetCompensationLinks,

@@ -1460,7 +1460,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     }
 
     const osnSubscriptionMode: OsnSubscriptionMode | null = selectedService === "osn"
-      ? form.osn_subscription_mode || "telegram_keys"
+      ? form.osn_subscription_mode || "auto_otp"
       : null;
     const monthlyDates = osnSubscriptionMode === "monthly_rotation" ? osnMonthlyAccountDates() : null;
     const expires_at = monthlyDates?.expiresAt || defaultExpiryDate();
@@ -1616,8 +1616,10 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
           password: accountPassword,
           expires_at,
           service_type: selectedService,
+          ...(selectedService === "osn" ? {
+            osn_subscription_mode: osnSubscriptionMode,
+          } : {}),
           ...(monthlyDates ? {
-            osn_subscription_mode: "monthly_rotation" as const,
             osn_cycle_number: 1,
             osn_cycle_started_at: monthlyDates.cycleStartedAt,
             osn_cycle_ends_at: monthlyDates.cycleEndsAt,
@@ -4628,7 +4630,7 @@ function AccountForm({
   const [password, setPassword] = useState(initialAccount?.password || "");
   const [accessKeysInput, setAccessKeysInput] = useState("");
   const [osnSubscriptionMode, setOsnSubscriptionMode] = useState<OsnSubscriptionMode>(
-    initialAccount?.osn_subscription_mode || "telegram_keys",
+    initialAccount?.osn_subscription_mode || "auto_otp",
   );
   const [supplierCodeUrl, setSupplierCodeUrl] = useState(initialAccount?.supplier_code_url || "");
   const [externalCodeLinkEnabled, setExternalCodeLinkEnabled] = useState(
@@ -4833,8 +4835,9 @@ function AccountForm({
         {service === "osn" && !editing && (
           <div className="mb-5">
             <p className="mb-2 text-sm font-black text-zinc-700">نوع / مدة اشتراك OSN</p>
-            <div className="grid gap-2 rounded-2xl border-2 border-fuchsia-100 bg-fuchsia-50/60 p-1.5 sm:grid-cols-2">
+            <div className="grid gap-2 rounded-2xl border-2 border-fuchsia-100 bg-fuchsia-50/60 p-1.5 sm:grid-cols-3">
               {([
+                { value: "auto_otp", label: "سحب تلقائي للكود" },
                 { value: "telegram_keys", label: "اشتراك عادي / مفاتيح تيليجرام" },
                 { value: "monthly_rotation", label: "اشتراك 3 أشهر / دورات شهرية" },
               ] as Array<{ value: OsnSubscriptionMode; label: string }>).map((option) => (
@@ -4991,7 +4994,11 @@ function AccountForm({
                 ? "سيتم إنشاء 4 روابط تلقائياً بدون رمز ملف."
                 : "سيتم إنشاء 8 روابط تلقائياً بدون رمز ملف."
               : service === "osn"
-                ? osnSubscriptionMode === "monthly_rotation"
+                ? osnSubscriptionMode === "auto_otp"
+                  ? accountType === "private"
+                    ? "سيتم إنشاء 5 روابط OSN بنظام سحب الكود التلقائي خلال 15 ثانية."
+                    : "سيتم إنشاء 10 روابط OSN بنظام سحب الكود التلقائي خلال 15 ثانية."
+                : osnSubscriptionMode === "monthly_rotation"
                   ? accountType === "private"
                     ? "سيتم إنشاء 5 روابط للدورة الأولى. طلب الكود عبر واتساب، ومدة الحساب 90 يوماً."
                     : "سيتم إنشاء 10 روابط للدورة الأولى. طلب الكود عبر واتساب، ومدة الحساب 90 يوماً."
@@ -5929,6 +5936,10 @@ function CustomerView({
   const [externalCodeSubmitting, setExternalCodeSubmitting] = useState(false);
   const [externalCodeError, setExternalCodeError] = useState<string | null>(null);
   const [activeTutorial, setActiveTutorial] = useState<{ title: string; url: string } | null>(null);
+  const [osnOtpState, setOsnOtpState] = useState<"idle" | "searching" | "ready" | "failed">("idle");
+  const [osnOtpCode, setOsnOtpCode] = useState<string | null>(null);
+  const [osnOtpDeadlineAt, setOsnOtpDeadlineAt] = useState<number | null>(null);
+  const [osnOtpError, setOsnOtpError] = useState<string | null>(null);
   const [tvRequestState, setTvRequestState] = useState<"idle" | "searching" | "ready" | "failed" | "expired">("idle");
   const [tvSearchDeadlineAt, setTvSearchDeadlineAt] = useState<number | null>(null);
   const [tvDisplayExpiresAt, setTvDisplayExpiresAt] = useState<number | null>(null);
@@ -5941,6 +5952,7 @@ function CustomerView({
   const codeSearchActiveRef = useRef(false);
   const tvSearchActiveRef = useRef(false);
   const externalCodeExpiryRequestRef = useRef(false);
+  const osnOtpSearchSequenceRef = useRef(0);
   const requestBaselineRef = useRef<{
     messageId: string | null;
     code: string | null;
@@ -6034,6 +6046,11 @@ function CustomerView({
     setShowProfilePinWarning(false);
     setAgreeProfilePinWarning(false);
     setProfilePinRevealed(false);
+    osnOtpSearchSequenceRef.current += 1;
+    setOsnOtpState("idle");
+    setOsnOtpCode(null);
+    setOsnOtpDeadlineAt(null);
+    setOsnOtpError(null);
   }, [link?.id, link?.selected_device]);
 
   useEffect(() => {
@@ -6073,6 +6090,7 @@ function CustomerView({
       if (countdownRef.current) window.clearInterval(countdownRef.current);
       codeSearchActiveRef.current = false;
       tvSearchActiveRef.current = false;
+      osnOtpSearchSequenceRef.current += 1;
     };
   }, []);
 
@@ -6089,6 +6107,7 @@ function CustomerView({
   const accountReportedClosed = account?.is_reported_closed === true;
   const osnActivationKey = String(link?.activation_key || "").trim();
   const usesOsnMonthlyRotation = isOsnMonthlyRotation(account);
+  const usesOsnAutoOtp = serviceOf(account) === "osn" && account?.osn_subscription_mode === "auto_otp";
   const usesOsnAccessKey = serviceOf(account) === "osn" && !usesOsnMonthlyRotation && Boolean(osnActivationKey);
   const osnTutorialMedia = getTutorialMedia(osnTelegramTutorialUrl);
   const storedVerificationCode = link?.verification_code || account?.verification_code || null;
@@ -6174,6 +6193,9 @@ function CustomerView({
     : 0;
   const tvDisplaySecondsRemaining = tvDisplayExpiresAt
     ? Math.max(0, Math.ceil((tvDisplayExpiresAt - nowTick) / 1000))
+    : 0;
+  const osnOtpSecondsRemaining = osnOtpDeadlineAt
+    ? Math.max(0, Math.ceil((osnOtpDeadlineAt - nowTick) / 1000))
     : 0;
 
   useEffect(() => {
@@ -7005,6 +7027,68 @@ function CustomerView({
     }, 15_000);
   }
 
+  async function startOsnOtpSearch() {
+    if (!link?.id || !usesOsnAutoOtp || osnOtpState === "searching") return;
+
+    const searchSequence = osnOtpSearchSequenceRef.current + 1;
+    osnOtpSearchSequenceRef.current = searchSequence;
+    const deadline = Date.now() + 15_000;
+    setOsnOtpState("searching");
+    setOsnOtpCode(null);
+    setOsnOtpError(null);
+    setOsnOtpDeadlineAt(deadline);
+
+    try {
+      while (osnOtpSearchSequenceRef.current === searchSequence && Date.now() < deadline) {
+        const response = await fetch("/api/fetch-osn-code", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ link_id: link.id }),
+          cache: "no-store",
+        });
+        const payload = await response.json().catch(() => null) as {
+          success?: boolean;
+          pending?: boolean;
+          code?: string;
+          error?: string;
+        } | null;
+
+        if (osnOtpSearchSequenceRef.current !== searchSequence) return;
+        const code = String(payload?.code || "").replace(/\s+/g, "");
+        if (response.ok && payload?.success && /^\d{4}$/.test(code)) {
+          setOsnOtpCode(code);
+          setOsnOtpState("ready");
+          setOsnOtpDeadlineAt(null);
+          setToast({ label: "تم العثور على كود OSN بنجاح", at: Date.now() });
+          return;
+        }
+        if (!response.ok || payload?.pending !== true) {
+          throw new Error(payload?.error || "osn_otp_lookup_failed");
+        }
+
+        const waitMs = Math.min(2000, Math.max(0, deadline - Date.now()));
+        if (waitMs > 0) {
+          await new Promise<void>((resolve) => window.setTimeout(resolve, waitMs));
+        }
+      }
+
+      if (osnOtpSearchSequenceRef.current === searchSequence) {
+        setOsnOtpState("failed");
+        setOsnOtpError("لم يصل الرمز بعد، يرجى طلب الكود أولاً من داخل تطبيق OSN ثم الضغط على إعادة المحاولة");
+      }
+    } catch (error) {
+      console.error("OSN OTP search failed:", error);
+      if (osnOtpSearchSequenceRef.current === searchSequence) {
+        setOsnOtpState("failed");
+        setOsnOtpError("تعذر البحث عن الكود حالياً، يرجى الضغط على إعادة المحاولة خلال ثوانٍ");
+      }
+    } finally {
+      if (osnOtpSearchSequenceRef.current === searchSequence) {
+        setOsnOtpDeadlineAt(null);
+      }
+    }
+  }
+
   if (link && account?.account_type === "compensation") {
     return <CompensationAccountCustomerView link={link} account={account} navigate={navigate} />;
   }
@@ -7149,7 +7233,69 @@ function CustomerView({
                     <LoginCopyCard label="كلمة المرور" value={account.password} icon={KeyRound} setToast={setToast} theme={theme} />
                   )}
                   {!normalClientLayout && link.client_code && <CompensationCodeCard code={link.client_code} showPageLink />}
-                  {service === "osn" && usesOsnAccessKey ? (
+                  {service === "osn" && usesOsnAutoOtp ? (
+                    <div className="rounded-[1.75rem] border border-fuchsia-200 bg-gradient-to-l from-white to-fuchsia-50 p-5 shadow-card" aria-live="polite">
+                      <div className="flex items-center gap-4">
+                        <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-fuchsia-100 text-fuchsia-700">
+                          <Sparkles className="h-7 w-7" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-lg font-black text-zinc-950">كود دخول OSN التلقائي</p>
+                          <p className="mt-1 text-xs font-bold leading-6 text-zinc-600">
+                            اطلب كود الدخول من تطبيق OSN أولاً، ثم اضغط الزر ليتم البحث عنه تلقائياً.
+                          </p>
+                        </div>
+                      </div>
+
+                      {osnOtpState === "ready" && osnOtpCode ? (
+                        <div className="mt-5 rounded-2xl border-2 border-emerald-200 bg-white p-5 text-center shadow-sm">
+                          <p className="text-xs font-black text-emerald-700">تم العثور على الكود</p>
+                          <p className="mt-2 text-4xl font-black tracking-[0.3em] text-zinc-950" dir="ltr">{osnOtpCode}</p>
+                          <button
+                            type="button"
+                            onClick={() => void copyText(osnOtpCode, setToast)}
+                            className="mt-4 flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 text-sm font-black text-white transition hover:bg-emerald-700"
+                          >
+                            <Copy className="h-4 w-4" />
+                            نسخ الكود
+                          </button>
+                        </div>
+                      ) : (
+                        <>
+                          {osnOtpState === "searching" && (
+                            <div className="mt-5 rounded-2xl border border-fuchsia-200 bg-white p-4">
+                              <div className="flex items-center justify-between gap-3 text-sm font-black text-fuchsia-800">
+                                <span>جاري البحث عن كود الدخول...</span>
+                                <span dir="ltr">{osnOtpSecondsRemaining}s</span>
+                              </div>
+                              <div className="mt-3 h-2.5 overflow-hidden rounded-full bg-fuchsia-100">
+                                <div
+                                  className="h-full rounded-full bg-fuchsia-600 transition-[width] duration-1000 ease-linear"
+                                  style={{ width: `${Math.max(4, (osnOtpSecondsRemaining / 15) * 100)}%` }}
+                                />
+                              </div>
+                            </div>
+                          )}
+
+                          {osnOtpState === "failed" && (
+                            <p className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-black leading-7 text-amber-900">
+                              {osnOtpError}
+                            </p>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => void startOsnOtpSearch()}
+                            disabled={osnOtpState === "searching"}
+                            className="mt-5 flex min-h-14 w-full items-center justify-center gap-2 rounded-2xl bg-fuchsia-700 px-4 text-center text-base font-black text-white shadow-[0_14px_32px_rgba(162,28,175,0.24)] transition hover:-translate-y-0.5 hover:bg-fuchsia-800 disabled:cursor-wait disabled:bg-fuchsia-400"
+                          >
+                            <RefreshCw className={cn("h-5 w-5", osnOtpState === "searching" && "animate-spin")} />
+                            {osnOtpState === "failed" ? "إعادة المحاولة" : osnOtpState === "searching" ? "جاري البحث..." : "⚡ جلب كود الدخول الآن"}
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  ) : service === "osn" && usesOsnAccessKey ? (
                     <div className="rounded-[1.75rem] border border-fuchsia-200 bg-gradient-to-l from-white to-fuchsia-50 p-4 shadow-card">
                       <div className="flex items-center gap-4">
                         <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-fuchsia-100 text-fuchsia-700">
@@ -7650,6 +7796,37 @@ function CustomerView({
                         icon={Clipboard}
                         title="أكمل تسجيل الدخول"
                         text="انسخ الرمز أو افتح رابط الموافقة فوراً لإتمام تسجيل الدخول في نتفليكس."
+                        theme={theme}
+                      />
+                    </>
+                  ) : service === "osn" && usesOsnAutoOtp ? (
+                    <>
+                      <StepCard
+                        step="Step 1"
+                        icon={Tv}
+                        title="افتح تطبيق OSN"
+                        text="افتح تطبيق OSN أو الموقع الرسمي وابدأ تسجيل الدخول."
+                        theme={theme}
+                      />
+                      <StepCard
+                        step="Step 2"
+                        icon={Mail}
+                        title="أدخل البريد الإلكتروني"
+                        text="انسخ البريد الإلكتروني الموضح في بيانات تسجيل الدخول وأدخله في OSN."
+                        theme={theme}
+                      />
+                      <StepCard
+                        step="Step 3"
+                        icon={Sparkles}
+                        title="اطلب كود الدخول"
+                        text="اطلب الكود من داخل OSN، ثم اضغط جلب كود الدخول الآن في هذه الصفحة."
+                        theme={theme}
+                      />
+                      <StepCard
+                        step="Step 4"
+                        icon={Clipboard}
+                        title="انسخ الكود"
+                        text="عند ظهور الكود انسخه وأدخله فوراً في OSN لإتمام تسجيل الدخول."
                         theme={theme}
                       />
                     </>
