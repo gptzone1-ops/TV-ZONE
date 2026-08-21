@@ -641,6 +641,13 @@ export default async function handler(req, res) {
   if (!request) {
     return res.status(404).json({ success: false, error: "request_not_found" });
   }
+  if (request.ai_decision === "manual_review") {
+    return res.status(200).json({
+      success: true,
+      decision: "manual_review",
+      already_notified: true,
+    });
+  }
 
   const previousStartedAt = Date.parse(request.ai_reviewed_at || "");
   const processingIsFresh =
@@ -684,6 +691,62 @@ export default async function handler(req, res) {
   const serviceName = relatedAccount?.service_type === "osn" ? "OSN" : "نتفليكس";
   const customerCode = customer?.link_number || customer?.short_id || customer?.id || "غير متوفر";
   const deviceType = customerDeviceLabel(customer?.selected_device);
+
+  if (serviceName === "OSN") {
+    const assessment = {
+      confidence: 0,
+      summary: "طلب رصيد OSN مخصص للمراجعة اليدوية عبر تيليجرام دون استخدام الذكاء الاصطناعي.",
+    };
+    const outcome = {
+      decision: "manual_review",
+      reason: "بانتظار قرار المشرف من أزرار القبول أو الرفض في تيليجرام.",
+    };
+    const reviewedAt = new Date().toISOString();
+    const { error: manualStateError } = await supabase
+      .from("extra_credit_requests")
+      .update({
+        ai_decision: "manual_review",
+        ai_confidence: null,
+        ai_analysis: assessment.summary,
+        ai_model: null,
+        ai_reviewed_at: reviewedAt,
+        ai_rejection_reason: null,
+        review_reason: null,
+      })
+      .eq("id", requestId)
+      .eq("status", "pending")
+      .eq("ai_decision", "processing");
+
+    if (manualStateError) {
+      console.error("OSN manual review state save failed:", manualStateError);
+      return res.status(500).json({ success: false, error: "manual_review_state_failed" });
+    }
+
+    const telegramNotified = await sendTelegram(
+      buildTelegramMessage({ request, email, customerCode, deviceType, assessment, outcome, serviceName }),
+      requestId,
+      true,
+      request,
+    );
+
+    if (!telegramNotified) {
+      const { error: releaseError } = await supabase
+        .from("extra_credit_requests")
+        .update({ ai_decision: null, ai_reviewed_at: null })
+        .eq("id", requestId)
+        .eq("status", "pending")
+        .eq("ai_decision", "manual_review")
+        .eq("ai_reviewed_at", reviewedAt);
+      if (releaseError) console.error("OSN manual review retry release failed:", releaseError);
+      return res.status(502).json({ success: false, error: "telegram_notification_failed" });
+    }
+
+    return res.status(200).json({
+      success: true,
+      decision: "manual_review",
+      telegram_notified: true,
+    });
+  }
 
   let assessment;
   if (!geminiApiKey) {

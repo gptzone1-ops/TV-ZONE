@@ -4465,7 +4465,7 @@ function ExtraCreditRequestsPage({
                         </div>
                         <p className="mt-2 text-sm font-bold leading-7 text-zinc-700">{request.ai_analysis}</p>
                         {request.ai_decision === "manual_review" && (
-                          <p className="mt-2 text-xs font-black text-amber-700">أحيل للمراجعة اليدوية بسبب عدم حسم الدليل آلياً.</p>
+                          <p className="mt-2 text-xs font-black text-amber-700">الطلب بانتظار قرار القبول أو الرفض اليدوي.</p>
                         )}
                       </div>
                     ) : null}
@@ -8270,7 +8270,7 @@ function ExtraCreditRequestAction({
     return (
       <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-center text-xs font-black leading-6 text-amber-800">
         {aiDecision === "manual_review"
-          ? "تم فحص طلبك آلياً وإحالته للمراجعة اليدوية لضمان دقة القرار"
+          ? "تم إرسال طلبك إلى المشرف للمراجعة اليدوية، وستتحدث الحالة فور قبول الطلب أو رفضه"
           : "تم تقديم طلبك بنجاح وجارٍ فحصه حالياً"}
       </div>
     );
@@ -8370,6 +8370,9 @@ function ExtraCreditRequestModal({
           latestRequest.status === "approved" ||
           latestRequest.status === "rejected"
         ) {
+          return latestRequest;
+        }
+        if (latestRequest.ai_decision === "manual_review") {
           return latestRequest;
         }
 
