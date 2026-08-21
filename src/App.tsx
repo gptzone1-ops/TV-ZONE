@@ -68,7 +68,7 @@ type Screen = "selector" | "netflix" | "account" | "credit-requests" | "compensa
 type DeviceView = "mobile" | "screen";
 type Toast = { label: string; at: number; tone?: "success" | "error" } | null;
 type StatTone = "neutral" | "green" | "red";
-type AccountTypeFilter = "all" | AccountType;
+type AccountTypeFilter = "all" | "duplicates" | AccountType;
 type SupportIssue = "general" | "unavailable" | "expired";
 type CustomerSearchResult = { link: CustomerLink; account: NetflixAccount };
 type AccountFormResult = boolean | { ok: boolean; error?: string };
@@ -145,7 +145,6 @@ const extraCreditReasonLabels: Record<ExtraCreditReason, string> = {
 };
 const duplicateEmailMessage = "عفواً، هذا البريد الإلكتروني مسجل مسبقاً ولا يمكن تكراره";
 const duplicateEmailSaveMessage = duplicateEmailMessage;
-const duplicateProfileMessage = (profileName: string) => `هذا الملف (${profileName}) مسجل مسبقاً لهذا الحساب`;
 const emptyEmailMessage = "أدخل البريد الإلكتروني أولاً";
 const customerAccountPublicSelect = "*,accounts(id,email,use_automated_code,code_fetch_method,compensation_tutorial_url,verification_code,verification_code_received_at,service_type,account_type,compensation_distribution,osn_subscription_mode,osn_cycle_number,osn_cycle_started_at,osn_cycle_ends_at,expires_at,created_at,email_provider,imap_enabled,normal_client_layout,hide_password_from_client,is_reported_closed,reported_closed_at)";
 const legacyCustomerAccountSelect = "*,accounts(id,email,password,use_automated_code,supplier_code_url,compensation_tutorial_url,verification_code,verification_code_received_at,service_type,account_type,compensation_distribution,expires_at,created_at,email_provider,imap_enabled,normal_client_layout)";
@@ -1117,6 +1116,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
+  const [accountTypeFilter, setAccountTypeFilter] = useState<AccountTypeFilter>("all");
   const [totalAccounts, setTotalAccounts] = useState(0);
   const [toast, setToast] = useState<Toast>(null);
   const loadRequestIdRef = useRef(0);
@@ -1135,7 +1135,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
   useEffect(() => {
     if (!authenticated) return;
     void loadData();
-  }, [authenticated, currentPage, selectedService, debouncedQuery]);
+  }, [authenticated, currentPage, selectedService, debouncedQuery, accountTypeFilter]);
 
   useEffect(() => {
     localStorage.setItem("zone-admin-screen", screen);
@@ -1167,7 +1167,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     return () => {
       void client.removeChannel(channel);
     };
-  }, [authenticated, currentPage, selectedService, debouncedQuery]);
+  }, [authenticated, currentPage, selectedService, debouncedQuery, accountTypeFilter]);
 
   async function loadData() {
     const requestId = ++loadRequestIdRef.current;
@@ -1220,6 +1220,33 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     accountsQuery = selectedService === "netflix"
       ? accountsQuery.or("service_type.eq.netflix,service_type.is.null")
       : accountsQuery.eq("service_type", selectedService);
+
+    if (accountTypeFilter === "duplicates") {
+      const { data: emailRows, error: duplicateLookupError } = await supabase
+        .from("accounts")
+        .select("id,email");
+
+      if (duplicateLookupError) {
+        console.error("Supabase duplicate accounts filter error:", duplicateLookupError);
+        setToast({ label: "تعذر تحميل الإيميلات المكررة", at: Date.now(), tone: "error" });
+        accountsQuery = accountsQuery.in("id", ["00000000-0000-0000-0000-000000000000"]);
+      } else {
+        const emailCounts = new Map<string, number>();
+        (emailRows || []).forEach((account) => {
+          const email = normalizeEmail(account.email);
+          if (email) emailCounts.set(email, (emailCounts.get(email) || 0) + 1);
+        });
+        const duplicateAccountIds = (emailRows || [])
+          .filter((account) => (emailCounts.get(normalizeEmail(account.email)) || 0) > 1)
+          .map((account) => account.id);
+        accountsQuery = accountsQuery.in(
+          "id",
+          duplicateAccountIds.length ? duplicateAccountIds : ["00000000-0000-0000-0000-000000000000"],
+        );
+      }
+    } else if (accountTypeFilter !== "all") {
+      accountsQuery = accountsQuery.eq("account_type", accountTypeFilter);
+    }
 
     if (searchTerm) {
       const accountIds = Array.from(matchingAccountIds);
@@ -1274,21 +1301,19 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     setLoading(false);
   }
 
-  async function emailAlreadyExists(email: string, exceptAccountId?: string, serviceScope?: ServiceType) {
+  async function emailAlreadyExists(email: string, exceptAccountId?: string) {
     const normalized = normalizeEmail(email);
     if (!normalized) return false;
     if (
       accounts.some(
         (account) =>
           account.id !== exceptAccountId &&
-          normalizeEmail(account.email) === normalized &&
-          (!serviceScope || serviceOf(account) === serviceScope),
+          normalizeEmail(account.email) === normalized,
       ) ||
       links.some(
         (link) =>
           link.account_id !== exceptAccountId &&
-          normalizeEmail(link.email || "") === normalized &&
-          (!serviceScope || link.service_type === serviceScope),
+          normalizeEmail(link.email || "") === normalized,
       )
     ) {
       return true;
@@ -1296,18 +1321,14 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
 
     if (!supabase) return false;
 
-    let customerLinksQuery = supabase
+    const customerLinksQuery = supabase
       .from("customer_links")
       .select("id,account_id")
-      .eq("email", normalized);
-    let accountsQuery = supabase
+      .ilike("email", normalized);
+    const accountsQuery = supabase
       .from("accounts")
       .select("id")
-      .eq("email", normalized);
-    if (serviceScope) {
-      customerLinksQuery = customerLinksQuery.eq("service_type", serviceScope);
-      accountsQuery = accountsQuery.eq("service_type", serviceScope);
-    }
+      .ilike("email", normalized);
 
     const [{ data, error }, { data: accountRows, error: accountError }] = await Promise.all([
       customerLinksQuery,
@@ -1324,61 +1345,12 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     return existing.length > 0 || existingAccounts.length > 0;
   }
 
-  async function duplicateProfileForEmail(
-    email: string,
-    profileNames: string[],
-    exceptAccountId?: string,
-    serviceScope?: ServiceType,
-  ) {
-    const normalized = normalizeEmail(email);
-    const uniqueProfiles = Array.from(new Set(profileNames.filter(Boolean)));
-    if (!normalized || !uniqueProfiles.length) return null;
-
-    const localDuplicate = links.find(
-      (link) =>
-        link.account_id !== exceptAccountId &&
-        normalizeEmail(link.email || "") === normalized &&
-        (!serviceScope || link.service_type === serviceScope) &&
-        uniqueProfiles.includes(link.profile_name),
-    );
-    if (localDuplicate) return localDuplicate.profile_name;
-
-    if (!supabase) return null;
-
-    let duplicateQuery = supabase
-      .from("customer_links")
-      .select("id,account_id,profile_name")
-      .eq("email", normalized)
-      .in("profile_name", uniqueProfiles);
-    if (serviceScope) duplicateQuery = duplicateQuery.eq("service_type", serviceScope);
-    const { data, error } = await duplicateQuery;
-
-    if (error) {
-      console.error("Supabase duplicate profile validation error:", error);
-      throw new Error("duplicate_profile_lookup_failed");
-    }
-
-    const existing = (data || []).filter((link) => link.account_id !== exceptAccountId);
-    return existing.length > 0 ? existing[0].profile_name : null;
-  }
-
   async function validateAccountEmailAndProfiles(
     email: string,
-    accountType: AccountType,
-    profileNames: string[],
     exceptAccountId?: string,
-    serviceScope?: ServiceType,
   ): Promise<AccountFormResult> {
-    if (accountType === "private" || accountType === "temporary" || accountType === "compensation") {
-      if (await emailAlreadyExists(email, exceptAccountId, serviceScope)) {
-        return { ok: false, error: duplicateEmailMessage };
-      }
-      return true;
-    }
-
-    const duplicateProfile = await duplicateProfileForEmail(email, profileNames, exceptAccountId, serviceScope);
-    if (duplicateProfile) {
-      return { ok: false, error: duplicateProfileMessage(duplicateProfile) };
+    if (await emailAlreadyExists(email, exceptAccountId)) {
+      return { ok: false, error: duplicateEmailMessage };
     }
     return true;
   }
@@ -1560,10 +1532,6 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     try {
       const validation = await validateAccountEmailAndProfiles(
         normalizedEmail,
-        form.account_type,
-        slots.map((slot) => slot.profile_name),
-        undefined,
-        selectedService === "osn" ? "osn" : undefined,
       );
       if (!accountFormSucceeded(validation)) {
         const error = accountFormError(validation) || duplicateEmailMessage;
@@ -1824,27 +1792,19 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       currentAccount?.email || normalizedEmail,
       normalizedEmail,
     );
-    const currentProfileNames = links
-      .filter((link) => link.account_id === accountId)
-      .map((link) => link.profile_name);
-
     if (!normalizedEmail) {
       setToast({ label: emptyEmailMessage, at: Date.now(), tone: "error" });
       return { ok: false, error: emptyEmailMessage };
     }
 
     try {
-      const validation = await validateAccountEmailAndProfiles(
-        normalizedEmail,
-        currentAccount?.account_type || "private",
-        currentProfileNames,
-        accountId,
-        serviceOf(currentAccount) === "osn" ? "osn" : undefined,
-      );
-      if (!accountFormSucceeded(validation)) {
-        const error = accountFormError(validation) || duplicateEmailMessage;
-        setToast({ label: error, at: Date.now(), tone: "error" });
-        return { ok: false, error };
+      if (normalizedEmail !== normalizeEmail(currentAccount?.email || "")) {
+        const validation = await validateAccountEmailAndProfiles(normalizedEmail, accountId);
+        if (!accountFormSucceeded(validation)) {
+          const error = accountFormError(validation) || duplicateEmailMessage;
+          setToast({ label: error, at: Date.now(), tone: "error" });
+          return { ok: false, error };
+        }
       }
     } catch {
       setToast({ label: "تعذر التحقق من البريد الإلكتروني، حاول مرة أخرى", at: Date.now(), tone: "error" });
@@ -2613,6 +2573,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
         currentPage={currentPage}
         totalPages={totalPages}
         totalAccounts={totalAccounts}
+        accountTypeFilter={accountTypeFilter}
         query={query}
         customerSearchResult={customerSearchResult}
         stats={[
@@ -2629,6 +2590,10 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
         }}
         onQuery={(value) => {
           setQuery(value);
+          setCurrentPage(1);
+        }}
+        onAccountTypeFilter={(value) => {
+          setAccountTypeFilter(value);
           setCurrentPage(1);
         }}
         onPreviousPage={() => setCurrentPage((page) => Math.max(1, page - 1))}
@@ -2819,7 +2784,9 @@ function Dashboard({
   currentPage,
   totalPages,
   totalAccounts,
+  accountTypeFilter,
   onQuery,
+  onAccountTypeFilter,
   onPreviousPage,
   onNextPage,
   onAdd,
@@ -2848,7 +2815,9 @@ function Dashboard({
   currentPage: number;
   totalPages: number;
   totalAccounts: number;
+  accountTypeFilter: AccountTypeFilter;
   onQuery: (query: string) => void;
+  onAccountTypeFilter: (filter: AccountTypeFilter) => void;
   onPreviousPage: () => void;
   onNextPage: () => void;
   onAdd: Parameters<typeof AccountForm>[0]["onAdd"];
@@ -2875,7 +2844,6 @@ function Dashboard({
   const [formOpen, setFormOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState<NetflixAccount | null>(null);
   const [filterOpen, setFilterOpen] = useState(false);
-  const [accountTypeFilter, setAccountTypeFilter] = useState<AccountTypeFilter>("all");
   const [editingCustomerBalance, setEditingCustomerBalance] = useState<CustomerLink | null>(null);
   const [, setCycleClock] = useState(Date.now());
 
@@ -2890,9 +2858,8 @@ function Dashboard({
   };
 
   const visibleAccounts = useMemo(() => {
-    if (accountTypeFilter === "all") return accounts;
-    return accounts.filter((account) => account.account_type === accountTypeFilter);
-  }, [accounts, accountTypeFilter]);
+    return accounts;
+  }, [accounts]);
 
   useEffect(() => {
     const onPointerDown = (event: MouseEvent) => {
@@ -2918,6 +2885,8 @@ function Dashboard({
           ? "مؤقت"
           : accountTypeFilter === "compensation"
             ? "التعويضات"
+            : accountTypeFilter === "duplicates"
+              ? "إيميلات مكررة"
             : "فلترة";
 
   return (
@@ -3001,14 +2970,15 @@ function Dashboard({
                     { key: "shared", label: "مشترك" },
                     { key: "temporary", label: "حساب مؤقت" },
                     { key: "compensation", label: "التعويضات" },
+                    { key: "duplicates", label: "إيميلات مكررة" },
                   ]
-                    .filter((option) => service !== "osn" || ["all", "private", "shared"].includes(option.key))
+                    .filter((option) => service !== "osn" || ["all", "private", "shared", "duplicates"].includes(option.key))
                     .map((option) => (
                     <button
                       key={option.key}
                       type="button"
                       onClick={() => {
-                        setAccountTypeFilter(option.key as AccountTypeFilter);
+                        onAccountTypeFilter(option.key as AccountTypeFilter);
                         setFilterOpen(false);
                       }}
                       className={cn(
