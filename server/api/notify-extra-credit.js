@@ -77,10 +77,6 @@ async function healthCheck(res) {
   });
 }
 
-function escapeMarkdown(value) {
-  return String(value ?? "غير متوفر").replace(/([\\_*\[\]()`])/g, "\\$1");
-}
-
 function customerDeviceLabel(selectedDevice) {
   if (selectedDevice === "screen") return "شاشة / سوني";
   if (selectedDevice === "mobile") return "جوال / آيباد / بي سي / لابتوب";
@@ -159,7 +155,7 @@ function detailedRejectionReason(assessment, fallback) {
   return diagnosticReason.length >= 12 ? diagnosticReason : fallback;
 }
 
-function determineDecision(request, assessment) {
+function determineDecision(request, assessment, serviceName = "Netflix") {
   const isReplacement = request.reason_type === replacementReason;
   const issueShown =
     assessment.showsNetflixLoginError ||
@@ -220,7 +216,7 @@ function determineDecision(request, assessment) {
       decision: "auto_approved",
       reason: issueShown
         ? "المرفق يوضح صعوبة مرتبطة بتسجيل الدخول أو ظهور الكود أو فتح الاشتراك."
-        : "تم قبول الطلب بناءً على سياق العميل والمرفق المرتبط بعملية الدخول إلى Netflix، ولا يُشترط ظهور رسالة خطأ صريحة.",
+        : `تم قبول الطلب بناءً على سياق العميل والمرفق المرتبط بعملية الدخول إلى ${serviceName}، ولا يُشترط ظهور رسالة خطأ صريحة.`,
     };
   }
 
@@ -228,7 +224,7 @@ function determineDecision(request, assessment) {
     decision: "auto_rejected",
     reason: detailedRejectionReason(
       assessment,
-      "الوصف غير مفهوم والمرفق لا يبدو مرتبطاً بخدمة Netflix أو بعملية تسجيل الدخول.",
+      `الوصف غير مفهوم والمرفق لا يبدو مرتبطاً بخدمة ${serviceName} أو بعملية تسجيل الدخول.`,
     ),
   };
 }
@@ -256,8 +252,8 @@ function buildFailSafeAssessment(request, error) {
   };
 }
 
-function buildPrompt(request, customer, email) {
-  return `أنت مدقق أدلة لخدمة اشتراكات Netflix. افحص المرفق والوصف وفق سياسة المتجر فقط.
+function buildPrompt(request, customer, email, serviceName) {
+  return `أنت مدقق أدلة لخدمة اشتراكات ${serviceName}. افحص المرفق والوصف وفق سياسة المتجر فقط.
 
 بيانات الطلب الموثوقة من النظام:
 - نوع السبب: ${request.reason_type}
@@ -270,7 +266,8 @@ function buildPrompt(request, customer, email) {
 
 سياسة التقييم:
 1. كن متعاطفاً ومساعداً، وافترض حسن نية العميل في الطلبات العامة. الهدف تسهيل استعادة المحاولة لا البحث عن سبب للرفض.
-2. في طلبات الكود الخاطئ، انتهاء صلاحية الكود، ضياع الكود، عدم معرفة الخطوات، أو صعوبة تسجيل الدخول: لا تشترط ظهور رسالة Error صريحة. اعتبر صفحة تسجيل Netflix أو شاشة الدخول أو الحساب أو أي مرفق مرتبط بالسياق دليلاً مقبولاً.
+   ملاحظة: حقول JSON التي يبدأ اسمها بـ showsNetflix تشمل خدمة ${serviceName} الحالية أيضاً؛ قيّمها وفق شاشة الخدمة الحالية ولا تتقيد بالاسم التقني للحقل.
+2. في طلبات الكود الخاطئ، انتهاء صلاحية الكود، ضياع الكود، عدم معرفة الخطوات، أو صعوبة تسجيل الدخول: لا تشترط ظهور رسالة Error صريحة. اعتبر صفحة تسجيل ${serviceName} أو شاشة الدخول أو الحساب أو أي مرفق مرتبط بالسياق دليلاً مقبولاً.
 3. إذا كان وصف العميل مفهوماً ويشير إلى أنه استنفد الكود أو لم يتمكن من التفعيل، فاقبل الطلب ما لم يوجد تناقض واضح جداً. اضبط descriptionMeaningful وattachmentRelevant بما يعكس هذه المرونة.
 4. الرفض الصارم يقتصر على سبب "استبدال الجهاز أو الدخول بجهاز آخر": لا يقبل إلا فيديو واضح وشامل يوضح عملية Sign Out من الجهاز الأول، مع ظهور البريد الإلكتروني أو اسم الملف A/B/C/D/E.
 5. في الطلبات العامة لا ترفض إلا إذا كان الوصف عشوائياً أو غير مفهوم والمرفق واضحاً أنه غير متعلق بالخدمة، مثل صورة شخصية أو منتج آخر أو صورة فارغة بالكامل.
@@ -279,7 +276,7 @@ function buildPrompt(request, customer, email) {
 8. أمثلة لصياغة السبب بحسب ما يظهر فعلياً:
    - صورة ضبابية أو مجتزأة: "الصورة غير واضحة أو مجتزأة، يرجى التقاط صورة كاملة للشاشة تُظهر رسالة الخطأ."
    - قائمة رئيسية بدلاً من إثبات الخروج: "المرفق يظهر القائمة الرئيسية ولا يُظهر صفحة الحساب أو تنفيذ تسجيل الخروج من الجهاز القديم."
-   - جهاز أو تطبيق غير مطابق: "المرفق لا يوضح جهاز Netflix أو التطبيق المطلوب ولا يظهر المشكلة المذكورة في الطلب."
+   - جهاز أو تطبيق غير مطابق: "المرفق لا يوضح تطبيق ${serviceName} المطلوب ولا يظهر المشكلة المذكورة في الطلب."
    استخدم هذه الأمثلة كأسلوب فقط، ولا تنسخها إلا إذا كانت مطابقة فعلاً للمرفق.
 
 أعد تقييماً واقعياً ودقيقاً. لا تفترض تفاصيل غير ظاهرة في المرفق.`;
@@ -370,6 +367,8 @@ async function analyzeAttachment(supabase, request, customer, email) {
   if (downloadError || !mediaBlob) throw downloadError || new Error("attachment_download_failed");
 
   const mimeType = normalizeMimeType(mediaBlob.type, request.attachment_type);
+  const relatedAccount = Array.isArray(customer?.accounts) ? customer.accounts[0] : customer?.accounts;
+  const serviceName = relatedAccount?.service_type === "osn" ? "OSN" : "Netflix";
   let geminiFile = null;
   try {
     let mediaPart;
@@ -397,7 +396,7 @@ async function analyzeAttachment(supabase, request, customer, email) {
               role: "user",
               parts: [
                 mediaPart,
-                { text: buildPrompt(request, customer, email) },
+                { text: buildPrompt(request, customer, email, serviceName) },
               ],
             },
           ],
@@ -507,9 +506,33 @@ function fitTelegramCaption(messageText) {
 function buildAttachmentFallback(messageText, request) {
   const mediaUrl = String(request?.image_url || "").trim();
   if (!mediaUrl) return messageText;
-  const safeUrl = mediaUrl.replace(/([()])/g, "\\$1");
   const label = request?.attachment_type === "video" ? "🎥 عرض الفيديو المرفق" : "🖼️ عرض المرفق";
-  return `${messageText}\n\n[${label}](${safeUrl})`;
+  return `${messageText}\n\n${label}: ${mediaUrl}`;
+}
+
+async function postTelegram(method, payload) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const response = await fetch(
+        `https://api.telegram.org/bot${telegramBotToken}/${method}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(8_000),
+        },
+      );
+      const result = await response.json().catch(() => null);
+      if (response.ok && result?.ok === true) return true;
+      lastError = new Error(`telegram_${method}_failed:${response.status}:${JSON.stringify(result).slice(0, 400)}`);
+    } catch (error) {
+      lastError = error;
+    }
+    if (attempt < 3) await sleep(500 * attempt);
+  }
+  console.error(`Telegram ${method} failed after retries:`, lastError);
+  return false;
 }
 
 async function sendTelegram(messageText, requestId, withActions, request) {
@@ -526,54 +549,28 @@ async function sendTelegram(messageText, requestId, withActions, request) {
       const isVideo = request?.attachment_type === "video";
       const mediaMethod = isVideo ? "sendVideo" : "sendPhoto";
       const mediaField = isVideo ? "video" : "photo";
-      const mediaResponse = await fetch(
-        `https://api.telegram.org/bot${telegramBotToken}/${mediaMethod}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            chat_id: telegramChatId,
-            [mediaField]: mediaUrl,
-            caption: fitTelegramCaption(messageText),
-            parse_mode: "Markdown",
-            ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
-          }),
-        },
-      );
-
-      if (mediaResponse.ok) return true;
-      console.error(
-        "Telegram media notification failed; falling back to text:",
-        mediaResponse.status,
-        await mediaResponse.text(),
-      );
+      const mediaSent = await postTelegram(mediaMethod, {
+        chat_id: telegramChatId,
+        [mediaField]: mediaUrl,
+        caption: fitTelegramCaption(messageText),
+        ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+      });
+      if (mediaSent) return true;
+      console.error("Telegram media notification failed; falling back to plain text");
     }
 
-    const response = await fetch(
-      `https://api.telegram.org/bot${telegramBotToken}/sendMessage`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: telegramChatId,
-          text: buildAttachmentFallback(messageText, request),
-          parse_mode: "Markdown",
-          ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
-        }),
-      },
-    );
-    if (!response.ok) {
-      console.error("Telegram notification failed:", response.status, await response.text());
-      return false;
-    }
-    return true;
+    return postTelegram("sendMessage", {
+      chat_id: telegramChatId,
+      text: buildAttachmentFallback(messageText, request),
+      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+    });
   } catch (error) {
     console.error("Telegram notification request failed:", error);
     return false;
   }
 }
 
-function buildTelegramMessage({ request, email, customerCode, deviceType, assessment, outcome }) {
+function buildTelegramMessage({ request, email, customerCode, deviceType, assessment, outcome, serviceName }) {
   const linkedCustomer = Array.isArray(request.customer_links)
     ? request.customer_links[0]
     : request.customer_links;
@@ -583,25 +580,25 @@ function buildTelegramMessage({ request, email, customerCode, deviceType, assess
   const confidence = Math.round((assessment?.confidence || 0) * 100);
   const heading =
     outcome.decision === "auto_approved"
-      ? "🤖✅ *تم قبول طلب رصيد تلقائياً عبر Gemini*"
+      ? "🤖✅ تم قبول طلب الرصيد تلقائياً عبر Gemini"
       : outcome.decision === "auto_rejected"
-        ? "🤖❌ *تم رفض طلب رصيد تلقائياً عبر Gemini*"
-        : "🤖🟡 *طلب رصيد يحتاج مراجعة يدوية*";
+        ? "🤖❌ تم رفض طلب الرصيد تلقائياً عبر Gemini"
+        : "🤖🟡 طلب رصيد يحتاج مراجعة يدوية";
 
   return [
     heading,
     "-----------------------------",
-    "🎬 *نوع الخدمة:* نتفليكس",
-    `📧 *البريد الإلكتروني:* ${escapeMarkdown(email)}`,
-    `🆔 *رقم العميل:* ${escapeMarkdown(customerCode)}`,
-    `👤 *اسم البروفايل:* ${escapeMarkdown(profileName)}`,
-    `📱 *نوع الجهاز:* ${escapeMarkdown(deviceType)}`,
-    `❓ *سبب المشكلة:* ${escapeMarkdown(request.reason_type)}`,
-    `📝 *وصف العميل:* ${escapeMarkdown(request.description)}`,
-    `🔗 *رابط العميل:* ${escapeMarkdown(customerUrl)}`,
-    `🧠 *تحليل Gemini:* ${escapeMarkdown(assessment?.summary || outcome.reason)}`,
-    `📊 *درجة الثقة:* ${confidence}%`,
-    `⚖️ *سبب القرار:* ${escapeMarkdown(outcome.reason)}`,
+    `🎬 نوع الخدمة: ${serviceName}`,
+    `📧 البريد الإلكتروني: ${email}`,
+    `🆔 رقم العميل: ${customerCode}`,
+    `👤 اسم البروفايل: ${profileName}`,
+    `📱 نوع الجهاز: ${deviceType}`,
+    `❓ سبب المشكلة: ${request.reason_type}`,
+    `📝 وصف العميل: ${request.description}`,
+    `🔗 رابط العميل: ${customerUrl}`,
+    `🧠 تحليل Gemini: ${assessment?.summary || outcome.reason}`,
+    `📊 درجة الثقة: ${confidence}%`,
+    `⚖️ سبب القرار: ${outcome.reason}`,
   ]
     .filter(Boolean)
     .join("\n");
@@ -631,7 +628,7 @@ export default async function handler(req, res) {
   const { data: request, error: requestError } = await supabase
     .from("extra_credit_requests")
     .select(
-      "id,customer_id,reason_type,description,image_url,attachment_type,status,ai_decision,ai_reviewed_at,customer_links(id,email,link_number,short_id,uuid,selected_device,profile_name,profile_label,accounts(email))",
+      "id,customer_id,reason_type,description,image_url,attachment_type,status,ai_decision,ai_reviewed_at,customer_links(id,email,link_number,short_id,uuid,selected_device,profile_name,profile_label,accounts(email,service_type))",
     )
     .eq("id", requestId)
     .eq("status", "pending")
@@ -684,6 +681,7 @@ export default async function handler(req, res) {
     ? customer.accounts[0]
     : customer?.accounts;
   const email = relatedAccount?.email || customer?.email || "غير متوفر";
+  const serviceName = relatedAccount?.service_type === "osn" ? "OSN" : "نتفليكس";
   const customerCode = customer?.link_number || customer?.short_id || customer?.id || "غير متوفر";
   const deviceType = customerDeviceLabel(customer?.selected_device);
 
@@ -700,7 +698,7 @@ export default async function handler(req, res) {
     }
   }
 
-  const outcome = determineDecision(request, assessment);
+  const outcome = determineDecision(request, assessment, serviceName);
 
   const storageObject = parseStorageObject(request.image_url);
 
@@ -745,8 +743,8 @@ export default async function handler(req, res) {
     console.error("Automatic extra credit metadata save failed:", metadataError);
   }
 
-  await sendTelegram(
-    buildTelegramMessage({ request, email, customerCode, deviceType, assessment, outcome }),
+  const telegramNotified = await sendTelegram(
+    buildTelegramMessage({ request, email, customerCode, deviceType, assessment, outcome, serviceName }),
     requestId,
     false,
     request,
@@ -761,5 +759,9 @@ export default async function handler(req, res) {
     }
   }
 
-  return res.status(200).json({ success: true, decision: outcome.decision });
+  return res.status(200).json({
+    success: true,
+    decision: outcome.decision,
+    telegram_notified: telegramNotified,
+  });
 }

@@ -159,6 +159,36 @@ export default async function handler(req, res) {
     }
     if (account) {
       const receivedAt = new Date().toISOString();
+      const osnSourceKey = `${String(body.source_key || `${matchedAccountEmail}:${receivedAt}`).trim()}:osn-code`;
+      const { data: existingMessage, error: duplicateLookupError } = await supabase
+        .from("verification_messages")
+        .select("id")
+        .eq("source_key", osnSourceKey)
+        .maybeSingle();
+
+      if (duplicateLookupError) {
+        console.error("OSN OTP duplicate lookup failed:", duplicateLookupError);
+        return send(res, 500, { success: false, error: "osn_code_save_failed" });
+      }
+
+      if (!existingMessage) {
+        const { error: messageSaveError } = await supabase
+          .from("verification_messages")
+          .insert({
+            email: matchedAccountEmail,
+            message_type: "code",
+            code,
+            received_at: receivedAt,
+            is_used: false,
+            source_key: osnSourceKey,
+          });
+
+        if (messageSaveError && messageSaveError.code !== "23505") {
+          console.error("OSN OTP message save failed:", messageSaveError);
+          return send(res, 500, { success: false, error: "osn_code_save_failed" });
+        }
+      }
+
       const { error: saveError } = await supabase
         .from("osn_codes")
         .upsert({ email: matchedAccountEmail, code, updated_at: receivedAt }, { onConflict: "email" });

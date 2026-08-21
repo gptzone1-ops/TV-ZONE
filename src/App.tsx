@@ -5932,7 +5932,7 @@ function CustomerView({
   const [externalCodeSubmitting, setExternalCodeSubmitting] = useState(false);
   const [externalCodeError, setExternalCodeError] = useState<string | null>(null);
   const [activeTutorial, setActiveTutorial] = useState<{ title: string; url: string } | null>(null);
-  const [osnOtpState, setOsnOtpState] = useState<"idle" | "searching" | "ready" | "failed">("idle");
+  const [osnOtpState, setOsnOtpState] = useState<"idle" | "searching" | "ready" | "failed" | "exhausted">("idle");
   const [osnOtpCode, setOsnOtpCode] = useState<string | null>(null);
   const [osnOtpDeadlineAt, setOsnOtpDeadlineAt] = useState<number | null>(null);
   const [osnOtpError, setOsnOtpError] = useState<string | null>(null);
@@ -6810,7 +6810,18 @@ function CustomerView({
 
     if (request && (request.status === "approved" || request.status === "rejected") && link?.id) {
       const refreshedLink = await loadCustomerLinkRecord("id", link.id);
-      if (refreshedLink) setLink(refreshedLink);
+      if (refreshedLink) {
+        setLink(refreshedLink);
+        const refreshedLimit = Math.max(0, refreshedLink.code_request_limit ?? 1);
+        const refreshedUsed = Math.max(0, refreshedLink.code_requested_count ?? 0);
+        if (request.status === "approved" && usesOsnAutoOtp && refreshedUsed < refreshedLimit) {
+          osnOtpSearchSequenceRef.current += 1;
+          setOsnOtpState("idle");
+          setOsnOtpCode(null);
+          setOsnOtpError(null);
+          setOsnOtpDeadlineAt(null);
+        }
+      }
     }
 
     return request;
@@ -7028,7 +7039,7 @@ function CustomerView({
   }
 
   async function startOsnOtpSearch() {
-    if (!link?.id || !usesOsnAutoOtp || osnOtpState === "searching") return;
+    if (!link?.id || !usesOsnAutoOtp || !hasCodeRequestCredit || osnOtpState === "searching") return;
 
     const searchSequence = osnOtpSearchSequenceRef.current + 1;
     osnOtpSearchSequenceRef.current = searchSequence;
@@ -7039,11 +7050,11 @@ function CustomerView({
     setOsnOtpDeadlineAt(deadline);
 
     try {
-      while (osnOtpSearchSequenceRef.current === searchSequence && Date.now() < deadline) {
+      async function fetchOtpPhase(phase: "fresh" | "fallback") {
         const response = await fetch("/api/fetch-osn-code", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ link_id: link.id }),
+          body: JSON.stringify({ link_id: link.id, phase }),
           cache: "no-store",
         });
         const payload = await response.json().catch(() => null) as {
@@ -7051,15 +7062,36 @@ function CustomerView({
           pending?: boolean;
           code?: string;
           error?: string;
+          credit_remaining?: number;
         } | null;
+        return { response, payload };
+      }
+
+      function acceptOtp(payload: { code?: string } | null) {
+        const code = String(payload?.code || "").replace(/\s+/g, "");
+        if (!/^\d{4}$/.test(code)) return false;
+
+        setOsnOtpCode(code);
+        setOsnOtpState("ready");
+        setOsnOtpDeadlineAt(null);
+        setLink((current) => current
+          ? { ...current, code_requested_count: Math.max(0, current.code_request_limit ?? 1) }
+          : current);
+        setToast({ label: "تم العثور على كود OSN بنجاح وتم استهلاك المحاولة", at: Date.now() });
+        return true;
+      }
+
+      while (osnOtpSearchSequenceRef.current === searchSequence && Date.now() < deadline) {
+        const { response, payload } = await fetchOtpPhase("fresh");
 
         if (osnOtpSearchSequenceRef.current !== searchSequence) return;
-        const code = String(payload?.code || "").replace(/\s+/g, "");
-        if (response.ok && payload?.success && /^\d{4}$/.test(code)) {
-          setOsnOtpCode(code);
-          setOsnOtpState("ready");
+        if (response.ok && payload?.success && acceptOtp(payload)) return;
+        if (response.status === 409 || payload?.error === "osn_otp_credit_exhausted") {
+          setOsnOtpState("exhausted");
           setOsnOtpDeadlineAt(null);
-          setToast({ label: "تم العثور على كود OSN بنجاح", at: Date.now() });
+          setLink((current) => current
+            ? { ...current, code_requested_count: Math.max(0, current.code_request_limit ?? 1) }
+            : current);
           return;
         }
         if (!response.ok || payload?.pending !== true) {
@@ -7073,8 +7105,22 @@ function CustomerView({
       }
 
       if (osnOtpSearchSequenceRef.current === searchSequence) {
+        const { response, payload } = await fetchOtpPhase("fallback");
+        if (osnOtpSearchSequenceRef.current !== searchSequence) return;
+        if (response.ok && payload?.success && acceptOtp(payload)) return;
+        if (response.status === 409 || payload?.error === "osn_otp_credit_exhausted") {
+          setOsnOtpState("exhausted");
+          setLink((current) => current
+            ? { ...current, code_requested_count: Math.max(0, current.code_request_limit ?? 1) }
+            : current);
+          return;
+        }
+        if (!response.ok || payload?.pending !== true) {
+          throw new Error(payload?.error || "osn_otp_fallback_failed");
+        }
+
         setOsnOtpState("failed");
-        setOsnOtpError("لم يصل الرمز بعد، يرجى طلب الكود أولاً من داخل تطبيق OSN ثم الضغط على إعادة المحاولة");
+        setOsnOtpError("لم يصل رمز حديث خلال آخر 5 دقائق. اطلب الكود من تطبيق OSN ثم اضغط على إعادة المحاولة.");
       }
     } catch (error) {
       console.error("OSN OTP search failed:", error);
@@ -7259,6 +7305,35 @@ function CustomerView({
                             <Copy className="h-4 w-4" />
                             نسخ الكود
                           </button>
+                          <p className="mt-4 rounded-xl bg-amber-50 px-3 py-2 text-xs font-black leading-6 text-amber-800">
+                            تم استهلاك محاولة جلب الكود لهذا الرابط. تحتاج إلى رصيد جديد لطلب كود آخر.
+                          </p>
+                          <ExtraCreditRequestAction
+                            status={extraCreditRequest?.status}
+                            aiDecision={extraCreditRequest?.ai_decision}
+                            rejectionReason={extraCreditRequest?.ai_rejection_reason || extraCreditRequest?.review_reason}
+                            onOpen={() => setShowExtraCreditModal(true)}
+                            label="طلب رصيد كود جديد"
+                            allowAfterApproval
+                          />
+                        </div>
+                      ) : osnOtpState === "exhausted" || !hasCodeRequestCredit ? (
+                        <div className="mt-5 rounded-2xl border border-zinc-200 bg-white p-5 text-center shadow-sm">
+                          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-zinc-100 text-zinc-500">
+                            <LockKeyhole className="h-6 w-6" />
+                          </div>
+                          <p className="mt-3 text-sm font-black text-zinc-800">تم استهلاك رصيد جلب الكود</p>
+                          <p className="mt-2 text-xs font-bold leading-6 text-zinc-500">
+                            لا يمكن بدء بحث جديد قبل الموافقة على طلب رصيد إضافي.
+                          </p>
+                          <ExtraCreditRequestAction
+                            status={extraCreditRequest?.status}
+                            aiDecision={extraCreditRequest?.ai_decision}
+                            rejectionReason={extraCreditRequest?.ai_rejection_reason || extraCreditRequest?.review_reason}
+                            onOpen={() => setShowExtraCreditModal(true)}
+                            label="طلب رصيد كود جديد"
+                            allowAfterApproval
+                          />
                         </div>
                       ) : (
                         <>
