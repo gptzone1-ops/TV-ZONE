@@ -39,7 +39,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   LEGACY_PROFILE_CODES,
   FORMER_PROFILE_CODES,
@@ -72,6 +72,12 @@ type AccountTypeFilter = "all" | "duplicates" | AccountType;
 type SupportIssue = "general" | "unavailable" | "expired";
 type CustomerSearchResult = { link: CustomerLink; account: NetflixAccount };
 type AccountFormResult = boolean | { ok: boolean; error?: string };
+type AdminAccountsCacheEntry = {
+  accounts: NetflixAccount[];
+  links: CustomerLink[];
+  totalAccounts: number;
+  cachedAt: number;
+};
 type AccountCreateForm = {
   email: string;
   password: string;
@@ -130,7 +136,8 @@ const tvApprovalFallbackWindowMs = 15 * 60 * 1000;
 const tvApprovalSearchDurationMs = 15 * 1000;
 const externalCodeAccessDurationMs = 30 * 60 * 1000;
 const osnMonthlyAutoOtpLaunchAtMs = Date.parse("2026-08-21T03:21:29.272Z");
-const adminAccountsPageSize = 10;
+const adminAccountsPageSize = 30;
+const adminAccountsCacheTtlMs = 5 * 60 * 1000;
 const extraCreditReasons: ExtraCreditReason[] = [
   "كود خاطئ",
   "استبدال الجهاز أو الدخول بجهاز آخر",
@@ -1111,6 +1118,8 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
   const [accounts, setAccounts] = useState<NetflixAccount[]>([]);
   const [links, setLinks] = useState<CustomerLink[]>([]);
   const [extraCreditRequests, setExtraCreditRequests] = useState<ExtraCreditRequest[]>([]);
+  const [pendingCreditRequests, setPendingCreditRequests] = useState(0);
+  const [creditRequestsLoading, setCreditRequestsLoading] = useState(false);
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
@@ -1120,6 +1129,9 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
   const [totalAccounts, setTotalAccounts] = useState(0);
   const [toast, setToast] = useState<Toast>(null);
   const loadRequestIdRef = useRef(0);
+  const creditRequestsLoadIdRef = useRef(0);
+  const adminAccountsCacheRef = useRef(new Map<string, AdminAccountsCacheEntry>());
+  const realtimeAccountsRefreshRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!toast) return;
@@ -1128,7 +1140,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
   }, [toast]);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedQuery(query.trim()), 300);
+    const timer = window.setTimeout(() => setDebouncedQuery(query.trim()), 250);
     return () => window.clearTimeout(timer);
   }, [query]);
 
@@ -1136,6 +1148,16 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     if (!authenticated) return;
     void loadData();
   }, [authenticated, currentPage, selectedService, debouncedQuery, accountTypeFilter]);
+
+  useEffect(() => {
+    if (!authenticated) return;
+    void loadPendingCreditRequestCount();
+  }, [authenticated]);
+
+  useEffect(() => {
+    if (!authenticated || screen !== "credit-requests") return;
+    void loadExtraCreditRequests();
+  }, [authenticated, screen]);
 
   useEffect(() => {
     localStorage.setItem("zone-admin-screen", screen);
@@ -1157,33 +1179,104 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     if (!supabase) return;
     const client = supabase;
 
+    const refreshAccounts = () => {
+      adminAccountsCacheRef.current.clear();
+      if (realtimeAccountsRefreshRef.current) window.clearTimeout(realtimeAccountsRefreshRef.current);
+      realtimeAccountsRefreshRef.current = window.setTimeout(() => {
+        realtimeAccountsRefreshRef.current = null;
+        void loadData(true);
+      }, 180);
+    };
+    const refreshCreditRequests = () => {
+      void loadPendingCreditRequestCount();
+      if (screen === "credit-requests") void loadExtraCreditRequests();
+    };
+
     const channel = client
       .channel("zone-store-dashboard")
-      .on("postgres_changes", { event: "*", schema: "public", table: "accounts" }, () => void loadData())
-      .on("postgres_changes", { event: "*", schema: "public", table: "customer_links" }, () => void loadData())
-      .on("postgres_changes", { event: "*", schema: "public", table: "extra_credit_requests" }, () => void loadData())
+      .on("postgres_changes", { event: "*", schema: "public", table: "accounts" }, refreshAccounts)
+      .on("postgres_changes", { event: "*", schema: "public", table: "customer_links" }, refreshAccounts)
+      .on("postgres_changes", { event: "*", schema: "public", table: "extra_credit_requests" }, refreshCreditRequests)
       .subscribe();
 
     return () => {
+      if (realtimeAccountsRefreshRef.current) {
+        window.clearTimeout(realtimeAccountsRefreshRef.current);
+        realtimeAccountsRefreshRef.current = null;
+      }
       void client.removeChannel(channel);
     };
-  }, [authenticated, currentPage, selectedService, debouncedQuery, accountTypeFilter]);
+  }, [authenticated, currentPage, selectedService, debouncedQuery, accountTypeFilter, screen]);
 
-  async function loadData() {
+  async function loadPendingCreditRequestCount() {
+    if (!supabase) {
+      setPendingCreditRequests(0);
+      return;
+    }
+
+    const { count, error } = await supabase
+      .from("extra_credit_requests")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "pending");
+
+    if (error) {
+      console.error("Supabase pending credit request count error:", error);
+      return;
+    }
+    setPendingCreditRequests(count || 0);
+  }
+
+  async function loadExtraCreditRequests() {
+    const requestId = ++creditRequestsLoadIdRef.current;
+    if (!supabase) {
+      setExtraCreditRequests([]);
+      setCreditRequestsLoading(false);
+      return;
+    }
+
+    setCreditRequestsLoading(true);
+    const { data, error } = await supabase
+      .from("extra_credit_requests")
+      .select("*,customer_links(*,accounts(*))")
+      .eq("status", "pending")
+      .order("created_at", { ascending: false });
+
+    if (requestId !== creditRequestsLoadIdRef.current) return;
+    if (error) {
+      console.error("Supabase extra credit requests load error:", error);
+      setExtraCreditRequests([]);
+    } else {
+      const requests = (data || []) as unknown as ExtraCreditRequest[];
+      setExtraCreditRequests(requests);
+      setPendingCreditRequests(requests.length);
+    }
+    setCreditRequestsLoading(false);
+  }
+
+  async function loadData(force = false) {
     const requestId = ++loadRequestIdRef.current;
     if (!supabase) {
       setAccounts([demoAccount]);
       setLinks(demoLinks);
-      setExtraCreditRequests([]);
       setTotalAccounts(1);
       return;
     }
 
-    setLoading(true);
     const from = (currentPage - 1) * adminAccountsPageSize;
     const to = currentPage * adminAccountsPageSize - 1;
     const rawSearchTerm = debouncedQuery.replace(/^#/, "").trim();
     const searchTerm = rawSearchTerm.replace(/[,()*]/g, " ").trim();
+    const cacheKey = [selectedService, accountTypeFilter, currentPage, searchTerm.toLowerCase()].join("|");
+    const cached = adminAccountsCacheRef.current.get(cacheKey);
+    if (!force && cached && Date.now() - cached.cachedAt < adminAccountsCacheTtlMs) {
+      setAccounts(cached.accounts);
+      setLinks(cached.links);
+      setTotalAccounts(cached.totalAccounts);
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
     const matchingAccountIds = new Set<string>();
 
     if (searchTerm) {
@@ -1255,50 +1348,60 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
         : accountsQuery.ilike("email", `%${searchTerm}%`);
     }
 
-    const [
-      { data: accountsData, error: accountsError, count: accountsCount },
-      { data: creditRequestsData, error: creditRequestsError },
-    ] = await Promise.all([
-      accountsQuery
-        .order("created_at", { ascending: false })
-        .range(from, to),
-      supabase
-        .from("extra_credit_requests")
-        .select("*,customer_links(*,accounts(*))")
-        .order("created_at", { ascending: false }),
-    ]);
+    const { data: accountsData, error: accountsError, count: accountsCount } = await accountsQuery
+      .order("created_at", { ascending: false })
+      .range(from, to);
 
-    const pageAccountIds = (accountsData || []).map((account) => account.id);
-    const { data: linksData, error: linksError } = pageAccountIds.length
-      ? await supabase
-          .from("customer_links")
-          .select("*")
-          .in("account_id", pageAccountIds)
-          .order("account_id", { ascending: true })
-          .order("profile_name", { ascending: true })
-      : { data: [] as CustomerLink[], error: null };
-
-    // Realtime events can start overlapping loads. Only the newest response may
-    // replace the dashboard state, so an older request cannot restore a partial view.
     if (requestId !== loadRequestIdRef.current) return;
 
-    if (accountsError || linksError) {
+    const pageAccountIds = (accountsData || []).map((account) => account.id);
+    if (accountsError) {
       setToast({ label: "تعذر تحميل بيانات Supabase", at: Date.now() });
-    } else {
-      setAccounts((accountsData || []) as NetflixAccount[]);
-      setLinks((linksData || []) as CustomerLink[]);
-      setTotalAccounts(accountsCount || 0);
-      if ((accountsCount || 0) > 0 && !(accountsData || []).length && currentPage > 1) {
-        setCurrentPage((page) => Math.max(1, page - 1));
-      }
+      setLoading(false);
+      return;
     }
-    if (creditRequestsError) {
-      console.error("Supabase extra credit requests load error:", creditRequestsError);
-      setExtraCreditRequests([]);
-    } else {
-      setExtraCreditRequests((creditRequestsData || []) as unknown as ExtraCreditRequest[]);
-    }
+
+    const nextAccounts = (accountsData || []) as NetflixAccount[];
+    const nextTotal = accountsCount || 0;
+    setAccounts(nextAccounts);
+    setLinks([]);
+    setTotalAccounts(nextTotal);
     setLoading(false);
+    adminAccountsCacheRef.current.set(cacheKey, {
+      accounts: nextAccounts,
+      links: [],
+      totalAccounts: nextTotal,
+      cachedAt: Date.now(),
+    });
+
+    if ((accountsCount || 0) > 0 && !(accountsData || []).length && currentPage > 1) {
+      setCurrentPage((page) => Math.max(1, page - 1));
+    }
+
+    if (!pageAccountIds.length) return;
+
+    // Links are loaded after the account rows are already visible. This keeps
+    // the first dashboard paint independent from the larger customer-link set.
+    const { data: linksData, error: linksError } = await supabase
+      .from("customer_links")
+      .select("*")
+      .in("account_id", pageAccountIds)
+      .order("account_id", { ascending: true })
+      .order("profile_name", { ascending: true });
+
+    if (requestId !== loadRequestIdRef.current) return;
+    if (linksError) {
+      console.error("Supabase background customer links load error:", linksError);
+    } else {
+      const nextLinks = (linksData || []) as CustomerLink[];
+      setLinks(nextLinks);
+      adminAccountsCacheRef.current.set(cacheKey, {
+        accounts: nextAccounts,
+        links: nextLinks,
+        totalAccounts: nextTotal,
+        cachedAt: Date.now(),
+      });
+    }
   }
 
   async function emailAlreadyExists(email: string, exceptAccountId?: string) {
@@ -1425,6 +1528,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
   }
 
   async function addAccount(form: AccountCreateForm): Promise<AccountFormResult> {
+    adminAccountsCacheRef.current.clear();
     const allowedNewAccountTypes: AccountType[] = ["private", "shared"];
     if (!allowedNewAccountTypes.includes(form.account_type)) {
       const error = "إنشاء الحسابات الجديدة متاح للنوع الخاص أو المشترك فقط.";
@@ -1785,6 +1889,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     accountId: string,
     form: { email: string; password: string; supplier_code_url?: string | null; code_fetch_method?: CodeFetchMethod; compensation_tutorial_url?: string | null; created_at?: string; expires_at?: string },
   ): Promise<AccountFormResult> {
+    adminAccountsCacheRef.current.clear();
     const normalizedEmail = normalizeEmail(form.email);
     const currentAccount = accounts.find((account) => account.id === accountId);
     const syncedSupplierCodeUrl = syncEmailInLinkedUrl(
@@ -1886,7 +1991,8 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
           : current.map((link) => (link.account_id === accountId ? { ...link, email: normalizedEmail } : link));
       });
 
-      await loadData();
+      adminAccountsCacheRef.current.clear();
+      await loadData(true);
       setToast({ label: "تم حفظ إعدادات الحساب دون تغيير روابط العملاء", at: Date.now() });
       return true;
     } catch (error) {
@@ -1900,6 +2006,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
   }
 
   async function updateAccountDates(accountId: string, form: { created_at: string; expires_at: string }) {
+    adminAccountsCacheRef.current.clear();
     if (!supabase) {
       setAccounts((current) => current.map((account) => (account.id === accountId ? { ...account, ...form } : account)));
       setToast({ label: "تم حفظ التواريخ", at: Date.now() });
@@ -1948,6 +2055,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     codeRequestLimit: number,
     _resetRequestedCount: boolean,
   ) {
+    adminAccountsCacheRef.current.clear();
     const normalizedLimit = Math.max(0, Math.floor(codeRequestLimit));
     const updates = {
       code_request_limit: normalizedLimit,
@@ -2004,6 +2112,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
   }
 
   async function resetExternalCodeAccess(linkId: string) {
+    adminAccountsCacheRef.current.clear();
     if (!supabase) {
       setLinks((current) =>
         current.map((link) =>
@@ -2068,6 +2177,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
   }
 
   async function toggleAccountClosedReport(account: NetflixAccount) {
+    adminAccountsCacheRef.current.clear();
     const nextClosed = account.is_reported_closed !== true;
     const confirmation = nextClosed
       ? "هل تريد الإبلاغ أن هذا الحساب مغلق؟ ستظهر واجهة التعويض فوراً لجميع العملاء المرتبطين به."
@@ -2166,7 +2276,12 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       const result = (await response.json().catch(() => null)) as { success?: boolean; error?: string } | null;
       if (!response.ok || !result?.success) throw new Error(result?.error || "review_failed");
 
-      await loadData();
+      adminAccountsCacheRef.current.clear();
+      await Promise.all([
+        loadData(true),
+        loadExtraCreditRequests(),
+        loadPendingCreditRequestCount(),
+      ]);
       setToast({
         label: status === "approved" ? "تم قبول الطلب وإضافة محاولة للعميل" : "تم رفض طلب الرصيد",
         at: Date.now(),
@@ -2240,6 +2355,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
   }
 
   async function resetSharedCompensationLinks(accountId: string) {
+    adminAccountsCacheRef.current.clear();
     const account = accounts.find((item) => item.id === accountId);
     if (account?.account_type !== "compensation" || account.compensation_distribution !== "shared") {
       setToast({ label: "إعادة التعيين متاحة لحسابات التعويضات المشتركة فقط", at: Date.now(), tone: "error" });
@@ -2299,6 +2415,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
   }
 
   async function rotateOsnMonthlyCycle(account: NetflixAccount) {
+    adminAccountsCacheRef.current.clear();
     if (!isOsnMonthlyRotation(account)) {
       setToast({ label: "هذا الإجراء مخصص لاشتراكات OSN ذات الدورات الشهرية", at: Date.now(), tone: "error" });
       return;
@@ -2380,6 +2497,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
   }
 
   async function deleteAccount(accountId: string) {
+    adminAccountsCacheRef.current.clear();
     if (!window.confirm("هل تريد حذف هذا الحساب وجميع روابط العملاء التابعة له؟")) return;
 
     if (!supabase) {
@@ -2521,7 +2639,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
         <ExtraCreditRequestsPage
           requests={extraCreditRequests}
           service={selectedService}
-          loading={loading}
+          loading={creditRequestsLoading}
           onBack={() => setScreen("netflix")}
           onReview={reviewExtraCreditRequest}
           onResetExternalCode={resetExternalCodeAccess}
@@ -2615,7 +2733,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
         onToggleClosedReport={toggleAccountClosedReport}
         onUpdateCustomerCodeBalance={updateCustomerCodeBalance}
         onResetExternalCodeAccess={resetExternalCodeAccess}
-        pendingCreditRequests={extraCreditRequests.filter((request) => request.status === "pending").length}
+        pendingCreditRequests={pendingCreditRequests}
         onOpenCreditRequests={() => setScreen("credit-requests")}
         onOpenCompensations={() => setScreen("compensations")}
         onLogout={logout}
@@ -2847,15 +2965,19 @@ function Dashboard({
   const [editingCustomerBalance, setEditingCustomerBalance] = useState<CustomerLink | null>(null);
   const [, setCycleClock] = useState(Date.now());
 
-  const openAddForm = () => {
+  const openAddForm = useCallback(() => {
     setEditingAccount(null);
     setFormOpen(true);
-  };
+  }, []);
 
-  const openEditForm = (account: NetflixAccount) => {
+  const openEditForm = useCallback((account: NetflixAccount) => {
     setEditingAccount(account);
     setFormOpen(true);
-  };
+  }, []);
+
+  const openSupplierCode = useCallback((url: string) => {
+    window.open(url, "_blank", "noopener,noreferrer");
+  }, []);
 
   const visibleAccounts = useMemo(() => {
     return accounts;
@@ -3122,7 +3244,7 @@ function Dashboard({
                     onResetCompensationLinks={onResetCompensationLinks}
                     onRotateOsnMonthlyCycle={onRotateOsnMonthlyCycle}
                     onToggleClosedReport={onToggleClosedReport}
-                    onOpenSupplierCode={(url) => window.open(url, "_blank", "noopener,noreferrer")}
+                    onOpenSupplierCode={openSupplierCode}
                   />
                 ))}
               </tbody>
@@ -3143,7 +3265,7 @@ function Dashboard({
                 onResetCompensationLinks={onResetCompensationLinks}
                 onRotateOsnMonthlyCycle={onRotateOsnMonthlyCycle}
                 onToggleClosedReport={onToggleClosedReport}
-                onOpenSupplierCode={(url) => window.open(url, "_blank", "noopener,noreferrer")}
+                onOpenSupplierCode={openSupplierCode}
               />
             ))}
           </div>
@@ -3329,7 +3451,7 @@ function StatCard({
   );
 }
 
-function AccountCard({
+const AccountCard = memo(function AccountCard({
   account,
   index,
   onSelect,
@@ -3546,9 +3668,9 @@ function AccountCard({
       </div>
     </article>
   );
-}
+}, (previous, next) => previous.account === next.account && previous.index === next.index);
 
-function AccountRow({
+const AccountRow = memo(function AccountRow({
   account,
   index,
   onSelect,
@@ -3768,7 +3890,7 @@ function AccountRow({
       </td>
     </tr>
   );
-}
+}, (previous, next) => previous.account === next.account && previous.index === next.index);
 
 function CompensationAdminPage({
   service,
