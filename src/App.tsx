@@ -2459,6 +2459,75 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     }
   }
 
+  async function copyAllCustomerLinksForAccounts(accountIds: string[]) {
+    const uniqueAccountIds = [...new Set(accountIds)].filter(Boolean);
+    if (!uniqueAccountIds.length) return false;
+
+    let selectedLinks = links.filter((link) => uniqueAccountIds.includes(link.account_id));
+    if (supabase) {
+      const { data, error } = await supabase
+        .from("customer_links")
+        .select("*")
+        .in("account_id", uniqueAccountIds)
+        .order("profile_name", { ascending: true });
+
+      if (error) {
+        console.error("Selected accounts links fetch failed:", error);
+        setToast({ label: "تعذر جلب روابط الحسابات المحددة", at: Date.now(), tone: "error" });
+        return false;
+      }
+      selectedLinks = (data || []) as CustomerLink[];
+    }
+
+    const selectedAccounts = uniqueAccountIds
+      .map((accountId) => accounts.find((account) => account.id === accountId))
+      .filter((account): account is NetflixAccount => Boolean(account));
+    const incompleteAccounts = selectedAccounts.filter((account) => {
+      const accountLinks = selectedLinks.filter((link) => link.account_id === account.id);
+      const accountService = serviceOf(account);
+      const expectedCount = account.account_type === "private"
+        ? accountService === "shahid" ? 4 : 5
+        : account.account_type === "shared"
+          ? accountService === "shahid" ? 8 : 10
+          : null;
+      return expectedCount !== null ? accountLinks.length !== expectedCount : accountLinks.length === 0;
+    });
+
+    if (incompleteAccounts.length) {
+      setToast({
+        label: `تعذر النسخ: راجع روابط ${incompleteAccounts[0].email}`,
+        at: Date.now(),
+        tone: "error",
+      });
+      return false;
+    }
+
+    const linksText = selectedAccounts
+      .flatMap((account) => selectedLinks
+        .filter((link) => link.account_id === account.id)
+        .sort((first, second) => first.profile_name.localeCompare(second.profile_name, "en", { numeric: true })))
+      .map((link) => `للحصول على بيانات الحساب ادخل على الرابط التالي: ${getCustomerUrl(link)}`)
+      .join("\n");
+
+    if (!linksText) {
+      setToast({ label: "لا توجد روابط مرتبطة بالحسابات المحددة", at: Date.now(), tone: "error" });
+      return false;
+    }
+
+    try {
+      await writeClipboardText(linksText);
+      setToast({
+        label: `تم نسخ ${selectedLinks.length} رابطاً لـ ${selectedAccounts.length} حسابات`,
+        at: Date.now(),
+      });
+      return true;
+    } catch (error) {
+      console.error("Selected accounts links copy failed:", error);
+      setToast({ label: "تعذر نسخ روابط الحسابات المحددة", at: Date.now(), tone: "error" });
+      return false;
+    }
+  }
+
   async function resetSharedCompensationLinks(accountId: string) {
     adminAccountsCacheRef.current.clear();
     const account = accounts.find((item) => item.id === accountId);
@@ -2628,6 +2697,40 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     setSelectedAccountId(null);
     setScreen("netflix");
     setToast({ label: "تم حذف الحساب", at: Date.now() });
+  }
+
+  async function deleteSelectedAccounts(accountIds: string[]) {
+    const uniqueAccountIds = [...new Set(accountIds)].filter(Boolean);
+    if (!uniqueAccountIds.length) return false;
+    if (!window.confirm(`هل تريد حذف ${uniqueAccountIds.length} حسابات محددة وجميع روابط العملاء التابعة لها؟`)) {
+      return false;
+    }
+
+    adminAccountsCacheRef.current.clear();
+    if (!supabase) {
+      setAccounts((current) => current.filter((account) => !uniqueAccountIds.includes(account.id)));
+      setLinks((current) => current.filter((link) => !uniqueAccountIds.includes(link.account_id)));
+      setTotalAccounts((current) => Math.max(0, current - uniqueAccountIds.length));
+      setToast({ label: `تم حذف ${uniqueAccountIds.length} حسابات`, at: Date.now() });
+      return true;
+    }
+
+    setLoading(true);
+    const { error } = await supabase.from("accounts").delete().in("id", uniqueAccountIds);
+    if (error) {
+      console.error("Selected accounts deletion failed:", error);
+      setLoading(false);
+      setToast({ label: "تعذر حذف الحسابات المحددة", at: Date.now(), tone: "error" });
+      return false;
+    }
+
+    setAccounts((current) => current.filter((account) => !uniqueAccountIds.includes(account.id)));
+    setLinks((current) => current.filter((link) => !uniqueAccountIds.includes(link.account_id)));
+    setTotalAccounts((current) => Math.max(0, current - uniqueAccountIds.length));
+    if (selectedAccountId && uniqueAccountIds.includes(selectedAccountId)) setSelectedAccountId(null);
+    setToast({ label: `تم حذف ${uniqueAccountIds.length} حسابات وروابطها بنجاح`, at: Date.now() });
+    await loadData(true);
+    return true;
   }
 
   function logout() {
@@ -2829,11 +2932,13 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
           setScreen("account");
         }}
         onDelete={deleteAccount}
+        onDeleteSelected={deleteSelectedAccounts}
         onCopyTemporaryLink={(account) => {
           const url = getTemporaryAccountUrl(account);
           if (url) void copyText(url, setToast);
         }}
         onCopyAllLinks={copyAllCustomerLinksForAccount}
+        onCopySelectedLinks={copyAllCustomerLinksForAccounts}
         onResetCompensationLinks={resetSharedCompensationLinks}
         onRotateOsnMonthlyCycle={rotateOsnMonthlyCycle}
         onToggleClosedReport={toggleAccountClosedReport}
@@ -3018,8 +3123,10 @@ function Dashboard({
   onUpdate,
   onSelect,
   onDelete,
+  onDeleteSelected,
   onCopyTemporaryLink,
   onCopyAllLinks,
+  onCopySelectedLinks,
   onResetCompensationLinks,
   onRotateOsnMonthlyCycle,
   onToggleClosedReport,
@@ -3050,8 +3157,10 @@ function Dashboard({
   onUpdate: Parameters<typeof AccountForm>[0]["onUpdate"];
   onSelect: (id: string) => void;
   onDelete: (id: string) => Promise<void>;
+  onDeleteSelected: (ids: string[]) => Promise<boolean>;
   onCopyTemporaryLink: (account: NetflixAccount) => void;
   onCopyAllLinks: (accountId: string) => Promise<void>;
+  onCopySelectedLinks: (accountIds: string[]) => Promise<boolean>;
   onResetCompensationLinks: (accountId: string) => Promise<void>;
   onRotateOsnMonthlyCycle: (account: NetflixAccount) => Promise<void>;
   onToggleClosedReport: (account: NetflixAccount) => Promise<void>;
@@ -3071,6 +3180,7 @@ function Dashboard({
   const [editingAccount, setEditingAccount] = useState<NetflixAccount | null>(null);
   const [filterOpen, setFilterOpen] = useState(false);
   const [editingCustomerBalance, setEditingCustomerBalance] = useState<CustomerLink | null>(null);
+  const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
   const [, setCycleClock] = useState(Date.now());
 
   const openAddForm = useCallback(() => {
@@ -3090,6 +3200,28 @@ function Dashboard({
   const visibleAccounts = useMemo(() => {
     return accounts;
   }, [accounts]);
+  const selectedAccountIdSet = useMemo(() => new Set(selectedAccountIds), [selectedAccountIds]);
+  const allVisibleSelected = visibleAccounts.length > 0
+    && visibleAccounts.every((account) => selectedAccountIdSet.has(account.id));
+
+  const toggleAccountSelection = useCallback((accountId: string) => {
+    setSelectedAccountIds((current) => current.includes(accountId)
+      ? current.filter((id) => id !== accountId)
+      : [...current, accountId]);
+  }, []);
+
+  const toggleVisibleSelection = useCallback(() => {
+    setSelectedAccountIds((current) => {
+      const visibleIds = visibleAccounts.map((account) => account.id);
+      const selected = new Set(current);
+      const shouldClear = visibleIds.length > 0 && visibleIds.every((id) => selected.has(id));
+      return shouldClear ? current.filter((id) => !visibleIds.includes(id)) : [...new Set([...current, ...visibleIds])];
+    });
+  }, [visibleAccounts]);
+
+  useEffect(() => {
+    setSelectedAccountIds([]);
+  }, [currentPage, service, query, accountTypeFilter]);
 
   useEffect(() => {
     const onPointerDown = (event: MouseEvent) => {
@@ -3312,7 +3444,58 @@ function Dashboard({
               <h2 className="mt-1 text-xl font-black">قائمة الحسابات</h2>
               <p className="mt-1 text-xs font-semibold text-zinc-500">عرض {visibleAccounts.length} من {totalAccounts} حساب</p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={toggleVisibleSelection}
+                disabled={!visibleAccounts.length || loading}
+                className={cn(
+                  "flex h-10 items-center gap-2 rounded-lg border px-3 text-xs font-black transition disabled:cursor-not-allowed disabled:opacity-40",
+                  allVisibleSelected
+                    ? "border-[#8B35F5] bg-[#8B35F5] text-white"
+                    : "border-[#DCCBFA] bg-white text-[#6F22D6] hover:bg-[#F7F2FF]",
+                )}
+              >
+                <input
+                  type="checkbox"
+                  checked={allVisibleSelected}
+                  onChange={() => undefined}
+                  className="h-4 w-4 accent-[#8B35F5]"
+                  tabIndex={-1}
+                  aria-hidden="true"
+                />
+                تحديد الصفحة
+              </button>
+              {selectedAccountIds.length > 0 && (
+                <>
+                  <span className="rounded-lg bg-[#F3ECFF] px-3 py-2 text-xs font-black text-[#6F22D6]">
+                    تم تحديد {selectedAccountIds.length}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await onCopySelectedLinks(selectedAccountIds);
+                    }}
+                    disabled={loading}
+                    className="flex h-10 items-center gap-2 rounded-lg bg-[#8B35F5] px-3 text-xs font-black text-white transition hover:bg-[#7626DD] disabled:opacity-50"
+                  >
+                    <Clipboard className="h-4 w-4" />
+                    نسخ روابط المحدد
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const deleted = await onDeleteSelected(selectedAccountIds);
+                      if (deleted) setSelectedAccountIds([]);
+                    }}
+                    disabled={loading}
+                    className="flex h-10 items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 text-xs font-black text-rose-600 transition hover:bg-rose-100 disabled:opacity-50"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    حذف المحدد
+                  </button>
+                </>
+              )}
               <span className="rounded-lg bg-[#F3ECFF] px-3 py-2 text-xs font-black text-[#6F22D6]">
                 {visibleAccounts.length} حساب
               </span>
@@ -3330,6 +3513,15 @@ function Dashboard({
             <table className="w-full min-w-[1040px] border-collapse text-right">
               <thead>
                 <tr className="border-b border-[#EEE7F8] bg-[#FCFAFF] text-xs font-black text-zinc-600">
+                  <th className="w-12 px-3 py-4 text-center">
+                    <input
+                      type="checkbox"
+                      checked={allVisibleSelected}
+                      onChange={toggleVisibleSelection}
+                      className="h-4 w-4 cursor-pointer accent-[#8B35F5]"
+                      aria-label="تحديد جميع حسابات الصفحة"
+                    />
+                  </th>
                   <th className="w-[42%] px-5 py-4">الحساب</th>
                   <th className="w-[14%] px-4 py-4">النوع</th>
                   <th className="w-[12%] px-4 py-4">الحالة</th>
@@ -3344,6 +3536,8 @@ function Dashboard({
                     key={account.id}
                     account={account}
                     index={index}
+                    selected={selectedAccountIdSet.has(account.id)}
+                    onToggleSelect={toggleAccountSelection}
                     onSelect={onSelect}
                     onEdit={openEditForm}
                     onDelete={onDelete}
@@ -3365,6 +3559,8 @@ function Dashboard({
                 key={account.id}
                 account={account}
                 index={index}
+                selected={selectedAccountIdSet.has(account.id)}
+                onToggleSelect={toggleAccountSelection}
                 onSelect={onSelect}
                 onEdit={openEditForm}
                 onDelete={onDelete}
@@ -3563,6 +3759,8 @@ function StatCard({
 const AccountCard = memo(function AccountCard({
   account,
   index,
+  selected,
+  onToggleSelect,
   onSelect,
   onEdit,
   onDelete,
@@ -3575,6 +3773,8 @@ const AccountCard = memo(function AccountCard({
 }: {
   account: NetflixAccount;
   index: number;
+  selected: boolean;
+  onToggleSelect: (id: string) => void;
   onSelect: (id: string) => void;
   onEdit: (account: NetflixAccount) => void;
   onDelete: (id: string) => Promise<void>;
@@ -3594,11 +3794,23 @@ const AccountCard = memo(function AccountCard({
 
   return (
     <article
-      className="group min-w-0 animate-rise rounded-2xl border border-[#E9E0F5] bg-white p-3 text-right shadow-[0_10px_28px_rgba(70,40,120,0.07)] transition duration-300 hover:-translate-y-0.5 hover:border-[#D5BDF6] sm:p-4"
+      className={cn(
+        "group min-w-0 animate-rise rounded-2xl border bg-white p-3 text-right shadow-[0_10px_28px_rgba(70,40,120,0.07)] transition duration-300 hover:-translate-y-0.5 sm:p-4",
+        selected ? "border-[#8B35F5] ring-2 ring-[#8B35F5]/15" : "border-[#E9E0F5] hover:border-[#D5BDF6]",
+      )}
       style={{ animationDelay: `${index * 45}ms` }}
     >
       <div className="mb-3 min-w-0">
         <div className="flex min-w-0 items-start justify-between gap-2">
+          <label className="flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-xl border border-[#E0D4F8] bg-[#F8F4FF]">
+            <input
+              type="checkbox"
+              checked={selected}
+              onChange={() => onToggleSelect(account.id)}
+              className="h-4 w-4 cursor-pointer accent-[#8B35F5]"
+              aria-label={`تحديد حساب ${account.email}`}
+            />
+          </label>
           <div className="min-w-0 flex-1">
             <p className="break-all text-[15px] font-black leading-6 text-[#17141F] sm:text-lg" dir="ltr">
               {account.email}
@@ -3777,11 +3989,17 @@ const AccountCard = memo(function AccountCard({
       </div>
     </article>
   );
-}, (previous, next) => previous.account === next.account && previous.index === next.index);
+}, (previous, next) => (
+  previous.account === next.account
+  && previous.index === next.index
+  && previous.selected === next.selected
+));
 
 const AccountRow = memo(function AccountRow({
   account,
   index,
+  selected,
+  onToggleSelect,
   onSelect,
   onEdit,
   onDelete,
@@ -3794,6 +4012,8 @@ const AccountRow = memo(function AccountRow({
 }: {
   account: NetflixAccount;
   index: number;
+  selected: boolean;
+  onToggleSelect: (id: string) => void;
   onSelect: (id: string) => void;
   onEdit: (account: NetflixAccount) => void;
   onDelete: (id: string) => Promise<void>;
@@ -3814,9 +4034,21 @@ const AccountRow = memo(function AccountRow({
 
   return (
     <tr
-      className="animate-rise border-b border-[#F0EAF7] text-base transition hover:bg-[#FCFAFF]"
+      className={cn(
+        "animate-rise border-b border-[#F0EAF7] text-base transition",
+        selected ? "bg-[#F7F2FF]" : "hover:bg-[#FCFAFF]",
+      )}
       style={{ animationDelay: `${index * 35}ms` }}
     >
+      <td className="px-3 py-5 text-center">
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={() => onToggleSelect(account.id)}
+          className="h-4 w-4 cursor-pointer accent-[#8B35F5]"
+          aria-label={`تحديد حساب ${account.email}`}
+        />
+      </td>
       <td className="px-5 py-5">
         <div className="flex min-w-0 items-start gap-3 text-right">
           <button
@@ -3999,7 +4231,11 @@ const AccountRow = memo(function AccountRow({
       </td>
     </tr>
   );
-}, (previous, next) => previous.account === next.account && previous.index === next.index);
+}, (previous, next) => (
+  previous.account === next.account
+  && previous.index === next.index
+  && previous.selected === next.selected
+));
 
 function CompensationAdminPage({
   service,
