@@ -74,7 +74,7 @@ type AccountTypeFilter = "all" | "duplicates" | AccountType;
 type SupportIssue = "general" | "unavailable" | "expired";
 type CustomerSearchResult = { link: CustomerLink; account: NetflixAccount };
 type AccountFormResult = boolean | { ok: boolean; error?: string };
-type AccountBatchFormResult = { ok: boolean; error?: string; count?: number };
+type AccountBatchFormResult = { ok: boolean; error?: string; count?: number; duplicateEmails?: string[] };
 type ParsedAccount = {
   id: string;
   email: string;
@@ -1946,16 +1946,22 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       const result = await response.json().catch(() => null) as {
         success?: boolean;
         error?: string;
+        duplicate_emails?: string[];
         accounts?: NetflixAccount[];
         links?: CustomerLink[];
       } | null;
 
       if (!response.ok || !result?.success || !result.accounts || !result.links) {
+        const duplicateEmails = Array.isArray(result?.duplicate_emails)
+          ? result.duplicate_emails.map(normalizeEmail).filter(Boolean)
+          : [];
         const error = result?.error === "duplicate_email"
-          ? duplicateEmailSaveMessage
+          ? duplicateEmails.length
+            ? `البريد التالي مسجل مسبقاً: ${duplicateEmails.join("، ")}`
+            : duplicateEmailSaveMessage
           : result?.error || "تعذر حفظ الحسابات المضافة.";
         setToast({ label: error, at: Date.now(), tone: "error" });
-        return { ok: false, error };
+        return { ok: false, error, duplicateEmails };
       }
 
       adminAccountsCacheRef.current.clear();
@@ -4840,6 +4846,7 @@ function AccountForm({
   const [entryMode, setEntryMode] = useState<"manual" | "smart">("manual");
   const [smartPasteText, setSmartPasteText] = useState("");
   const [parsedAccounts, setParsedAccounts] = useState<ParsedAccount[]>([]);
+  const [duplicateBatchEmails, setDuplicateBatchEmails] = useState<string[]>([]);
   const [batchSaving, setBatchSaving] = useState(false);
   const calculatedExpiry = service === "osn" && osnSubscriptionMode === "monthly_rotation"
     ? osnMonthlyAccountDates().expiresAt
@@ -4950,10 +4957,12 @@ function AccountForm({
   function extractSmartPasteAccounts() {
     const parsed = parseWhatsappAccounts(smartPasteText);
     setParsedAccounts(parsed);
+    setDuplicateBatchEmails([]);
     setFormError(parsed.length ? "" : "لم يتم العثور على أي بريد إلكتروني صالح في النص الملصق.");
   }
 
   function updateParsedAccount(id: string, field: keyof Omit<ParsedAccount, "id">, value: string) {
+    setDuplicateBatchEmails([]);
     setParsedAccounts((current) => current.map((account) => (
       account.id === id ? { ...account, [field]: value } : account
     )));
@@ -4995,7 +5004,10 @@ function AccountForm({
     setBatchSaving(false);
 
     if (result.ok) onClose();
-    else setFormError(result.error || "تعذر حفظ الحسابات، حاول مرة أخرى.");
+    else {
+      setDuplicateBatchEmails(result.duplicateEmails || []);
+      setFormError(result.error || "تعذر حفظ الحسابات، حاول مرة أخرى.");
+    }
   }
 
   return (
@@ -5312,6 +5324,7 @@ function AccountForm({
                   onChange={(event) => {
                     setSmartPasteText(event.target.value);
                     setParsedAccounts([]);
+                    setDuplicateBatchEmails([]);
                     setFormError("");
                   }}
                   placeholder={'email@example.com password\nhttps://code.example.com/link\nemail2@example.com password2 https://code.example.com/link2'}
@@ -5339,7 +5352,15 @@ function AccountForm({
                   </span>
                 </div>
                 {parsedAccounts.map((account, index) => (
-                  <article key={account.id} className="rounded-2xl border border-[#E7DDF5] bg-white p-4">
+                  <article
+                    key={account.id}
+                    className={cn(
+                      "rounded-2xl border bg-white p-4",
+                      duplicateBatchEmails.includes(normalizeEmail(account.email))
+                        ? "border-rose-400 bg-rose-50/40"
+                        : "border-[#E7DDF5]",
+                    )}
+                  >
                     <div className="mb-3 flex items-center justify-between gap-3">
                       <p className="text-xs font-black text-[#8B35F5]">حساب {index + 1}</p>
                       <button
@@ -5375,6 +5396,9 @@ function AccountForm({
                         dir="ltr"
                       />
                     </div>
+                    {duplicateBatchEmails.includes(normalizeEmail(account.email)) && (
+                      <p className="mt-2 text-xs font-black text-rose-600">هذا البريد مسجل مسبقاً في قائمة الحسابات.</p>
+                    )}
                   </article>
                 ))}
               </div>

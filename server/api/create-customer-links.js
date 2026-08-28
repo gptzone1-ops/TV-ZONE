@@ -54,6 +54,19 @@ function normalizeBatchAccount(value) {
   };
 }
 
+function findRepeatedValues(values) {
+  const counts = new Map();
+  values.forEach((value) => counts.set(value, (counts.get(value) || 0) + 1));
+  return [...counts.entries()].filter(([, count]) => count > 1).map(([value]) => value);
+}
+
+function isDuplicateAccountEmailError(error) {
+  const details = [error?.message, error?.details, error?.hint, error?.constraint]
+    .filter(Boolean)
+    .join(" ");
+  return /duplicate_account_email|accounts[^\n]*email|email[^\n]*(duplicate|unique)/i.test(details);
+}
+
 function hasValidStructure(links, accountType, serviceType, osnSubscriptionMode) {
   const structure = PROFILE_STRUCTURES[accountType];
   if (!structure || links.length !== structure.names.length) return false;
@@ -116,7 +129,14 @@ async function createAccountsBatch(req, res, supabase) {
     || (account.supplierCodeUrl && !/^https?:\/\//i.test(account.supplierCodeUrl))
   ));
   if (hasInvalidAccount) return send(res, 400, { success: false, error: "invalid_batch_account" });
-  if (new Set(emails).size !== emails.length) return send(res, 409, { success: false, error: "duplicate_email" });
+  const repeatedPayloadEmails = findRepeatedValues(emails);
+  if (repeatedPayloadEmails.length) {
+    return send(res, 409, {
+      success: false,
+      error: "duplicate_email",
+      duplicate_emails: repeatedPayloadEmails,
+    });
+  }
 
   const { data: existingAccounts, error: existingLookupError } = await supabase
     .from("accounts")
@@ -126,8 +146,13 @@ async function createAccountsBatch(req, res, supabase) {
     return send(res, 500, { success: false, error: "duplicate_lookup_failed" });
   }
   const existingEmails = new Set((existingAccounts || []).map((account) => String(account.email || "").trim().toLowerCase()));
-  if (emails.some((email) => existingEmails.has(email))) {
-    return send(res, 409, { success: false, error: "duplicate_email" });
+  const duplicateEmails = emails.filter((email) => existingEmails.has(email));
+  if (duplicateEmails.length) {
+    return send(res, 409, {
+      success: false,
+      error: "duplicate_email",
+      duplicate_emails: duplicateEmails,
+    });
   }
 
   const accountRows = accounts.map((account) => ({
@@ -151,10 +176,11 @@ async function createAccountsBatch(req, res, supabase) {
     .select("*");
   if (accountInsertError) {
     console.error("Batch account insert failed:", accountInsertError);
-    const duplicate = accountInsertError.code === "23505" || /duplicate.*email/i.test(accountInsertError.message || "");
+    const duplicate = isDuplicateAccountEmailError(accountInsertError);
     return send(res, duplicate ? 409 : 500, {
       success: false,
       error: duplicate ? "duplicate_email" : accountInsertError.message,
+      ...(duplicate ? { duplicate_emails: duplicateEmails } : {}),
     });
   }
 
