@@ -25,6 +25,7 @@ import {
   Play,
   Plus,
   RefreshCw,
+  Save,
   Search,
   Settings,
   ShieldCheck,
@@ -36,6 +37,7 @@ import {
   Users,
   Trash2,
   Tv,
+  Zap,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -72,6 +74,13 @@ type AccountTypeFilter = "all" | "duplicates" | AccountType;
 type SupportIssue = "general" | "unavailable" | "expired";
 type CustomerSearchResult = { link: CustomerLink; account: NetflixAccount };
 type AccountFormResult = boolean | { ok: boolean; error?: string };
+type AccountBatchFormResult = { ok: boolean; error?: string; count?: number };
+type ParsedAccount = {
+  id: string;
+  email: string;
+  password: string;
+  code_url: string;
+};
 type AdminAccountsCacheEntry = {
   accounts: NetflixAccount[];
   links: CustomerLink[];
@@ -136,7 +145,7 @@ const tvApprovalFallbackWindowMs = 15 * 60 * 1000;
 const tvApprovalSearchDurationMs = 15 * 1000;
 const externalCodeAccessDurationMs = 30 * 60 * 1000;
 const osnMonthlyAutoOtpLaunchAtMs = Date.parse("2026-08-21T03:21:29.272Z");
-const adminAccountsPageSize = 30;
+const adminAccountsPageSize = 10;
 const adminAccountsCacheTtlMs = 5 * 60 * 1000;
 const extraCreditReasons: ExtraCreditReason[] = [
   "كود خاطئ",
@@ -155,6 +164,8 @@ const duplicateEmailSaveMessage = duplicateEmailMessage;
 const emptyEmailMessage = "أدخل البريد الإلكتروني أولاً";
 const customerAccountPublicSelect = "*,accounts(id,email,use_automated_code,code_fetch_method,compensation_tutorial_url,verification_code,verification_code_received_at,service_type,account_type,compensation_distribution,osn_subscription_mode,osn_cycle_number,osn_cycle_started_at,osn_cycle_ends_at,expires_at,created_at,email_provider,imap_enabled,normal_client_layout,hide_password_from_client,is_reported_closed,reported_closed_at)";
 const legacyCustomerAccountSelect = "*,accounts(id,email,password,use_automated_code,supplier_code_url,compensation_tutorial_url,verification_code,verification_code_received_at,service_type,account_type,compensation_distribution,expires_at,created_at,email_provider,imap_enabled,normal_client_layout)";
+const adminAccountSelect = "id,email,password,use_automated_code,supplier_code_url,code_fetch_method,temporary_short_id,email_provider,imap_enabled,normal_client_layout,hide_password_from_client,is_reported_closed,reported_closed_at,compensation_distribution,compensation_tutorial_url,verification_code,verification_code_received_at,service_type,osn_subscription_mode,osn_cycle_number,osn_cycle_started_at,osn_cycle_ends_at,account_type,expires_at,created_at";
+const adminCustomerLinkSelect = "id,account_id,client_code,email,link_number,code_request_limit,code_requested_count,code_used_at,verification_code,verification_code_received_at,selected_device,tv_approval_url,has_used_tv_link,tv_link_used_at,external_code_used,external_code_used_at,external_code_first_opened_at,updated_at,uuid,short_id,profile_name,profile_label,profile_code,activation_key,service_type,created_at";
 
 const serviceThemes: Record<ServiceType, ServiceTheme> = {
   netflix: {
@@ -503,6 +514,41 @@ function accountFormSucceeded(result: AccountFormResult) {
 
 function accountFormError(result: AccountFormResult) {
   return typeof result === "boolean" ? undefined : result.error;
+}
+
+function parseWhatsappAccounts(rawText: string): ParsedAccount[] {
+  const normalizedText = rawText
+    .replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "")
+    .replace(/\\@/g, "@")
+    .replace(/\[(https?:\/\/[^\]\s]+)\]\((https?:\/\/[^)\s]+)\)/gi, "$2")
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\s*\[[^\]]+\]\s*[^:]+:\s*/, "").trim())
+    .filter(Boolean)
+    .join("\n");
+
+  const emailPattern = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+  const emailMatches = Array.from(normalizedText.matchAll(emailPattern));
+
+  return emailMatches.map((match, index) => {
+    const email = String(match[0] || "").trim().toLowerCase();
+    const segmentStart = (match.index || 0) + match[0].length;
+    const segmentEnd = emailMatches[index + 1]?.index ?? normalizedText.length;
+    const segment = normalizedText.slice(segmentStart, segmentEnd).trim();
+    const urlMatch = segment.match(/https?:\/\/[^\s\])]+/i);
+    const codeUrl = String(urlMatch?.[0] || "").replace(/[.,،;]+$/, "");
+    const passwordArea = codeUrl ? segment.slice(0, segment.indexOf(urlMatch?.[0] || "")) : segment;
+    const password = passwordArea
+      .split(/\s+/)
+      .map((token) => token.replace(/^[\[\]():،,;]+|[\[\]():،,;]+$/g, ""))
+      .find((token) => token && !token.includes("@") && !/^https?:\/\//i.test(token)) || "";
+
+    return {
+      id: crypto.randomUUID(),
+      email,
+      password,
+      code_url: codeUrl,
+    };
+  });
 }
 
 function remainingLabel(expiresAt: string) {
@@ -1132,6 +1178,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
   const creditRequestsLoadIdRef = useRef(0);
   const adminAccountsCacheRef = useRef(new Map<string, AdminAccountsCacheEntry>());
   const realtimeAccountsRefreshRef = useRef<number | null>(null);
+  const accountCreationInFlightRef = useRef(false);
 
   useEffect(() => {
     if (!toast) return;
@@ -1140,7 +1187,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
   }, [toast]);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedQuery(query.trim()), 250);
+    const timer = window.setTimeout(() => setDebouncedQuery(query.trim()), 300);
     return () => window.clearTimeout(timer);
   }, [query]);
 
@@ -1279,7 +1326,8 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     setLoading(true);
     const matchingAccountIds = new Set<string>();
 
-    if (searchTerm) {
+    const looksLikeEmailSearch = searchTerm.includes("@") || searchTerm.includes(".");
+    if (searchTerm && !looksLikeEmailSearch) {
       const linkSearches = [
         supabase
           .from("customer_links")
@@ -1308,7 +1356,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
 
     let accountsQuery = supabase
       .from("accounts")
-      .select("*", { count: "exact" });
+      .select(adminAccountSelect, { count: "exact" });
 
     accountsQuery = selectedService === "netflix"
       ? accountsQuery.or("service_type.eq.netflix,service_type.is.null")
@@ -1384,7 +1432,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     // the first dashboard paint independent from the larger customer-link set.
     const { data: linksData, error: linksError } = await supabase
       .from("customer_links")
-      .select("*")
+      .select(adminCustomerLinkSelect)
       .in("account_id", pageAccountIds)
       .order("account_id", { ascending: true })
       .order("profile_name", { ascending: true });
@@ -1528,6 +1576,21 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
   }
 
   async function addAccount(form: AccountCreateForm): Promise<AccountFormResult> {
+    if (accountCreationInFlightRef.current) {
+      const error = "جاري حفظ الحساب الحالي، يرجى الانتظار لحظة.";
+      setToast({ label: error, at: Date.now(), tone: "error" });
+      return { ok: false, error };
+    }
+
+    accountCreationInFlightRef.current = true;
+    try {
+      return await performAddAccount(form);
+    } finally {
+      accountCreationInFlightRef.current = false;
+    }
+  }
+
+  async function performAddAccount(form: AccountCreateForm): Promise<AccountFormResult> {
     adminAccountsCacheRef.current.clear();
     const allowedNewAccountTypes: AccountType[] = ["private", "shared"];
     if (!allowedNewAccountTypes.includes(form.account_type)) {
@@ -1633,31 +1696,6 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     setTotalAccounts((current) => current + 1);
     setToast({ label: "تمت إضافة الحساب، جاري الحفظ في الخلفية", at: Date.now() });
 
-    try {
-      const validation = await validateAccountEmailAndProfiles(
-        normalizedEmail,
-      );
-      if (!accountFormSucceeded(validation)) {
-        const error = accountFormError(validation) || duplicateEmailMessage;
-        rollbackOptimisticAccount();
-        setToast({ label: error, at: Date.now(), tone: "error" });
-        return { ok: false, error };
-      }
-    } catch {
-      rollbackOptimisticAccount();
-      setToast({ label: "تعذر التحقق من البريد الإلكتروني، حاول مرة أخرى", at: Date.now(), tone: "error" });
-      return { ok: false, error: "تعذر التحقق من البريد الإلكتروني، حاول مرة أخرى" };
-    }
-
-    try {
-      const shortIds = await createUniqueShortIds(slots.length);
-      slots = slots.map((slot, index) => ({ ...slot, short_id: shortIds[index] }));
-    } catch {
-      rollbackOptimisticAccount();
-      setToast({ label: "تعذر توليد روابط قصيرة فريدة، حاول مرة أخرى", at: Date.now(), tone: "error" });
-      return { ok: false, error: "تعذر توليد روابط قصيرة فريدة، حاول مرة أخرى" };
-    }
-
     if (!supabase) {
       const createdLinks = slots.map((slot) => ({
         id: crypto.randomUUID(),
@@ -1673,7 +1711,6 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       return true;
     }
 
-    setLoading(true);
     let account: NetflixAccount | null = null;
     try {
       const {
@@ -1713,7 +1750,6 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       if (accountError) throw accountError;
       account = data as NetflixAccount;
     } catch (error) {
-      setLoading(false);
       rollbackOptimisticAccount();
       if (isDuplicateEmailError(error)) {
         setToast({ label: duplicateEmailSaveMessage, at: Date.now(), tone: "error" });
@@ -1725,7 +1761,6 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     }
 
     if (!account) {
-      setLoading(false);
       rollbackOptimisticAccount();
       setToast({ label: "تعذر إنشاء الحساب", at: Date.now(), tone: "error" });
       return false;
@@ -1737,7 +1772,6 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
         account,
         ...current.filter((item) => item.id !== optimisticId && item.id !== account?.id),
       ].slice(0, adminAccountsPageSize));
-      setLoading(false);
       setToast({ label: "تم حفظ الحساب المؤقت وأصبح رابطه جاهزاً للنسخ", at: Date.now() });
       return true;
     }
@@ -1818,7 +1852,6 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       rollbackOptimisticAccount();
       setAccounts((current) => current.filter((item) => item.id !== account?.id));
       if (isCustomerLinksEmailConstraintError(linksError)) {
-        setLoading(false);
         setToast({
           label: "يوجد قيد مكرر خاطئ على روابط العملاء. نفّذ SQL إزالة unique_customer_email ثم أعد المحاولة.",
           at: Date.now(),
@@ -1831,13 +1864,11 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       }
 
       if (isShortIdConflictError(linksError)) {
-        setLoading(false);
         setToast({ label: "تعذر حجز رابط قصير فريد، أعد المحاولة", at: Date.now(), tone: "error" });
         return { ok: false, error: "تعذر حجز رابط قصير فريد، أعد المحاولة" };
       }
 
       if (isDuplicateEmailError(linksError)) {
-        setLoading(false);
         setToast({ label: duplicateEmailSaveMessage, at: Date.now(), tone: "error" });
         return { ok: false, error: duplicateEmailSaveMessage };
       }
@@ -1850,7 +1881,6 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
         accountType: form.account_type,
         expectedLinks: expectedCreatedLinks,
       });
-      setLoading(false);
       const errorMessage = `تعذر حفظ روابط الحساب: ${databaseError}`;
       setToast({ label: errorMessage, at: Date.now(), tone: "error" });
       return { ok: false, error: errorMessage };
@@ -1860,7 +1890,6 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       await supabase.from("accounts").delete().eq("id", account.id);
       rollbackOptimisticAccount();
       setAccounts((current) => current.filter((item) => item.id !== account?.id));
-      setLoading(false);
       console.error("Unexpected customer link count after account creation:", {
         accountId: account.id,
         expected: expectedCreatedLinks,
@@ -1880,9 +1909,79 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       ...createdLinks,
     ]);
     setSelectedAccountId((current) => (current === optimisticId ? account?.id || null : current));
-    setLoading(false);
+    setQuery("");
+    setDebouncedQuery("");
+    setAccountTypeFilter("all");
+    setCurrentPage(1);
     setToast({ label: "تم حفظ الحساب والروابط بنجاح", at: Date.now() });
     return true;
+  }
+
+  async function addAccountsBatch(forms: AccountCreateForm[]): Promise<AccountBatchFormResult> {
+    if (!forms.length) return { ok: false, error: "لم يتم العثور على حسابات صالحة للحفظ." };
+    if (accountCreationInFlightRef.current) return { ok: false, error: "جاري حفظ عملية أخرى، يرجى الانتظار لحظة." };
+    if (!supabase) return { ok: false, error: "إعدادات Supabase غير متاحة." };
+
+    accountCreationInFlightRef.current = true;
+    try {
+      const response = await fetch("/api/create-customer-links", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-admin-password": adminPassword,
+        },
+        body: JSON.stringify({
+          action: "batch_create_accounts",
+          service_type: selectedService,
+          account_type: forms[0].account_type,
+          accounts: forms.map((form) => ({
+            email: normalizeEmail(form.email),
+            password: form.password,
+            supplier_code_url: form.supplier_code_url || null,
+            code_fetch_method: form.supplier_code_url ? "external_link" : "auto_fetch",
+            expires_at: defaultExpiryDate(),
+          })),
+        }),
+      });
+      const result = await response.json().catch(() => null) as {
+        success?: boolean;
+        error?: string;
+        accounts?: NetflixAccount[];
+        links?: CustomerLink[];
+      } | null;
+
+      if (!response.ok || !result?.success || !result.accounts || !result.links) {
+        const error = result?.error === "duplicate_email"
+          ? duplicateEmailSaveMessage
+          : result?.error || "تعذر حفظ الحسابات المضافة.";
+        setToast({ label: error, at: Date.now(), tone: "error" });
+        return { ok: false, error };
+      }
+
+      adminAccountsCacheRef.current.clear();
+      setQuery("");
+      setDebouncedQuery("");
+      setAccountTypeFilter("all");
+      setCurrentPage(1);
+      setAccounts((current) => [
+        ...result.accounts!,
+        ...current.filter((account) => !result.accounts!.some((created) => created.id === account.id)),
+      ].slice(0, adminAccountsPageSize));
+      setLinks((current) => [
+        ...current.filter((link) => !result.links!.some((created) => created.id === link.id)),
+        ...result.links!,
+      ]);
+      setTotalAccounts((current) => current + result.accounts!.length);
+      setToast({ label: `تم حفظ ${result.accounts.length} حساب بنجاح`, at: Date.now() });
+      return { ok: true, count: result.accounts.length };
+    } catch (error) {
+      console.error("Batch account creation failed:", error);
+      const message = "تعذر حفظ الحسابات بسبب مشكلة اتصال. لم يتم اعتماد عملية ناقصة.";
+      setToast({ label: message, at: Date.now(), tone: "error" });
+      return { ok: false, error: message };
+    } finally {
+      accountCreationInFlightRef.current = false;
+    }
   }
 
   async function updateAccount(
@@ -2717,6 +2816,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
         onPreviousPage={() => setCurrentPage((page) => Math.max(1, page - 1))}
         onNextPage={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
         onAdd={addAccount}
+        onAddBatch={addAccountsBatch}
         onUpdate={updateAccount}
         onSelect={(id) => {
           setSelectedAccountId(id);
@@ -2908,6 +3008,7 @@ function Dashboard({
   onPreviousPage,
   onNextPage,
   onAdd,
+  onAddBatch,
   onUpdate,
   onSelect,
   onDelete,
@@ -2939,6 +3040,7 @@ function Dashboard({
   onPreviousPage: () => void;
   onNextPage: () => void;
   onAdd: Parameters<typeof AccountForm>[0]["onAdd"];
+  onAddBatch: Parameters<typeof AccountForm>[0]["onAddBatch"];
   onUpdate: Parameters<typeof AccountForm>[0]["onUpdate"];
   onSelect: (id: string) => void;
   onDelete: (id: string) => Promise<void>;
@@ -3317,6 +3419,7 @@ function Dashboard({
       {formOpen && (
         <AccountForm
           onAdd={onAdd}
+          onAddBatch={onAddBatch}
           onUpdate={onUpdate}
           loading={loading}
           service={service}
@@ -4701,6 +4804,7 @@ function ConfigNotice() {
 
 function AccountForm({
   onAdd,
+  onAddBatch,
   onUpdate,
   loading,
   service,
@@ -4708,6 +4812,7 @@ function AccountForm({
   onClose,
 }: {
   onAdd: (form: AccountCreateForm) => Promise<AccountFormResult>;
+  onAddBatch: (forms: AccountCreateForm[]) => Promise<AccountBatchFormResult>;
   onUpdate: (
     accountId: string,
     form: { email: string; password: string; supplier_code_url?: string | null; code_fetch_method?: CodeFetchMethod; compensation_tutorial_url?: string | null },
@@ -4732,6 +4837,10 @@ function AccountForm({
   const [compensationTutorialUrl, setCompensationTutorialUrl] = useState(initialAccount?.compensation_tutorial_url || "");
   const [formError, setFormError] = useState("");
   const [showCompensationDistribution, setShowCompensationDistribution] = useState(false);
+  const [entryMode, setEntryMode] = useState<"manual" | "smart">("manual");
+  const [smartPasteText, setSmartPasteText] = useState("");
+  const [parsedAccounts, setParsedAccounts] = useState<ParsedAccount[]>([]);
+  const [batchSaving, setBatchSaving] = useState(false);
   const calculatedExpiry = service === "osn" && osnSubscriptionMode === "monthly_rotation"
     ? osnMonthlyAccountDates().expiresAt
     : defaultExpiryDate();
@@ -4741,6 +4850,10 @@ function AccountForm({
   async function submit(event: FormEvent) {
     event.preventDefault();
     setFormError("");
+    if (!initialAccount && entryMode === "smart") {
+      await saveParsedAccounts();
+      return;
+    }
     const supplier_code_url = supplierCodeUrl.trim() || undefined;
     const cleanEmail = normalizeEmail(email);
     const usingExternalLink = canConfigureCodeFetch && externalCodeLinkEnabled;
@@ -4834,6 +4947,57 @@ function AccountForm({
     });
   }
 
+  function extractSmartPasteAccounts() {
+    const parsed = parseWhatsappAccounts(smartPasteText);
+    setParsedAccounts(parsed);
+    setFormError(parsed.length ? "" : "لم يتم العثور على أي بريد إلكتروني صالح في النص الملصق.");
+  }
+
+  function updateParsedAccount(id: string, field: keyof Omit<ParsedAccount, "id">, value: string) {
+    setParsedAccounts((current) => current.map((account) => (
+      account.id === id ? { ...account, [field]: value } : account
+    )));
+  }
+
+  async function saveParsedAccounts() {
+    setFormError("");
+    if (!parsedAccounts.length) {
+      setFormError("اضغط على استخراج الحسابات أولاً ثم راجع البيانات.");
+      return;
+    }
+
+    const normalizedEmails = parsedAccounts.map((account) => normalizeEmail(account.email));
+    if (normalizedEmails.some((accountEmail) => !accountEmail)) {
+      setFormError("يوجد بريد إلكتروني غير صحيح في المعاينة.");
+      return;
+    }
+    if (new Set(normalizedEmails).size !== normalizedEmails.length) {
+      setFormError("يوجد بريد إلكتروني مكرر داخل النص الملصق.");
+      return;
+    }
+    if (service !== "osn" && parsedAccounts.some((account) => !account.password.trim())) {
+      setFormError("تأكد من وجود كلمة مرور لكل حساب قبل الحفظ.");
+      return;
+    }
+    if (parsedAccounts.some((account) => account.code_url.trim() && !isValidHttpUrl(account.code_url.trim()))) {
+      setFormError("يوجد رابط جلب كود غير صحيح في المعاينة.");
+      return;
+    }
+
+    setBatchSaving(true);
+    const result = await onAddBatch(parsedAccounts.map((account) => ({
+      email: normalizeEmail(account.email),
+      password: service === "osn" ? "" : account.password.trim(),
+      account_type: accountType,
+      supplier_code_url: account.code_url.trim() || undefined,
+      code_fetch_method: account.code_url.trim() ? "external_link" : "auto_fetch",
+    })));
+    setBatchSaving(false);
+
+    if (result.ok) onClose();
+    else setFormError(result.error || "تعذر حفظ الحسابات، حاول مرة أخرى.");
+  }
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-[#17141F]/70 px-4 py-6 backdrop-blur-[3px]"
@@ -4869,6 +5033,39 @@ function AccountForm({
           </button>
         </div>
 
+        {!editing && service !== "osn" && (
+          <div className="mb-5 grid grid-cols-2 rounded-2xl border-2 border-[#E0D0FB] bg-[#F8F4FF] p-1.5">
+            <button
+              type="button"
+              onClick={() => {
+                setEntryMode("manual");
+                setFormError("");
+              }}
+              className={cn(
+                "flex min-h-12 items-center justify-center gap-2 rounded-xl px-3 text-sm font-black transition",
+                entryMode === "manual" ? "bg-white text-[#6F22D6] shadow-sm" : "text-zinc-500",
+              )}
+            >
+              <Edit3 className="h-4 w-4" />
+              إضافة يدوية
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setEntryMode("smart");
+                setFormError("");
+              }}
+              className={cn(
+                "flex min-h-12 items-center justify-center gap-2 rounded-xl px-3 text-sm font-black transition",
+                entryMode === "smart" ? "bg-[#8B35F5] text-white shadow-[0_8px_20px_rgba(139,53,245,0.20)]" : "text-zinc-500",
+              )}
+            >
+              <Zap className="h-4 w-4" />
+              لصق سريع وذكي
+            </button>
+          </div>
+        )}
+
         <div className="mb-5">
           <p className="mb-2 text-sm font-black text-zinc-700">نوع الحساب</p>
           <div className={cn(
@@ -4898,6 +5095,8 @@ function AccountForm({
           {editing && <p className="mt-2 text-[11px] font-bold text-zinc-400">نوع الحساب ثابت لحماية روابط العملاء المنشأة.</p>}
         </div>
 
+        {entryMode === "manual" || editing ? (
+        <>
         <div className={cn("grid gap-x-4", service === "osn" && !editing ? "sm:grid-cols-1" : "sm:grid-cols-2")}>
           <Field icon={Mail} label="البريد الإلكتروني">
             <input
@@ -5098,22 +5297,106 @@ function AccountForm({
                 : "سيتم إنشاء 10 روابط تلقائياً: رابطان مستقلان لكل ملف من A إلى E."}
           </p>
         )}
+        </>
+        ) : (
+          <div className="mb-6 space-y-4">
+            <div className="rounded-2xl border border-[#DCC9FA] bg-[#FCFAFF] p-4">
+              <label className="block">
+                <span className="mb-2 flex items-center gap-2 text-sm font-black text-zinc-700">
+                  <Clipboard className="h-4 w-4 text-[#8B35F5]" />
+                  الصق نص رسائل الواتساب هنا لأي عدد من الحسابات
+                </span>
+                <textarea
+                  rows={8}
+                  value={smartPasteText}
+                  onChange={(event) => {
+                    setSmartPasteText(event.target.value);
+                    setParsedAccounts([]);
+                    setFormError("");
+                  }}
+                  placeholder={'email@example.com password\nhttps://code.example.com/link\nemail2@example.com password2 https://code.example.com/link2'}
+                  className="admin-modal-input min-h-44 resize-y py-3 text-left leading-7"
+                  dir="ltr"
+                />
+              </label>
+              <button
+                type="button"
+                onClick={extractSmartPasteAccounts}
+                disabled={!smartPasteText.trim() || batchSaving}
+                className="mt-3 flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#8B35F5] px-4 text-sm font-black text-white transition hover:bg-[#7626DD] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Zap className="h-4 w-4" />
+                استخراج الحسابات
+              </button>
+            </div>
+
+            {parsedAccounts.length > 0 && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="text-sm font-black text-zinc-800">معاينة الحسابات المكتشفة</h3>
+                  <span className="rounded-lg bg-[#F1E8FF] px-3 py-1.5 text-xs font-black text-[#6F22D6]">
+                    {parsedAccounts.length} حساب
+                  </span>
+                </div>
+                {parsedAccounts.map((account, index) => (
+                  <article key={account.id} className="rounded-2xl border border-[#E7DDF5] bg-white p-4">
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <p className="text-xs font-black text-[#8B35F5]">حساب {index + 1}</p>
+                      <button
+                        type="button"
+                        onClick={() => setParsedAccounts((current) => current.filter((item) => item.id !== account.id))}
+                        className="flex h-8 w-8 items-center justify-center rounded-lg text-rose-500 transition hover:bg-rose-50"
+                        title="إزالة من المعاينة"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <input
+                        type="email"
+                        value={account.email}
+                        onChange={(event) => updateParsedAccount(account.id, "email", event.target.value)}
+                        className="admin-modal-input"
+                        placeholder="البريد الإلكتروني"
+                        dir="ltr"
+                      />
+                      <input
+                        value={account.password}
+                        onChange={(event) => updateParsedAccount(account.id, "password", event.target.value)}
+                        className="admin-modal-input"
+                        placeholder="كلمة المرور"
+                        dir="ltr"
+                      />
+                      <input
+                        value={account.code_url}
+                        onChange={(event) => updateParsedAccount(account.id, "code_url", event.target.value)}
+                        className="admin-modal-input sm:col-span-2"
+                        placeholder="رابط جلب الكود (اختياري)"
+                        dir="ltr"
+                      />
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="flex flex-col-reverse gap-3 sm:flex-row">
           <button
             type="button"
             onClick={onClose}
-            disabled={loading}
+            disabled={loading || batchSaving}
             className="h-12 rounded-xl border border-[#E5DBF2] px-6 text-sm font-black text-zinc-600 transition hover:bg-zinc-50 disabled:opacity-50"
           >
             إلغاء
           </button>
           <button
-            disabled={loading}
+            disabled={loading || batchSaving || (entryMode === "smart" && parsedAccounts.length === 0)}
             className="flex h-12 flex-1 items-center justify-center gap-2 rounded-xl bg-[#8B35F5] text-sm font-black text-white shadow-[0_14px_30px_rgba(139,53,245,0.26)] transition duration-300 hover:-translate-y-0.5 hover:bg-[#7626DD] disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {editing ? <Check className="h-5 w-5" /> : <Plus className="h-5 w-5" />}
-            {loading ? "جاري الحفظ..." : editing ? "حفظ التعديلات" : "إضافة حساب جديد"}
+            {batchSaving ? <RefreshCw className="h-5 w-5 animate-spin" /> : editing ? <Check className="h-5 w-5" /> : entryMode === "smart" ? <Save className="h-5 w-5" /> : <Plus className="h-5 w-5" />}
+            {loading || batchSaving ? "جاري الحفظ..." : editing ? "حفظ التعديلات" : entryMode === "smart" ? "حفظ الحسابات المضافة" : "إضافة حساب جديد"}
           </button>
         </div>
       </form>
@@ -7133,6 +7416,7 @@ function CustomerView({
 
   async function startOsnOtpSearch() {
     if (!link?.id || !usesOsnAutoOtp || !hasCodeRequestCredit || osnOtpState === "searching") return;
+    const customerLinkId = link.id;
 
     const searchSequence = osnOtpSearchSequenceRef.current + 1;
     osnOtpSearchSequenceRef.current = searchSequence;
@@ -7147,7 +7431,7 @@ function CustomerView({
         const response = await fetch("/api/fetch-osn-code", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ link_id: link.id, phase }),
+          body: JSON.stringify({ link_id: customerLinkId, phase }),
           cache: "no-store",
         });
         const payload = await response.json().catch(() => null) as {
