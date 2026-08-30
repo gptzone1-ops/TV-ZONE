@@ -8930,6 +8930,8 @@ function ExtraCreditRequestModal({
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [pledgeAccepted, setPledgeAccepted] = useState(false);
+  const [showFinalWarning, setShowFinalWarning] = useState(false);
+  const [warningAcknowledgement, setWarningAcknowledgement] = useState("");
   const [phase, setPhase] = useState<ReviewPhase>("form");
   const [reviewProgress, setReviewProgress] = useState(0);
   const mountedRef = useRef(true);
@@ -8981,6 +8983,13 @@ function ExtraCreditRequestModal({
       return;
     }
     setError("");
+    setShowFinalWarning(true);
+  }
+
+  async function confirmAndSubmit() {
+    if (submitting) return;
+    const cleanDescription = description.trim();
+    setShowFinalWarning(false);
     setSubmitting(true);
     setReviewProgress(3);
     setPhase("checking");
@@ -9000,6 +9009,59 @@ function ExtraCreditRequestModal({
     await new Promise((resolve) => window.setTimeout(resolve, 250));
     if (!mountedRef.current) return;
     setPhase("approved");
+  }
+
+  if (showFinalWarning) {
+    const acknowledgementMatches = warningAcknowledgement.trim() === "أنا أعلم";
+    return (
+      <div className="fixed inset-0 z-[100] flex items-center justify-center bg-zinc-950/70 p-4 backdrop-blur-sm" dir="rtl">
+        <div className="w-full max-w-md rounded-3xl border border-amber-200 bg-white p-5 shadow-premium-lg sm:p-7" role="dialog" aria-modal="true" aria-labelledby="final-credit-warning-title">
+          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-amber-50 text-amber-600 shadow-[0_12px_30px_rgba(217,119,6,0.14)]">
+            <TriangleAlert className="h-8 w-8" />
+          </div>
+          <h2 id="final-credit-warning-title" className="mt-5 text-center text-2xl font-black text-zinc-950">
+            تنبيه أخير قبل رفع الطلب
+          </h2>
+          <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-4 text-sm font-bold leading-8 text-amber-950">
+            هذا الاشتراك مخصص لجهاز واحد فقط. إضافة جهاز آخر أو تشغيل الحساب على أكثر من جهاز تُعد مخالفة صريحة، وقد تؤدي إلى إلغاء الاشتراك فوراً دون تعويض أو استرداد. نحن لا نسمح ولا نبيح استخدام الاشتراك على عدة أجهزة في الوقت نفسه.
+          </div>
+          <label className="mt-5 block">
+            <span className="mb-2 block text-sm font-black text-zinc-800">
+              للتأكيد، يرجى كتابة: أنا أعلم
+            </span>
+            <input
+              value={warningAcknowledgement}
+              onChange={(event) => setWarningAcknowledgement(event.target.value)}
+              placeholder="أنا أعلم"
+              autoFocus
+              className={cn(
+                "h-13 w-full rounded-xl border-2 bg-white px-4 text-center text-base font-black outline-none transition",
+                acknowledgementMatches
+                  ? "border-emerald-400 text-emerald-700 ring-4 ring-emerald-50"
+                  : "border-amber-200 text-zinc-900 focus:border-amber-400",
+              )}
+            />
+          </label>
+          <div className="mt-5 grid gap-3 sm:grid-cols-2">
+            <button
+              type="button"
+              onClick={() => void confirmAndSubmit()}
+              className="flex min-h-13 items-center justify-center gap-2 rounded-xl bg-[#8B35F5] px-5 text-sm font-black text-white shadow-[0_12px_28px_rgba(139,53,245,0.24)] transition hover:bg-[#7626DD]"
+            >
+              <Check className="h-4 w-4" />
+              تأكيد ورفع الطلب
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowFinalWarning(false)}
+              className="min-h-13 rounded-xl border border-zinc-200 bg-white px-5 text-sm font-black text-zinc-600 transition hover:bg-zinc-50"
+            >
+              العودة للتعديل
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   if (phase !== "form") {
@@ -9162,7 +9224,7 @@ function ExtraCreditRequestModal({
               className="flex h-13 w-full items-center justify-center gap-2 rounded-xl bg-[#8B35F5] px-5 text-sm font-black text-white shadow-[0_12px_28px_rgba(139,53,245,0.25)] transition hover:bg-[#7626DD] disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none"
             >
               {submitting && <RefreshCw className="h-4 w-4 animate-spin" />}
-              {submitting ? "جاري إضافة الرصيد..." : "تأكيد ورفع الطلب"}
+              {submitting ? "جاري إضافة الرصيد..." : "متابعة لتأكيد الطلب"}
             </button>
           </div>
           <button type="button" onClick={onClose} disabled={submitting} className="h-13 rounded-xl border border-zinc-200 bg-white px-5 text-sm font-black text-zinc-600 transition hover:bg-zinc-50">
