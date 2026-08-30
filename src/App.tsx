@@ -30,6 +30,7 @@ import {
   Search,
   Settings,
   ShieldCheck,
+  ShoppingBag,
   SlidersHorizontal,
   Smartphone,
   Sparkles,
@@ -148,6 +149,7 @@ const tvApprovalSearchDurationMs = 15 * 1000;
 const externalCodeAccessDurationMs = 30 * 60 * 1000;
 const osnMonthlyAutoOtpLaunchAtMs = Date.parse("2026-08-21T03:21:29.272Z");
 const osnDeviceOnboardingLaunchAtMs = Date.parse("2026-08-30T13:26:16.000Z");
+const lastActiveSubscriptionStorageKey = "last_active_subscription";
 const adminAccountsPageSize = 10;
 const adminAccountsCacheTtlMs = 5 * 60 * 1000;
 const duplicateEmailMessage = "عفواً، هذا البريد الإلكتروني مسجل مسبقاً ولا يمكن تكراره";
@@ -777,14 +779,97 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
+  const replaceNavigate = (path: string) => {
+    window.history.replaceState({}, "", path);
+    setRoute(path);
+    window.scrollTo({ top: 0 });
+  };
+
   const shortMatch = route.match(/^\/v\/([^/]+)$/);
   const viewMatch = route.match(/^\/view\/([^/]+)$/);
   const temporaryMatch = route.match(/^\/t\/([^/]+)$/);
   if (shortMatch) return <CustomerView identifier={shortMatch[1]} lookup="short" navigate={navigate} />;
   if (viewMatch) return <CustomerView identifier={viewMatch[1]} lookup="uuid" navigate={navigate} />;
   if (temporaryMatch) return <TemporaryAccountView identifier={temporaryMatch[1]} />;
+  if (route === "/my" || route === "/my/") return <MySubscriptionPage navigate={replaceNavigate} />;
   if (route === "/compensation" || route === "/compensation/") return <CompensationPage />;
   return <AdminApp navigate={navigate} />;
+}
+
+function MySubscriptionPage({ navigate }: { navigate: (path: string) => void }) {
+  const [checking, setChecking] = useState(true);
+
+  useEffect(() => {
+    const lastCode = localStorage.getItem(lastActiveSubscriptionStorageKey)?.trim();
+    if (lastCode) {
+      navigate(`/v/${encodeURIComponent(lastCode)}`);
+      return;
+    }
+    setChecking(false);
+  }, [navigate]);
+
+  if (checking) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#F6F3FA] px-4" dir="rtl">
+        <div className="flex items-center gap-3 text-sm font-black text-[#7C2CE8]" role="status">
+          <RefreshCw className="h-5 w-5 animate-spin" />
+          جاري فتح اشتراكك...
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-b from-[#F5F1FA] via-white to-[#F8F6FB] px-4 py-8 md:py-14" dir="rtl">
+      <main className="mx-auto w-full max-w-2xl">
+        <header className="text-center">
+          <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-3xl bg-[#F0E7FF] text-[#8B35F5] shadow-[0_16px_36px_rgba(139,53,245,0.18)]">
+            <Search className="h-10 w-10" />
+          </div>
+          <p className="mt-5 text-sm font-black text-[#8B35F5]">Zone Store</p>
+          <h1 className="mt-2 text-3xl font-black leading-[1.35] text-zinc-950 md:text-4xl">
+            لم نتمكن من العثور على اشتراكك في هذا المتصفح
+          </h1>
+          <p className="mx-auto mt-4 max-w-xl text-sm font-bold leading-8 text-zinc-600 md:text-base">
+            يبدو أنك فتحت الرابط من جهاز أو متصفح جديد، يمكنك الوصول لرابطك بسهولة عبر إحدى الطرق التالية:
+          </p>
+        </header>
+
+        <section className="mt-8 grid gap-4 md:grid-cols-2" aria-label="طرق الوصول إلى الاشتراك">
+          <article className="rounded-3xl border border-emerald-200 bg-white p-5 shadow-card md:p-6">
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-50 text-[#25D366]">
+              <WhatsAppLogo className="h-7 w-7" />
+            </div>
+            <h2 className="mt-4 text-xl font-black text-zinc-950">ابحث في تطبيق الواتساب</h2>
+            <p className="mt-3 text-sm font-bold leading-8 text-zinc-600">
+              ابحث في تطبيق الواتساب عن رسالة مرسلة من متجر دكان، وستجد بداخلها رابط الشراء والاشتراك المباشر الخاص بك.
+            </p>
+          </article>
+
+          <article className="rounded-3xl border border-violet-200 bg-white p-5 shadow-card md:p-6">
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-violet-50 text-[#8B35F5]">
+              <ShoppingBag className="h-7 w-7" />
+            </div>
+            <h2 className="mt-4 text-xl font-black text-zinc-950">استعرض طلباتك في المتجر</h2>
+            <p className="mt-3 text-sm font-bold leading-8 text-zinc-600">
+              افتح متجرنا وسجل الدخول لاستعراض قائمة طلباتك السابقة، وستحصل على رابط الاشتراك هناك.
+            </p>
+          </article>
+        </section>
+
+        <a
+          href="https://tvzone.rmz.gg/"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-6 flex min-h-14 w-full items-center justify-center gap-2 rounded-2xl bg-[#8B35F5] px-5 text-center text-base font-black text-white shadow-[0_16px_36px_rgba(139,53,245,0.26)] transition hover:-translate-y-0.5 hover:bg-[#7626DD]"
+        >
+          <ShoppingBag className="h-5 w-5" />
+          الانتقال للمتجر واستعراض الطلبات
+          <ExternalLink className="h-4 w-4" />
+        </a>
+      </main>
+    </div>
+  );
 }
 
 function TemporaryAccountView({ identifier }: { identifier: string }) {
@@ -6593,15 +6678,19 @@ function CustomerView({
           demoLinks.find((item) => (lookup === "short" ? item.short_id === identifier : item.uuid === identifier)) || {
             ...demoLinks[0],
             [lookup === "short" ? "short_id" : "uuid"]: identifier,
-          };
+        };
         setLink({ ...demo, accounts: demoAccount });
+        if (lookup === "short") localStorage.setItem(lastActiveSubscriptionStorageKey, identifier);
         setLoading(false);
         return;
       }
 
       const queryColumn = lookup === "short" ? "short_id" : "uuid";
       const customerLink = await loadCustomerLinkRecord(queryColumn, identifier);
-      if (customerLink) setLink(customerLink);
+      if (customerLink) {
+        setLink(customerLink);
+        if (lookup === "short") localStorage.setItem(lastActiveSubscriptionStorageKey, identifier);
+      }
       setLoading(false);
     }
 
