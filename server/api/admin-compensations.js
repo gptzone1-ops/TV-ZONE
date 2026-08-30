@@ -34,25 +34,7 @@ function normalizeAccountType(value) {
   return validAccountTypes.has(type) ? type : null;
 }
 
-function remainingDays(expiresAt) {
-  const expiryMs = Date.parse(String(expiresAt || ""));
-  if (!Number.isFinite(expiryMs)) return null;
-  return Math.max(0, Math.ceil((expiryMs - Date.now()) / 86400000));
-}
-
-function customerReferenceFromUrl(value) {
-  try {
-    const url = new URL(String(value || "").trim());
-    const segments = url.pathname.split("/").filter(Boolean);
-    if (segments[0] === "v" && segments[1]) return { column: "short_id", value: decodeURIComponent(segments[1]) };
-    if (segments[0] === "view" && segments[1]) return { column: "uuid", value: decodeURIComponent(segments[1]) };
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-async function requestMetadataMap(supabase, requests) {
+async function requestTypeMap(supabase, requests) {
   const clientCodes = [...new Set(requests.map((request) => String(request.client_code || "").trim().toUpperCase()).filter(Boolean))];
   if (!clientCodes.length) return new Map();
 
@@ -67,70 +49,15 @@ async function requestMetadataMap(supabase, requests) {
 
   const { data: accounts, error: accountsError } = await supabase
     .from("accounts")
-    .select("id,account_type,email,expires_at")
+    .select("id,account_type")
     .in("id", accountIds);
   if (accountsError) throw accountsError;
 
-  const accountsById = new Map((accounts || []).map((account) => [account.id, account]));
+  const accountTypes = new Map((accounts || []).map((account) => [account.id, normalizeAccountType(account.account_type)]));
   return new Map((links || []).map((link) => [
     String(link.client_code || "").trim().toUpperCase(),
-    (() => {
-      const account = accountsById.get(link.account_id);
-      return {
-        account_type: normalizeAccountType(account?.account_type),
-        email: String(account?.email || "").trim() || null,
-        days_remaining: remainingDays(account?.expires_at),
-      };
-    })(),
+    accountTypes.get(link.account_id) || null,
   ]));
-}
-
-async function poolMetadataMap(supabase, poolLinks) {
-  const references = poolLinks
-    .map((poolLink) => ({ poolLink, reference: customerReferenceFromUrl(poolLink.replacement_link) }))
-    .filter((item) => item.reference);
-  if (!references.length) return new Map();
-
-  const shortIds = [...new Set(references.filter((item) => item.reference.column === "short_id").map((item) => item.reference.value))];
-  const uuids = [...new Set(references.filter((item) => item.reference.column === "uuid").map((item) => item.reference.value))];
-  const queries = [];
-  if (shortIds.length) {
-    queries.push(supabase.from("customer_links").select("id,short_id,uuid,account_id").in("short_id", shortIds));
-  }
-  if (uuids.length) {
-    queries.push(supabase.from("customer_links").select("id,short_id,uuid,account_id").in("uuid", uuids));
-  }
-
-  const linkResults = await Promise.all(queries);
-  const resolvedLinks = [];
-  for (const result of linkResults) {
-    if (result.error) throw result.error;
-    resolvedLinks.push(...(result.data || []));
-  }
-
-  const accountIds = [...new Set(resolvedLinks.map((link) => link.account_id).filter(Boolean))];
-  if (!accountIds.length) return new Map();
-  const { data: accounts, error: accountsError } = await supabase
-    .from("accounts")
-    .select("id,email,expires_at")
-    .in("id", accountIds);
-  if (accountsError) throw accountsError;
-
-  const accountsById = new Map((accounts || []).map((account) => [account.id, account]));
-  const linksByShortId = new Map(resolvedLinks.filter((link) => link.short_id).map((link) => [String(link.short_id), link]));
-  const linksByUuid = new Map(resolvedLinks.filter((link) => link.uuid).map((link) => [String(link.uuid), link]));
-  const metadata = new Map();
-  for (const { poolLink, reference } of references) {
-    const customerLink = reference.column === "short_id"
-      ? linksByShortId.get(reference.value)
-      : linksByUuid.get(reference.value);
-    const account = customerLink ? accountsById.get(customerLink.account_id) : null;
-    metadata.set(poolLink.id, {
-      email: String(account?.email || "").trim() || null,
-      days_remaining: remainingDays(account?.expires_at),
-    });
-  }
-  return metadata;
 }
 
 async function availableLinkCounts(supabase) {
@@ -177,25 +104,13 @@ async function dashboardSnapshot(supabase) {
   if (availableLinksResult.error) throw availableLinksResult.error;
 
   const safeRequests = requestsResult.data || [];
-  const safeAvailableLinks = availableLinksResult.data || [];
-  const [metadataByCode, poolMetadata, availableCounts] = await Promise.all([
-    requestMetadataMap(supabase, safeRequests),
-    poolMetadataMap(supabase, safeAvailableLinks),
+  const [typesByCode, availableCounts] = await Promise.all([
+    requestTypeMap(supabase, safeRequests),
     availableLinkCounts(supabase),
   ]);
-  const typedRequests = safeRequests.map((request) => {
-    const metadata = metadataByCode.get(String(request.client_code || "").trim().toUpperCase());
-    return {
-      ...request,
-      account_type: metadata?.account_type || null,
-      email: metadata?.email || null,
-      days_remaining: metadata?.days_remaining ?? null,
-    };
-  });
-  const enrichedAvailableLinks = safeAvailableLinks.map((poolLink) => ({
-    ...poolLink,
-    email: poolMetadata.get(poolLink.id)?.email || null,
-    days_remaining: poolMetadata.get(poolLink.id)?.days_remaining ?? null,
+  const typedRequests = safeRequests.map((request) => ({
+    ...request,
+    account_type: typesByCode.get(String(request.client_code || "").trim().toUpperCase()) || null,
   }));
   const pendingCounts = typedRequests.reduce(
     (counts, request) => {
@@ -210,127 +125,11 @@ async function dashboardSnapshot(supabase) {
 
   return {
     requests: typedRequests,
-    available_links: enrichedAvailableLinks,
+    available_links: availableLinksResult.data || [],
     available_count: availableCounts.total,
     available_counts: availableCounts,
     pending_counts: pendingCounts,
   };
-}
-
-function buildDistributionPlan(snapshot, mode) {
-  const requests = snapshot.requests
-    .filter((request) => request.status === "pending" && request.account_type && (mode === "all" || request.account_type === mode))
-    .sort((first, second) => String(first.created_at).localeCompare(String(second.created_at)) || String(first.id).localeCompare(String(second.id)));
-  const availableByType = {
-    private: snapshot.available_links.filter((link) => link.account_type === "private"),
-    shared: snapshot.available_links.filter((link) => link.account_type === "shared"),
-  };
-  const matches = [];
-
-  for (const request of requests) {
-    const candidates = availableByType[request.account_type];
-    if (!candidates?.length) continue;
-    let bestIndex = 0;
-    let bestDifference = Number.POSITIVE_INFINITY;
-    for (let index = 0; index < candidates.length; index += 1) {
-      const link = candidates[index];
-      const difference = Number.isFinite(request.days_remaining) && Number.isFinite(link.days_remaining)
-        ? Math.abs(link.days_remaining - request.days_remaining)
-        : Number.POSITIVE_INFINITY;
-      if (difference < bestDifference) {
-        bestIndex = index;
-        bestDifference = difference;
-      }
-    }
-
-    const [selectedLink] = candidates.splice(bestIndex, 1);
-    const dayDifference = Number.isFinite(request.days_remaining) && Number.isFinite(selectedLink.days_remaining)
-      ? selectedLink.days_remaining - request.days_remaining
-      : null;
-    matches.push({
-      request_id: request.id,
-      client_code: request.client_code,
-      request_email: request.email,
-      account_type: request.account_type,
-      request_days: request.days_remaining,
-      link_id: selectedLink.id,
-      replacement_link: selectedLink.replacement_link,
-      link_days: selectedLink.days_remaining,
-      day_difference: dayDifference,
-    });
-  }
-
-  return matches;
-}
-
-async function executeDistributionPlan(supabase, matches) {
-  if (!matches.length) return 0;
-  const requestIds = matches.map((match) => match.request_id);
-  const linkIds = matches.map((match) => match.link_id);
-  if (new Set(requestIds).size !== requestIds.length || new Set(linkIds).size !== linkIds.length) {
-    throw new Error("duplicate_distribution_assignment");
-  }
-
-  const [requestsResult, linksResult] = await Promise.all([
-    supabase.from("compensation_requests").select("id,status").in("id", requestIds),
-    supabase.from("compensation_link_pool").select("id,status,assigned_request_id,assigned_at").in("id", linkIds),
-  ]);
-  if (requestsResult.error) throw requestsResult.error;
-  if (linksResult.error) throw linksResult.error;
-  if ((requestsResult.data || []).some((request) => request.status !== "pending") || requestsResult.data?.length !== requestIds.length) {
-    throw new Error("distribution_plan_stale");
-  }
-  if ((linksResult.data || []).some((link) => link.status !== "available" || link.assigned_request_id || link.assigned_at) || linksResult.data?.length !== linkIds.length) {
-    throw new Error("distribution_plan_stale");
-  }
-
-  const completed = [];
-  try {
-    for (const match of matches) {
-      const assignedAt = new Date().toISOString();
-      const { data: claimedLinks, error: claimError } = await supabase
-        .from("compensation_link_pool")
-        .update({ status: "assigned", assigned_request_id: match.request_id, assigned_at: assignedAt })
-        .eq("id", match.link_id)
-        .eq("status", "available")
-        .is("assigned_request_id", null)
-        .is("assigned_at", null)
-        .select("id");
-      if (claimError || claimedLinks?.length !== 1) throw claimError || new Error("distribution_plan_stale");
-
-      const { data: updatedRequests, error: requestError } = await supabase
-        .from("compensation_requests")
-        .update({ status: "completed", replacement_link: match.replacement_link })
-        .eq("id", match.request_id)
-        .eq("status", "pending")
-        .select("id");
-      if (requestError || updatedRequests?.length !== 1) {
-        await supabase
-          .from("compensation_link_pool")
-          .update({ status: "available", assigned_request_id: null, assigned_at: null })
-          .eq("id", match.link_id)
-          .eq("assigned_request_id", match.request_id);
-        throw requestError || new Error("distribution_plan_stale");
-      }
-      completed.push(match);
-    }
-  } catch (error) {
-    for (const match of completed.reverse()) {
-      await supabase
-        .from("compensation_requests")
-        .update({ status: "pending", replacement_link: null })
-        .eq("id", match.request_id)
-        .eq("replacement_link", match.replacement_link);
-      await supabase
-        .from("compensation_link_pool")
-        .update({ status: "available", assigned_request_id: null, assigned_at: null })
-        .eq("id", match.link_id)
-        .eq("assigned_request_id", match.request_id);
-    }
-    throw error;
-  }
-
-  return completed.length;
 }
 
 export default async function handler(req, res) {
@@ -438,58 +237,6 @@ export default async function handler(req, res) {
         throw error;
       }
       return send(res, 200, { success: true, ...(await dashboardSnapshot(supabase)) });
-    }
-
-    if (action === "preview_distribution") {
-      const mode = String(req.body?.mode || "all").trim().toLowerCase();
-      if (!["private", "shared", "all"].includes(mode)) {
-        return send(res, 400, { success: false, error: "invalid_distribution_mode" });
-      }
-      const snapshot = await dashboardSnapshot(supabase);
-      const matches = buildDistributionPlan(snapshot, mode);
-      return send(res, 200, {
-        success: true,
-        mode,
-        matches,
-        match_count: matches.length,
-      });
-    }
-
-    if (action === "confirm_distribution") {
-      const mode = String(req.body?.mode || "all").trim().toLowerCase();
-      if (!["private", "shared", "all"].includes(mode)) {
-        return send(res, 400, { success: false, error: "invalid_distribution_mode" });
-      }
-      const submittedMatches = Array.isArray(req.body?.matches) ? req.body.matches : [];
-      const submittedPairs = submittedMatches
-        .map((match) => `${String(match?.request_id || "").trim()}:${String(match?.link_id || "").trim()}`)
-        .filter((pair) => !pair.startsWith(":"))
-        .sort();
-      const before = await dashboardSnapshot(supabase);
-      const currentPlan = buildDistributionPlan(before, mode);
-      const currentPairs = currentPlan.map((match) => `${match.request_id}:${match.link_id}`).sort();
-      if (!currentPlan.length || submittedPairs.length !== currentPairs.length || submittedPairs.some((pair, index) => pair !== currentPairs[index])) {
-        return send(res, 409, { success: false, error: "distribution_plan_stale" });
-      }
-
-      let assignedCount = 0;
-      try {
-        assignedCount = await executeDistributionPlan(supabase, currentPlan);
-      } catch (executionError) {
-        if (String(executionError?.message || "").includes("distribution_plan_stale")) {
-          return send(res, 409, { success: false, error: "distribution_plan_stale" });
-        }
-        throw executionError;
-      }
-
-      const snapshot = await dashboardSnapshot(supabase);
-      return send(res, 200, {
-        success: true,
-        mode,
-        assigned_count: assignedCount,
-        remaining_counts: snapshot.pending_counts,
-        ...snapshot,
-      });
     }
 
     if (action === "distribute") {

@@ -79,8 +79,6 @@ export type CompensationRequest = {
   id: string;
   client_code: string;
   account_type?: "private" | "shared" | null;
-  email?: string | null;
-  days_remaining?: number | null;
   status: CompensationRequestStatus;
   replacement_link: string | null;
   created_at: string;
