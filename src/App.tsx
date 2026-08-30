@@ -110,6 +110,19 @@ type CompensationPoolLink = {
   assigned_request_id: string | null;
   assigned_at: string | null;
   created_at: string;
+  email?: string | null;
+  days_remaining?: number | null;
+};
+type CompensationDistributionMatch = {
+  request_id: string;
+  client_code: string;
+  request_email: string | null;
+  account_type: "private" | "shared";
+  request_days: number | null;
+  link_id: string;
+  replacement_link: string;
+  link_days: number | null;
+  day_difference: number | null;
 };
 type ServiceTheme = {
   type: ServiceType;
@@ -4331,6 +4344,10 @@ function CompensationAdminPage({
   const [privateLinksInput, setPrivateLinksInput] = useState("");
   const [sharedLinksInput, setSharedLinksInput] = useState("");
   const [showDistributionModal, setShowDistributionModal] = useState(false);
+  const [distributionPreview, setDistributionPreview] = useState<{
+    mode: "private" | "shared" | "all";
+    matches: CompensationDistributionMatch[];
+  } | null>(null);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState<string | null>(null);
 
@@ -4492,25 +4509,48 @@ function CompensationAdminPage({
     }
   }
 
-  async function distributeLinks(mode: "private" | "shared" | "all") {
-    setProcessing(`distribute-${mode}`);
+  async function previewDistribution(mode: "private" | "shared" | "all") {
+    setProcessing(`preview-${mode}`);
     try {
-      const payload = await callAdminApi("distribute", { mode });
-      applySnapshot(payload);
+      const payload = await callAdminApi("preview_distribution", { mode });
+      const matches = Array.isArray(payload.matches) ? payload.matches as CompensationDistributionMatch[] : [];
+      if (!matches.length) {
+        setToast({ label: "لا توجد طلبات وروابط متاحة يمكن مطابقتها", tone: "error", at: Date.now() });
+        return;
+      }
+      setDistributionPreview({ mode, matches });
       setShowDistributionModal(false);
-      const remainingPrivate = Number(payload.remaining_counts?.private || 0);
-      const remainingShared = Number(payload.remaining_counts?.shared || 0);
-      const remainingText = remainingPrivate || remainingShared
-        ? `، المتبقي: ${remainingPrivate} خاص و${remainingShared} مشترك`
-        : "";
-      setToast({
-        label: `تم توزيع ${Number(payload.assigned_count || 0)} رابط${remainingText}`,
-        tone: remainingText ? "error" : "success",
-        at: Date.now(),
+    } catch (previewError) {
+      console.error("Compensation distribution preview failed:", previewError);
+      setToast({ label: "تعذر إعداد معاينة التوزيع", tone: "error", at: Date.now() });
+    } finally {
+      setProcessing(null);
+    }
+  }
+
+  async function confirmDistribution() {
+    if (!distributionPreview || processing !== null) return;
+    setProcessing("confirm-distribution");
+    try {
+      const payload = await callAdminApi("confirm_distribution", {
+        mode: distributionPreview.mode,
+        matches: distributionPreview.matches.map((match) => ({
+          request_id: match.request_id,
+          link_id: match.link_id,
+        })),
       });
+      applySnapshot(payload);
+      setDistributionPreview(null);
+      setToast({ label: "تم توزيع التعويضات بنجاح! ✅", at: Date.now() });
     } catch (distributionError) {
-      console.error("Compensation distribution failed:", distributionError);
-      setToast({ label: "تعذر توزيع الروابط", tone: "error", at: Date.now() });
+      console.error("Compensation distribution confirmation failed:", distributionError);
+      const errorCode = (distributionError as Error & { code?: string }).code;
+      if (errorCode === "distribution_plan_stale") {
+        setDistributionPreview(null);
+        setToast({ label: "تغيرت حالة الطلبات أو الروابط؛ افتح المعاينة مجدداً", tone: "error", at: Date.now() });
+      } else {
+        setToast({ label: "تعذر اعتماد توزيع التعويضات", tone: "error", at: Date.now() });
+      }
     } finally {
       setProcessing(null);
     }
@@ -4831,7 +4871,7 @@ function CompensationAdminPage({
                   <button
                     key={option.mode}
                     type="button"
-                    onClick={() => void distributeLinks(option.mode)}
+                    onClick={() => void previewDistribution(option.mode)}
                     disabled={processing !== null || option.disabled}
                     className="flex min-h-16 items-center justify-between gap-4 rounded-2xl border border-[#DCCBFA] bg-[#FCFAFF] px-4 py-3 text-right transition hover:border-[#8B35F5] hover:bg-[#F6F0FF] disabled:cursor-not-allowed disabled:opacity-45"
                   >
@@ -4839,7 +4879,7 @@ function CompensationAdminPage({
                       <span className="block text-sm font-black">{option.title}</span>
                       <span className="mt-1 block text-xs font-bold text-zinc-500">{option.detail}</span>
                     </span>
-                    {processing === `distribute-${option.mode}` ? (
+                    {processing === `preview-${option.mode}` ? (
                       <RefreshCw className="h-5 w-5 shrink-0 animate-spin text-[#8B35F5]" />
                     ) : (
                       <ArrowLeft className="h-5 w-5 shrink-0 text-[#8B35F5]" />
@@ -4853,6 +4893,108 @@ function CompensationAdminPage({
                   يوجد {pendingCounts.unknown} طلب تعذر تحديد نوعه. لن يتم تغييره أو إسناد رابط له تلقائياً.
                 </p>
               )}
+            </div>
+          </div>
+        )}
+
+        {distributionPreview && (
+          <div
+            className="fixed inset-0 z-[60] flex items-center justify-center overflow-y-auto bg-[#17141F]/75 px-4 py-6 backdrop-blur-sm"
+            dir="rtl"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="distribution-review-title"
+          >
+            <div className="my-auto flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-3xl border border-[#DCCBFA] bg-white shadow-[0_30px_90px_rgba(20,10,35,0.30)]">
+              <div className="flex items-start justify-between gap-4 border-b border-[#EEE7F8] px-5 py-5 md:px-6">
+                <div>
+                  <p className="text-xs font-black text-[#8B35F5]">مراجعة المطابقة قبل الاعتماد</p>
+                  <h2 id="distribution-review-title" className="mt-1 text-xl font-black md:text-2xl">توزيع {distributionPreview.matches.length} طلب تعويض</h2>
+                  <p className="mt-2 text-xs font-bold leading-6 text-zinc-500">تم اختيار أقرب رابط متاح بالأيام داخل نوع الحساب نفسه.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setDistributionPreview(null)}
+                  disabled={processing !== null}
+                  title="إغلاق"
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[#E8DCFF] text-zinc-500 transition hover:bg-[#F8F4FF] disabled:opacity-40"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4 md:px-6">
+                <div className="space-y-3">
+                  {distributionPreview.matches.map((match) => {
+                    const difference = match.day_difference;
+                    const exact = difference === 0;
+                    const differenceLabel = difference == null
+                      ? "تعذر حساب الفرق"
+                      : exact
+                        ? "تطابق تام ✅"
+                        : `فرق ${difference > 0 ? "+" : ""}${difference} ${Math.abs(difference) === 1 ? "يوم" : "أيام"} ⚠️`;
+                    return (
+                      <article key={match.request_id} className="rounded-2xl border border-[#E8DCFF] bg-[#FCFAFF] p-4">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="min-w-0">
+                            <p className="text-xs font-bold text-zinc-500">رقم الطلب</p>
+                            <p className="mt-1 font-black text-[#7C2CE8]" dir="ltr">{match.client_code}</p>
+                            <p className="mt-1 truncate text-sm font-bold text-zinc-700" dir="ltr" title={match.request_email || ""}>
+                              {match.request_email || "البريد غير متوفر"}
+                            </p>
+                          </div>
+                          <span className={cn(
+                            "inline-flex w-fit shrink-0 rounded-full px-3 py-1.5 text-xs font-black",
+                            exact
+                              ? "bg-emerald-100 text-emerald-700"
+                              : difference == null
+                                ? "bg-zinc-100 text-zinc-600"
+                                : "bg-amber-100 text-amber-800",
+                          )}>
+                            {differenceLabel}
+                          </span>
+                        </div>
+                        <div className="mt-3 grid grid-cols-2 gap-3">
+                          <div className="rounded-xl border border-violet-100 bg-white p-3 text-center">
+                            <p className="text-[11px] font-bold text-zinc-500">الأيام المطلوبة</p>
+                            <p className="mt-1 text-lg font-black text-zinc-950">{match.request_days ?? "غير معروف"}</p>
+                          </div>
+                          <div className="rounded-xl border border-violet-100 bg-white p-3 text-center">
+                            <p className="text-[11px] font-bold text-zinc-500">أيام الرابط المتاح</p>
+                            <p className="mt-1 text-lg font-black text-zinc-950">{match.link_days ?? "غير معروف"}</p>
+                          </div>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+
+                {distributionPreview.matches.some((match) => match.day_difference !== 0) && (
+                  <p className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-black leading-7 text-amber-900">
+                    توجد فروقات بسيطة في عدد الأيام لبعض الروابط، هل تريد تأكيد التوزيع وتخطي الفارق؟
+                  </p>
+                )}
+              </div>
+
+              <div className="grid gap-3 border-t border-[#EEE7F8] bg-white px-5 py-4 sm:grid-cols-2 md:px-6">
+                <button
+                  type="button"
+                  onClick={() => setDistributionPreview(null)}
+                  disabled={processing !== null}
+                  className="min-h-12 rounded-xl border border-[#DCCBFA] bg-white px-4 text-sm font-black text-zinc-600 transition hover:bg-[#F8F4FF] disabled:opacity-45"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void confirmDistribution()}
+                  disabled={processing !== null}
+                  className="flex min-h-12 items-center justify-center gap-2 rounded-xl bg-[#8B35F5] px-4 text-sm font-black text-white shadow-[0_12px_28px_rgba(139,53,245,0.25)] transition hover:bg-[#7626DD] disabled:cursor-wait disabled:opacity-50"
+                >
+                  {processing === "confirm-distribution" ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                  تأكيد وتوزيع التعويضات الآن
+                </button>
+              </div>
             </div>
           </div>
         )}
