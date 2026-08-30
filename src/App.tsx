@@ -58,7 +58,6 @@ import type {
   CompensationDistribution,
   CompensationRequest,
   CustomerLink,
-  ExtraCreditReason,
   ExtraCreditRequest,
   ExtraCreditRequestStatus,
   NetflixAccount,
@@ -147,18 +146,6 @@ const externalCodeAccessDurationMs = 30 * 60 * 1000;
 const osnMonthlyAutoOtpLaunchAtMs = Date.parse("2026-08-21T03:21:29.272Z");
 const adminAccountsPageSize = 10;
 const adminAccountsCacheTtlMs = 5 * 60 * 1000;
-const extraCreditReasons: ExtraCreditReason[] = [
-  "كود خاطئ",
-  "استبدال الجهاز أو الدخول بجهاز آخر",
-  "عدم تطبيق الخطوات وذهاب الكود",
-  "أخرى",
-];
-const extraCreditReasonLabels: Record<ExtraCreditReason, string> = {
-  "استبدال الجهاز أو الدخول بجهاز آخر": "تغيير الجهاز / تسجيل الدخول من جهاز آخر",
-  "كود خاطئ": "مشكلة في الكود / لم يفتح الحساب",
-  "عدم تطبيق الخطوات وذهاب الكود": "الحساب لا يعمل / مشكلة تسجيل دخول",
-  "أخرى": "أخرى",
-};
 const duplicateEmailMessage = "عفواً، هذا البريد الإلكتروني مسجل مسبقاً ولا يمكن تكراره";
 const duplicateEmailSaveMessage = duplicateEmailMessage;
 const emptyEmailMessage = "أدخل البريد الإلكتروني أولاً";
@@ -7345,10 +7332,8 @@ function CustomerView({
   }
 
   async function submitExtraCreditRequest(
-    reasonType: ExtraCreditReason,
     description: string,
-    screenshot: File,
-    onProgress?: (progress: number) => void,
+    screenshot: File | null,
   ): Promise<ExtraCreditRequest | null> {
     if (!link?.id || extraCreditRequest?.status === "pending") return null;
     const cleanDescription = description.trim();
@@ -7361,96 +7346,81 @@ function CustomerView({
       const demoRequest: ExtraCreditRequest = {
         id: `demo-${Date.now()}`,
         customer_id: link.id,
-        reason_type: reasonType,
+        reason_type: "أخرى",
         description: cleanDescription,
-        image_url: URL.createObjectURL(screenshot),
-        attachment_type: reasonType === "استبدال الجهاز أو الدخول بجهاز آخر" ? "video" : "image",
+        image_url: screenshot ? URL.createObjectURL(screenshot) : null,
+        attachment_type: "image",
         status: "approved",
         created_at: new Date().toISOString(),
       };
       setExtraCreditRequest(demoRequest);
-      onProgress?.(100);
+      setLink((current) => current ? {
+        ...current,
+        code_request_limit: Math.max(0, current.code_request_limit ?? 1) + 1,
+        external_code_used: false,
+        external_code_used_at: null,
+        external_code_first_opened_at: null,
+      } : current);
       return demoRequest;
     }
 
     try {
-      onProgress?.(5);
-      const attachmentType = reasonType === "استبدال الجهاز أو الدخول بجهاز آخر" ? "video" : "image";
-      const extension =
-        screenshot.name.split(".").pop()?.toLowerCase().replace(/[^a-z0-9]/g, "") ||
-        (attachmentType === "video" ? "mp4" : "jpg");
-      const randomPart = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-      const storagePath = `credit-requests/${link.id}/${randomPart}.${extension}`;
-      const { error: uploadError } = await supabase.storage
-        .from(extraCreditStorageBucket)
-        .upload(storagePath, screenshot, { contentType: screenshot.type, upsert: false });
-      if (uploadError) throw uploadError;
-      onProgress?.(30);
-
-      const { data: publicUrlData } = supabase.storage.from(extraCreditStorageBucket).getPublicUrl(storagePath);
-      const imageUrl = publicUrlData.publicUrl;
-      const { data, error } = await supabase
-        .from("extra_credit_requests")
-        .insert({
-          customer_id: link.id,
-          reason_type: reasonType,
-          description: cleanDescription,
-          image_url: imageUrl,
-          attachment_type: attachmentType,
-          status: "pending",
-        })
-        .select("*")
-        .single();
-
-      if (error) {
-        if (error.code === "23505") {
-          setToast({ label: "لديك طلب قيد المراجعة بالفعل", tone: "error", at: Date.now() });
-          return null;
-        }
-        throw error;
+      let imageUrl: string | null = null;
+      if (screenshot) {
+        const extension = screenshot.name.split(".").pop()?.toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
+        const randomPart = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+        const storagePath = `credit-requests/${link.id}/${randomPart}.${extension}`;
+        const { error: uploadError } = await supabase.storage
+          .from(extraCreditStorageBucket)
+          .upload(storagePath, screenshot, { contentType: screenshot.type, upsert: false });
+        if (uploadError) throw uploadError;
+        imageUrl = supabase.storage.from(extraCreditStorageBucket).getPublicUrl(storagePath).data.publicUrl;
       }
 
-      setExtraCreditRequest(data as ExtraCreditRequest);
-      onProgress?.(35);
-      setToast({
-        label: "تم إرسال طلبك بنجاح، سيتم مراجعته والتنفيذ في أقرب وقت",
-        at: Date.now(),
+      const response = await fetch("/api/notify-extra-credit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "instant_approve",
+          customer_id: link.id,
+          description: cleanDescription,
+          image_url: imageUrl,
+        }),
       });
-      processExtraCreditRequestInBackground(data.id);
-      return data as ExtraCreditRequest;
-    } catch (error) {
-      console.error("Extra credit request submit error:", error);
-      setToast({ label: "تعذر إرسال الطلب، تحقق من المرفق وحاول مرة أخرى", tone: "error", at: Date.now() });
-      return null;
-    }
-  }
+      const result = (await response.json().catch(() => null)) as {
+        success?: boolean;
+        error?: string;
+        request?: ExtraCreditRequest;
+      } | null;
+      if (!response.ok || !result?.success || !result.request) {
+        if (result?.error === "credit_balance_available") {
+          setToast({ label: "لديك رصيد متاح بالفعل ولا تحتاج إلى طلب جديد", tone: "error", at: Date.now() });
+          return null;
+        }
+        if (result?.error === "request_pending") {
+          setToast({ label: "لديك طلب قيد المعالجة بالفعل", tone: "error", at: Date.now() });
+          return null;
+        }
+        throw new Error(result?.error || "instant_approval_failed");
+      }
 
-  async function checkExtraCreditRequestStatus(requestId: string): Promise<ExtraCreditRequest | null> {
-    if (!supabase) {
-      return extraCreditRequest?.id === requestId ? extraCreditRequest : null;
-    }
-
-    const { data, error } = await supabase
-      .from("extra_credit_requests")
-      .select("*")
-      .eq("id", requestId)
-      .maybeSingle();
-
-    if (error) {
-      console.error("Supabase extra credit request status error:", error);
-      return null;
-    }
-
-    const request = (data || null) as ExtraCreditRequest | null;
-    if (request) setExtraCreditRequest(request);
-
-    if (request && (request.status === "approved" || request.status === "rejected") && link?.id) {
+      setExtraCreditRequest(result.request);
+      void fetch("/api/notify-extra-credit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "notify_instant_approval", request_id: result.request.id }),
+        keepalive: true,
+      }).then((notificationResponse) => {
+        if (!notificationResponse.ok) throw new Error(`telegram_notification_failed_${notificationResponse.status}`);
+      }).catch((notificationError) => {
+        console.error("Instant credit Telegram notification failed:", notificationError);
+      });
       const refreshedLink = await loadCustomerLinkRecord("id", link.id);
       if (refreshedLink) {
         setLink(refreshedLink);
         const refreshedLimit = Math.max(0, refreshedLink.code_request_limit ?? 1);
         const refreshedUsed = Math.max(0, refreshedLink.code_requested_count ?? 0);
-        if (request.status === "approved" && usesOsnAutoOtp && refreshedUsed < refreshedLimit) {
+        if (usesOsnAutoOtp && refreshedUsed < refreshedLimit) {
           osnOtpSearchSequenceRef.current += 1;
           setOsnOtpState("idle");
           setOsnOtpCode(null);
@@ -7458,9 +7428,16 @@ function CustomerView({
           setOsnOtpDeadlineAt(null);
         }
       }
+      setToast({
+        label: "تم قبول طلبك وإضافة الرصيد إلى حسابك فوراً",
+        at: Date.now(),
+      });
+      return result.request;
+    } catch (error) {
+      console.error("Extra credit request submit error:", error);
+      setToast({ label: "تعذر إضافة الرصيد حالياً، حاول مرة أخرى", tone: "error", at: Date.now() });
+      return null;
     }
-
-    return request;
   }
 
   function openPreRequestModal() {
@@ -8814,7 +8791,6 @@ function CustomerView({
             <ExtraCreditRequestModal
               onClose={() => setShowExtraCreditModal(false)}
               onSubmit={submitExtraCreditRequest}
-              onCheckStatus={checkExtraCreditRequestStatus}
             />
           )}
 
@@ -8940,19 +8916,14 @@ function ExtraCreditRequestAction({
 function ExtraCreditRequestModal({
   onClose,
   onSubmit,
-  onCheckStatus,
 }: {
   onClose: () => void;
   onSubmit: (
-    reasonType: ExtraCreditReason,
     description: string,
-    screenshot: File,
-    onProgress?: (progress: number) => void,
+    screenshot: File | null,
   ) => Promise<ExtraCreditRequest | null>;
-  onCheckStatus: (requestId: string) => Promise<ExtraCreditRequest | null>;
 }) {
-  type ReviewPhase = "form" | "checking" | "approved" | "rejected" | "manual";
-  const [reasonType, setReasonType] = useState<ExtraCreditReason>(extraCreditReasons[0]);
+  type ReviewPhase = "form" | "checking" | "approved";
   const [description, setDescription] = useState("");
   const [screenshot, setScreenshot] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -8960,16 +8931,12 @@ function ExtraCreditRequestModal({
   const [submitting, setSubmitting] = useState(false);
   const [pledgeAccepted, setPledgeAccepted] = useState(false);
   const [phase, setPhase] = useState<ReviewPhase>("form");
-  const [decisionRequest, setDecisionRequest] = useState<ExtraCreditRequest | null>(null);
   const [reviewProgress, setReviewProgress] = useState(0);
   const mountedRef = useRef(true);
-  const manualCloseTimerRef = useRef<number | null>(null);
-  const requiresVideo = reasonType === "استبدال الجهاز أو الدخول بجهاز آخر";
 
   useEffect(() => {
     return () => {
       mountedRef.current = false;
-      if (manualCloseTimerRef.current) window.clearTimeout(manualCloseTimerRef.current);
     };
   }, []);
 
@@ -8998,55 +8965,6 @@ function ExtraCreditRequestModal({
     return () => URL.revokeObjectURL(url);
   }, [screenshot]);
 
-  async function waitForDecision(createdRequest: ExtraCreditRequest) {
-    let latestRequest = createdRequest;
-    let nextRecoveryAt = Date.now() + 16_000;
-
-    while (mountedRef.current) {
-      try {
-        const refreshedRequest = await onCheckStatus(createdRequest.id);
-        if (refreshedRequest) latestRequest = refreshedRequest;
-
-        if (
-          latestRequest.status === "approved" ||
-          latestRequest.status === "rejected"
-        ) {
-          return latestRequest;
-        }
-        if (latestRequest.ai_decision === "manual_review") {
-          return latestRequest;
-        }
-
-        if (latestRequest.ai_decision === "processing") {
-          setReviewProgress((current) => Math.max(current, 45));
-        }
-        if (Date.now() >= nextRecoveryAt) {
-          processExtraCreditRequestInBackground(createdRequest.id);
-          nextRecoveryAt = Date.now() + 16_000;
-        }
-      } catch (pollError) {
-        console.error("Extra credit request polling error:", pollError);
-      }
-
-      await new Promise((resolve) => window.setTimeout(resolve, 1_200));
-    }
-
-    return latestRequest;
-  }
-
-  function resetForAnotherRequest() {
-    if (manualCloseTimerRef.current) window.clearTimeout(manualCloseTimerRef.current);
-    setReasonType(extraCreditReasons[0]);
-    setDescription("");
-    setScreenshot(null);
-    setError("");
-    setSubmitting(false);
-    setPledgeAccepted(false);
-    setDecisionRequest(null);
-    setReviewProgress(0);
-    setPhase("form");
-  }
-
   async function submit(event: FormEvent) {
     event.preventDefault();
     const cleanDescription = description.trim();
@@ -9054,16 +8972,8 @@ function ExtraCreditRequestModal({
       setError("يجب ألا يقل وصف المشكلة عن 10 أحرف.");
       return;
     }
-    if (!screenshot) {
-      setError(requiresVideo ? "يرجى إرفاق مقطع فيديو يوضح تسجيل الخروج." : "يرجى إرفاق صورة إثبات للمشكلة.");
-      return;
-    }
-    if (requiresVideo && !screenshot.type.startsWith("video/")) {
-      setError("هذا السبب يتطلب إرفاق مقطع فيديو.");
-      return;
-    }
-    if (!requiresVideo && !screenshot.type.startsWith("image/")) {
-      setError("يرجى إرفاق صورة إثبات للمشكلة.");
+    if (screenshot && !screenshot.type.startsWith("image/")) {
+      setError("المرفق الاختياري يجب أن يكون صورة.");
       return;
     }
     if (!pledgeAccepted) {
@@ -9075,10 +8985,8 @@ function ExtraCreditRequestModal({
     setReviewProgress(3);
     setPhase("checking");
     const createdRequest = await onSubmit(
-      reasonType,
       cleanDescription,
       screenshot,
-      (progress) => setReviewProgress((current) => Math.max(current, progress)),
     );
     if (!mountedRef.current) return;
     setSubmitting(false);
@@ -9088,37 +8996,20 @@ function ExtraCreditRequestModal({
       return;
     }
 
-    setDecisionRequest(createdRequest);
-    setReviewProgress((current) => Math.max(current, 35));
-    const reviewedRequest = await waitForDecision(createdRequest);
-    if (!mountedRef.current) return;
-
-    setDecisionRequest(reviewedRequest);
     setReviewProgress(100);
-    await new Promise((resolve) => window.setTimeout(resolve, 350));
+    await new Promise((resolve) => window.setTimeout(resolve, 250));
     if (!mountedRef.current) return;
-    if (reviewedRequest.status === "approved") {
-      setPhase("approved");
-    } else if (reviewedRequest.status === "rejected") {
-      setPhase("rejected");
-    } else {
-      setPhase("manual");
-      manualCloseTimerRef.current = window.setTimeout(onClose, 3_500);
-    }
+    setPhase("approved");
   }
 
   if (phase !== "form") {
-    const rejectionReason =
-      decisionRequest?.ai_rejection_reason ||
-      decisionRequest?.review_reason ||
-      "لم يستوفِ المرفق شروط طلب الرصيد الإضافي.";
     const roundedProgress = Math.min(100, Math.round(reviewProgress));
     const progressLabel =
       roundedProgress < 30
-        ? "جاري رفع المرفق..."
+        ? screenshot ? "جاري رفع الصورة الاختيارية..." : "جاري تسجيل الطلب..."
         : roundedProgress < 80
-          ? "جاري تحليل الصورة والتحقق من الشروط بواسطة الذكاء الاصطناعي... 🤖"
-          : "جاري إصدار القرار وتحديث الحساب...";
+          ? "جاري اعتماد الطلب فورياً..."
+          : "جاري تحديث رصيد الحساب...";
 
     return (
       <div className="fixed inset-0 z-[90] flex items-center justify-center bg-zinc-950/60 p-4 backdrop-blur-sm" dir="rtl">
@@ -9128,7 +9019,7 @@ function ExtraCreditRequestModal({
               <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-[#F5EEFF] text-[#8B35F5] shadow-[0_12px_30px_rgba(139,53,245,0.16)]">
                 <Sparkles className="h-8 w-8" />
               </div>
-              <h2 className="mt-5 text-2xl font-black text-zinc-950">جاري فحص الطلب</h2>
+              <h2 className="mt-5 text-2xl font-black text-zinc-950">جاري إضافة الرصيد</h2>
               <div className="mt-6 overflow-hidden rounded-full bg-[#EEE5FC] p-1 shadow-inner">
                 <div
                   className="h-4 rounded-full bg-gradient-to-l from-[#8B35F5] to-[#B469FF] transition-[width] duration-500 ease-out"
@@ -9140,10 +9031,10 @@ function ExtraCreditRequestModal({
                 <span className="shrink-0 text-[#7C2CE8]" dir="ltr">{roundedProgress}%</span>
               </div>
               <p className="mt-4 text-xs font-bold leading-6 text-zinc-500">
-                ستبقى النافذة مفتوحة حتى وصول قرار القبول أو الرفض النهائي.
+                يتم اعتماد الطلب وتحديث رصيد حسابك الآن.
               </p>
             </>
-          ) : phase === "approved" ? (
+          ) : (
             <>
               <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-600 shadow-[0_12px_30px_rgba(5,150,105,0.16)]">
                 <CircleCheck className="h-8 w-8" />
@@ -9159,44 +9050,6 @@ function ExtraCreditRequestModal({
               >
                 متابعة
               </button>
-            </>
-          ) : phase === "rejected" ? (
-            <>
-              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-rose-50 text-rose-600 shadow-[0_12px_30px_rgba(225,29,72,0.14)]">
-                <CircleX className="h-8 w-8" />
-              </div>
-              <h2 className="mt-5 text-2xl font-black text-zinc-950">تم رفض الطلب</h2>
-              <div className="mt-4 rounded-2xl border border-rose-200 bg-gradient-to-b from-rose-50 to-white px-5 py-4 text-right shadow-[0_10px_24px_rgba(225,29,72,0.08)]">
-                <p className="text-xs font-black text-rose-600">سبب عدم قبول المرفق:</p>
-                <p className="mt-2 text-sm font-bold leading-8 text-zinc-800">{rejectionReason}</p>
-              </div>
-              <div className="mt-5 flex w-full flex-col gap-3">
-                <button
-                  type="button"
-                  onClick={resetForAnotherRequest}
-                  className="flex min-h-14 w-full items-center justify-center rounded-2xl bg-[#8B35F5] px-5 py-4 text-base font-bold text-white shadow-[0_12px_28px_rgba(139,53,245,0.24)] transition hover:-translate-y-0.5 hover:bg-[#7626DD]"
-                >
-                  تقديم طلب رصيد جديد
-                </button>
-                <button
-                  type="button"
-                  onClick={onClose}
-                  className="flex min-h-14 w-full items-center justify-center rounded-2xl border border-zinc-200 bg-white px-5 py-4 text-base font-bold text-zinc-600 transition hover:bg-zinc-50"
-                >
-                  إغلاق
-                </button>
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-amber-50 text-amber-600 shadow-[0_12px_30px_rgba(217,119,6,0.14)]">
-                <Clock3 className="h-8 w-8" />
-              </div>
-              <h2 className="mt-5 text-2xl font-black text-zinc-950">الطلب قيد المراجعة</h2>
-              <p className="mt-4 text-sm font-bold leading-8 text-zinc-700">
-                تم استلام طلبك وجاري مراجعته يدوياً من قبل الفريق (خلال دقائق).
-              </p>
-              <p className="mt-2 text-xs font-bold text-zinc-500">ستُغلق النافذة تلقائياً.</p>
             </>
           )}
         </div>
@@ -9215,9 +9068,9 @@ function ExtraCreditRequestModal({
       >
         <div className="flex shrink-0 items-start justify-between gap-4 border-b border-zinc-100 p-5 pb-4 sm:p-7 sm:pb-5">
           <div>
-            <p className="text-xs font-black text-[#8B35F5]">مراجعة من إدارة المتجر</p>
+            <p className="text-xs font-black text-[#8B35F5]">إضافة فورية للرصيد</p>
             <h2 className="mt-1 text-2xl font-black">طلب رصيد إضافي</h2>
-            <p className="mt-2 text-xs font-bold leading-6 text-zinc-500">وضح المشكلة وأرفق الإثبات المطلوب لتسريع مراجعة طلبك.</p>
+            <p className="mt-2 text-xs font-bold leading-6 text-zinc-500">اكتب سبب المشكلة، ويمكنك إرفاق صورة توضيحية اختيارياً.</p>
           </div>
           <button type="button" onClick={onClose} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-zinc-100 text-zinc-500 transition hover:bg-zinc-200" aria-label="إغلاق">
             <X className="h-5 w-5" />
@@ -9226,25 +9079,8 @@ function ExtraCreditRequestModal({
 
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-6 pt-1 sm:px-6">
         <label className="mt-6 block">
-          <span className="mb-2 block text-sm font-black">سبب المشكلة</span>
-          <select
-            value={reasonType}
-            onChange={(event) => {
-              setReasonType(event.target.value as ExtraCreditReason);
-              setScreenshot(null);
-              setError("");
-            }}
-            className="h-13 w-full rounded-xl border-2 border-[#E0D4F8] bg-[#FCFAFF] px-4 text-sm font-black outline-none transition focus:border-[#8B35F5]"
-          >
-            {extraCreditReasons.map((reason) => (
-              <option key={reason} value={reason}>{extraCreditReasonLabels[reason]}</option>
-            ))}
-          </select>
-        </label>
-
-        <label className="mt-4 block">
           <span className="mb-2 flex items-center justify-between text-sm font-black">
-            <span>وصف المشكلة</span>
+            <span>سبب المشكلة أو التوضيح</span>
             <span className={description.trim().length >= 10 ? "text-emerald-600" : "text-zinc-400"}>{description.trim().length}/10</span>
           </span>
           <textarea
@@ -9258,15 +9094,13 @@ function ExtraCreditRequestModal({
         </label>
 
         <p className="mt-4 rounded-xl bg-[#F5EEFF] px-4 py-3 text-xs font-black leading-6 text-[#6E25CF]">
-          {requiresVideo
-            ? "📌 تنبيه هام: للموافقة على الدخول من جهاز جديد، يجب تسجيل الخروج من الجهاز الأول أولاً. يرجى إرفاق فيديو أو تسجيل شاشة يوضح عملية تسجيل الخروج من حسابنا بالكامل، مع الاشتراط الأساسي بظهور البريد الإلكتروني الخاص بالحساب واضحاً أثناء الفيديو."
-            : "يرجى إرفاق صورة إثبات للمشكلة."}
+          إرفاق صورة للمشكلة اختياري، ويمكنك إرسال الطلب بدون مرفق.
         </p>
 
         <label className="mt-3 block cursor-pointer rounded-2xl border-2 border-dashed border-[#D8C1FF] bg-[#FAF8FF] p-4 text-center transition hover:border-[#8B35F5]">
           <input
             type="file"
-            accept={requiresVideo ? "video/*" : "image/*"}
+            accept="image/*"
             className="sr-only"
             onChange={(event) => {
               setScreenshot(event.target.files?.[0] || null);
@@ -9274,18 +9108,12 @@ function ExtraCreditRequestModal({
             }}
           />
           {previewUrl ? (
-            requiresVideo ? (
-              <video src={previewUrl} controls playsInline className="mx-auto max-h-64 w-full rounded-xl bg-black object-contain" />
-            ) : (
-              <img src={previewUrl} alt="معاينة الإثبات" className="mx-auto max-h-52 w-full rounded-xl object-contain" />
-            )
+            <img src={previewUrl} alt="معاينة الإثبات" className="mx-auto max-h-52 w-full rounded-xl object-contain" />
           ) : (
             <div className="py-5">
               <Plus className="mx-auto h-7 w-7 text-[#8B35F5]" />
-              <p className="mt-2 text-sm font-black text-[#7C2CE8]">{requiresVideo ? "إرفاق فيديو تسجيل الخروج" : "إرفاق صورة للمشكلة"}</p>
-              <p className="mt-1 text-xs font-bold text-zinc-500">
-                {requiresVideo ? "مقطع فيديو ضمن السعة المتاحة في التخزين" : "صورة ضمن السعة المتاحة في التخزين"}
-              </p>
+              <p className="mt-2 text-sm font-black text-[#7C2CE8]">إرفاق صورة للمشكلة (اختياري)</p>
+              <p className="mt-1 text-xs font-bold text-zinc-500">يمكنك المتابعة دون اختيار صورة</p>
             </div>
           )}
         </label>
@@ -9334,7 +9162,7 @@ function ExtraCreditRequestModal({
               className="flex h-13 w-full items-center justify-center gap-2 rounded-xl bg-[#8B35F5] px-5 text-sm font-black text-white shadow-[0_12px_28px_rgba(139,53,245,0.25)] transition hover:bg-[#7626DD] disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none"
             >
               {submitting && <RefreshCw className="h-4 w-4 animate-spin" />}
-              {submitting ? "جاري الإرسال..." : "تأكيد الإرسال"}
+              {submitting ? "جاري إضافة الرصيد..." : "تأكيد ورفع الطلب"}
             </button>
           </div>
           <button type="button" onClick={onClose} disabled={submitting} className="h-13 rounded-xl border border-zinc-200 bg-white px-5 text-sm font-black text-zinc-600 transition hover:bg-zinc-50">

@@ -580,7 +580,9 @@ function buildTelegramMessage({ request, email, customerCode, deviceType, assess
   const confidence = Math.round((assessment?.confidence || 0) * 100);
   const heading =
     outcome.decision === "auto_approved"
-      ? "🤖✅ تم قبول طلب الرصيد تلقائياً عبر Gemini"
+      ? assessment?.instant === true
+        ? "✅ تم قبول طلب الرصيد وإضافته فورياً"
+        : "🤖✅ تم قبول طلب الرصيد تلقائياً عبر Gemini"
       : outcome.decision === "auto_rejected"
         ? "🤖❌ تم رفض طلب الرصيد تلقائياً عبر Gemini"
         : "🤖🟡 طلب رصيد يحتاج مراجعة يدوية";
@@ -604,6 +606,162 @@ function buildTelegramMessage({ request, email, customerCode, deviceType, assess
     .join("\n");
 }
 
+async function createInstantApprovedRequest(req, res, supabase) {
+  const customerId = String(req.body?.customer_id || "").trim();
+  const description = String(req.body?.description || "").trim();
+  const imageUrl = String(req.body?.image_url || "").trim();
+  if (!customerId || description.length < 10) {
+    return res.status(400).json({ success: false, error: "invalid_request" });
+  }
+  if (imageUrl && !/^https:\/\//i.test(imageUrl)) {
+    return res.status(400).json({ success: false, error: "invalid_attachment_url" });
+  }
+  const submittedStorageObject = parseStorageObject(imageUrl);
+  if (imageUrl && (
+    !submittedStorageObject
+    || submittedStorageObject.bucket !== storageBucket
+    || !submittedStorageObject.path.startsWith(`credit-requests/${customerId}/`)
+  )) {
+    return res.status(400).json({ success: false, error: "invalid_attachment_url" });
+  }
+
+  const { data: customer, error: customerError } = await supabase
+    .from("customer_links")
+    .select("id,email,link_number,short_id,uuid,selected_device,profile_name,profile_label,code_request_limit,code_requested_count,accounts(email,service_type)")
+    .eq("id", customerId)
+    .maybeSingle();
+  if (customerError || !customer) {
+    console.error("Instant credit customer lookup failed:", customerError);
+    return res.status(404).json({ success: false, error: "customer_not_found" });
+  }
+
+  const currentLimit = Math.max(0, Number(customer.code_request_limit ?? 1));
+  const currentUsed = Math.max(0, Number(customer.code_requested_count ?? 0));
+  if (currentUsed < currentLimit) {
+    return res.status(409).json({ success: false, error: "credit_balance_available" });
+  }
+
+  const placeholderImageUrl = `instant-approval:no-attachment:${Date.now()}`;
+  const { data: createdRequest, error: insertError } = await supabase
+    .from("extra_credit_requests")
+    .insert({
+      customer_id: customerId,
+      reason_type: "أخرى",
+      description,
+      image_url: imageUrl || placeholderImageUrl,
+      attachment_type: "image",
+      status: "pending",
+    })
+    .select("*")
+    .single();
+  if (insertError || !createdRequest) {
+    console.error("Instant credit request insert failed:", insertError);
+    const duplicatePending = insertError?.code === "23505";
+    return res.status(duplicatePending ? 409 : 500).json({
+      success: false,
+      error: duplicatePending ? "request_pending" : "request_insert_failed",
+    });
+  }
+
+  const { data: reviewed, error: reviewError } = await supabase.rpc(
+    "review_extra_credit_request",
+    { p_request_id: createdRequest.id, p_status: "approved" },
+  );
+  if (reviewError || !reviewed) {
+    console.error("Instant credit approval failed:", reviewError);
+    await supabase.from("extra_credit_requests").delete().eq("id", createdRequest.id).eq("status", "pending");
+    return res.status(500).json({ success: false, error: "instant_approval_failed" });
+  }
+
+  const reviewedAt = new Date().toISOString();
+  const { data: finalRequest, error: metadataError } = await supabase
+    .from("extra_credit_requests")
+    .update({
+      image_url: imageUrl || null,
+      ai_decision: "auto_approved",
+      ai_confidence: 1,
+      ai_analysis: "تمت الموافقة الفورية وإضافة الرصيد دون فحص ذكاء اصطناعي.",
+      ai_model: null,
+      ai_reviewed_at: reviewedAt,
+      ai_rejection_reason: null,
+      review_reason: null,
+    })
+    .eq("id", createdRequest.id)
+    .select("*")
+    .single();
+  if (metadataError) console.error("Instant credit metadata save failed:", metadataError);
+
+  const { error: resetError } = await supabase
+    .from("customer_links")
+    .update({
+      external_code_used: false,
+      external_code_used_at: null,
+      external_code_first_opened_at: null,
+    })
+    .eq("id", customerId);
+  if (resetError) console.error("Instant external code access reset failed:", resetError);
+
+  return res.status(200).json({
+    success: true,
+    request: { ...(finalRequest || createdRequest), status: "approved" },
+    notification_required: true,
+  });
+}
+
+async function notifyInstantApprovedRequest(req, res, supabase) {
+  const requestId = String(req.body?.request_id || "").trim();
+  if (!requestId) return res.status(400).json({ success: false, error: "request_id_required" });
+
+  const { data: request, error } = await supabase
+    .from("extra_credit_requests")
+    .select("id,customer_id,reason_type,description,image_url,attachment_type,status,customer_links(id,email,link_number,short_id,uuid,selected_device,profile_name,profile_label,accounts(email,service_type))")
+    .eq("id", requestId)
+    .eq("status", "approved")
+    .maybeSingle();
+  if (error || !request) {
+    console.error("Instant credit notification lookup failed:", error);
+    return res.status(404).json({ success: false, error: "request_not_found" });
+  }
+
+  const customer = Array.isArray(request.customer_links) ? request.customer_links[0] : request.customer_links;
+  const relatedAccount = Array.isArray(customer?.accounts) ? customer.accounts[0] : customer?.accounts;
+  const assessment = {
+    instant: true,
+    confidence: 1,
+    summary: "تمت الموافقة الفورية حسب إعدادات نظام طلب الرصيد.",
+  };
+  const outcome = {
+    decision: "auto_approved",
+    reason: "تمت إضافة محاولة جديدة للعميل فور إرسال الطلب.",
+  };
+  const telegramNotified = await sendTelegram(
+    buildTelegramMessage({
+      request,
+      email: relatedAccount?.email || customer?.email || "غير متوفر",
+      customerCode: customer?.link_number || customer?.short_id || customer?.id || "غير متوفر",
+      deviceType: customerDeviceLabel(customer?.selected_device),
+      assessment,
+      outcome,
+      serviceName: relatedAccount?.service_type === "osn" ? "OSN" : "نتفليكس",
+    }),
+    requestId,
+    false,
+    request,
+  );
+
+  const storageObject = parseStorageObject(request.image_url);
+  if (telegramNotified && storageObject) {
+    const { error: removeError } = await supabase.storage.from(storageObject.bucket).remove([storageObject.path]);
+    if (removeError) console.error("Instant credit attachment deletion failed:", removeError);
+    else await supabase.from("extra_credit_requests").update({ image_url: null }).eq("id", requestId);
+  }
+
+  return res.status(telegramNotified ? 200 : 502).json({
+    success: telegramNotified,
+    telegram_notified: telegramNotified,
+  });
+}
+
 export default async function handler(req, res) {
   if (req.method === "GET" && String(req.query?.health || "") === "1") {
     return healthCheck(res);
@@ -616,14 +774,21 @@ export default async function handler(req, res) {
     return res.status(500).json({ success: false, error: "supabase_not_configured" });
   }
 
+  const supabase = createClient(supabaseUrl, serviceRoleKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
+  if (String(req.body?.action || "").trim() === "instant_approve") {
+    return createInstantApprovedRequest(req, res, supabase);
+  }
+  if (String(req.body?.action || "").trim() === "notify_instant_approval") {
+    return notifyInstantApprovedRequest(req, res, supabase);
+  }
+
   const requestId = String(req.body?.request_id || "").trim();
   if (!requestId) {
     return res.status(400).json({ success: false, error: "request_id_required" });
   }
-
-  const supabase = createClient(supabaseUrl, serviceRoleKey, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
 
   const { data: request, error: requestError } = await supabase
     .from("extra_credit_requests")
