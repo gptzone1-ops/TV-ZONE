@@ -8806,7 +8806,7 @@ function CustomerView({
                       <Tablet className="h-9 w-9" />
                       <Laptop className="h-9 w-9" />
                     </span>
-                    <span className="mt-5 block text-lg font-black leading-7 text-zinc-950">أجهزة الجوال واللوحي والكمبيوتر</span>
+                    <span className="mt-5 block text-lg font-black leading-7 text-zinc-950">أجهزة الجوال والآيباد والكمبيوتر</span>
                     <span className="mt-3 block text-sm font-bold leading-7 text-zinc-500">مشاهدة عبر تطبيق OSN+ للجوال أو المتصفح</span>
                   </button>
 
@@ -8820,7 +8820,7 @@ function CustomerView({
                       <Tv className="h-10 w-10" />
                       <Gamepad2 className="h-10 w-10" />
                     </span>
-                    <span className="mt-5 block text-lg font-black leading-7 text-zinc-950">شاشات التلفزيون وPlayStation</span>
+                    <span className="mt-5 block text-lg font-black leading-7 text-zinc-950">شاشة التلفزيون وسوني</span>
                     <span className="mt-3 block text-sm font-bold leading-7 text-zinc-500">مشاهدة عبر تطبيق OSN+ على الشاشة الذكية أو الكونسول</span>
                   </button>
                 </div>
