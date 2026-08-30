@@ -7,6 +7,7 @@ const telegramChatId = process.env.TELEGRAM_CHAT_ID;
 const geminiApiKey = process.env.GEMINI_API_KEY;
 const geminiModel = "gemini-3.7-flash";
 const storageBucket = "extra_credit_requests";
+const externalCodeAccessDurationMs = 30 * 60 * 1000;
 const replacementReason = "استبدال الجهاز أو الدخول بجهاز آخر";
 const devicePolicyRejection =
   "حسب سياسة المتجر، يُمنع تشغيل الاشتراك على أكثر من جهاز في نفس الوقت. لاستبدال الجهاز، يرجى إرفاق فيديو يوضح تسجيل الخروج من الجهاز القديم.";
@@ -627,7 +628,7 @@ async function createInstantApprovedRequest(req, res, supabase) {
 
   const { data: customer, error: customerError } = await supabase
     .from("customer_links")
-    .select("id,email,link_number,short_id,uuid,selected_device,profile_name,profile_label,code_request_limit,code_requested_count,accounts(email,service_type)")
+    .select("id,email,link_number,short_id,uuid,selected_device,profile_name,profile_label,code_request_limit,code_requested_count,external_code_used,external_code_first_opened_at,accounts(email,service_type,code_fetch_method)")
     .eq("id", customerId)
     .maybeSingle();
   if (customerError || !customer) {
@@ -637,7 +638,14 @@ async function createInstantApprovedRequest(req, res, supabase) {
 
   const currentLimit = Math.max(0, Number(customer.code_request_limit ?? 1));
   const currentUsed = Math.max(0, Number(customer.code_requested_count ?? 0));
-  if (currentUsed < currentLimit) {
+  const relatedAccount = Array.isArray(customer.accounts) ? customer.accounts[0] : customer.accounts;
+  const firstOpenedAt = Date.parse(String(customer.external_code_first_opened_at || ""));
+  const externalAccessExpired = customer.external_code_used === true || (
+    Number.isFinite(firstOpenedAt)
+    && Date.now() - firstOpenedAt >= externalCodeAccessDurationMs
+  );
+  const exhaustedExternalAccess = relatedAccount?.code_fetch_method === "external_link" && externalAccessExpired;
+  if (currentUsed < currentLimit && !exhaustedExternalAccess) {
     return res.status(409).json({ success: false, error: "credit_balance_available" });
   }
 
