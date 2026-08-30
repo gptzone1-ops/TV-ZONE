@@ -147,6 +147,7 @@ const tvApprovalFallbackWindowMs = 15 * 60 * 1000;
 const tvApprovalSearchDurationMs = 15 * 1000;
 const externalCodeAccessDurationMs = 30 * 60 * 1000;
 const osnMonthlyAutoOtpLaunchAtMs = Date.parse("2026-08-21T03:21:29.272Z");
+const osnDeviceOnboardingLaunchAtMs = Date.parse("2026-08-30T13:26:16.000Z");
 const adminAccountsPageSize = 10;
 const adminAccountsCacheTtlMs = 5 * 60 * 1000;
 const duplicateEmailMessage = "عفواً، هذا البريد الإلكتروني مسجل مسبقاً ولا يمكن تكراره";
@@ -6565,6 +6566,7 @@ function CustomerView({
   const [showOsnDeviceOnboarding, setShowOsnDeviceOnboarding] = useState(false);
   const [showOsnMobileAcknowledgement, setShowOsnMobileAcknowledgement] = useState(false);
   const [osnMobileAcknowledgement, setOsnMobileAcknowledgement] = useState("");
+  const [osnDeviceSaving, setOsnDeviceSaving] = useState(false);
   const [tvRequestState, setTvRequestState] = useState<"idle" | "searching" | "ready" | "failed" | "expired">("idle");
   const [tvSearchDeadlineAt, setTvSearchDeadlineAt] = useState<number | null>(null);
   const [tvDisplayExpiresAt, setTvDisplayExpiresAt] = useState<number | null>(null);
@@ -6687,17 +6689,44 @@ function CustomerView({
       return;
     }
 
+    const createdAtMs = Date.parse(link.created_at || "");
+    if (!Number.isFinite(createdAtMs) || createdAtMs < osnDeviceOnboardingLaunchAtMs) {
+      setOsnDeviceMode(null);
+      setShowOsnDeviceOnboarding(false);
+      setShowOsnMobileAcknowledgement(false);
+      return;
+    }
+
     const storageKey = `zone-osn-device-${link.id}`;
+    const savedDevice = link.selected_device;
+    if (savedDevice === "mobile" || savedDevice === "screen") {
+      localStorage.setItem(storageKey, savedDevice);
+      setOsnDeviceMode(savedDevice);
+      setShowOsnDeviceOnboarding(false);
+      setShowOsnMobileAcknowledgement(false);
+      return;
+    }
+
     const storedDevice = localStorage.getItem(storageKey);
     if (storedDevice === "mobile" || storedDevice === "screen") {
       setOsnDeviceMode(storedDevice);
       setShowOsnDeviceOnboarding(false);
+      if (supabase) {
+        void supabase
+          .from("customer_links")
+          .update({ selected_device: storedDevice })
+          .eq("id", link.id)
+          .is("selected_device", null)
+          .then(({ error }) => {
+            if (error) console.error("Supabase OSN stored device migration error:", error);
+          });
+      }
       return;
     }
 
     setOsnDeviceMode(null);
     setShowOsnDeviceOnboarding(true);
-  }, [link?.id, link?.accounts]);
+  }, [link?.id, link?.created_at, link?.selected_device, link?.accounts?.service_type]);
 
   useEffect(() => {
     setIsExternalCodeUsed(link?.external_code_used === true);
@@ -6852,8 +6881,55 @@ function CustomerView({
     ? Math.max(0, Math.ceil((osnOtpDeadlineAt - nowTick) / 1000))
     : 0;
 
+  async function persistOsnDeviceChoice(device: DeviceView) {
+    if (!link?.id || service !== "osn" || osnDeviceSaving) return;
+    setOsnDeviceSaving(true);
+    let savedDevice = device;
+
+    if (supabase) {
+      const { data, error } = await supabase
+        .from("customer_links")
+        .update({ selected_device: device })
+        .eq("id", link.id)
+        .is("selected_device", null)
+        .select("selected_device")
+        .maybeSingle();
+
+      if (error) {
+        console.error("Supabase OSN device choice save error:", error);
+        setToast({ label: "تعذر حفظ اختيار الجهاز، حاول مرة أخرى", tone: "error", at: Date.now() });
+        setOsnDeviceSaving(false);
+        return;
+      }
+
+      if (data?.selected_device === "mobile" || data?.selected_device === "screen") {
+        savedDevice = data.selected_device;
+      } else {
+        const { data: currentLink, error: readError } = await supabase
+          .from("customer_links")
+          .select("selected_device")
+          .eq("id", link.id)
+          .maybeSingle();
+        if (readError || (currentLink?.selected_device !== "mobile" && currentLink?.selected_device !== "screen")) {
+          console.error("Supabase OSN device choice verification error:", readError);
+          setToast({ label: "تعذر تأكيد اختيار الجهاز، حاول مرة أخرى", tone: "error", at: Date.now() });
+          setOsnDeviceSaving(false);
+          return;
+        }
+        savedDevice = currentLink.selected_device;
+      }
+    }
+
+    localStorage.setItem(`zone-osn-device-${link.id}`, savedDevice);
+    setLink((current) => current ? { ...current, selected_device: savedDevice } : current);
+    setOsnDeviceMode(savedDevice);
+    setShowOsnDeviceOnboarding(false);
+    setShowOsnMobileAcknowledgement(false);
+    setOsnDeviceSaving(false);
+  }
+
   function chooseOsnDevice(device: DeviceView) {
-    if (!link?.id || service !== "osn") return;
+    if (!link?.id || service !== "osn" || osnDeviceSaving) return;
     if (device === "mobile") {
       setShowOsnDeviceOnboarding(false);
       setOsnMobileAcknowledgement("");
@@ -6861,16 +6937,12 @@ function CustomerView({
       return;
     }
 
-    localStorage.setItem(`zone-osn-device-${link.id}`, "screen");
-    setOsnDeviceMode("screen");
-    setShowOsnDeviceOnboarding(false);
+    void persistOsnDeviceChoice("screen");
   }
 
   function confirmOsnMobileDevice() {
-    if (!link?.id || !osnMobileAcknowledgement.trim()) return;
-    localStorage.setItem(`zone-osn-device-${link.id}`, "mobile");
-    setOsnDeviceMode("mobile");
-    setShowOsnMobileAcknowledgement(false);
+    if (!link?.id || !osnMobileAcknowledgement.trim() || osnDeviceSaving) return;
+    void persistOsnDeviceChoice("mobile");
   }
 
   useEffect(() => {
@@ -8726,7 +8798,8 @@ function CustomerView({
                   <button
                     type="button"
                     onClick={() => chooseOsnDevice("mobile")}
-                    className="group min-h-[220px] rounded-3xl border-2 border-fuchsia-100 bg-gradient-to-b from-white to-fuchsia-50 p-5 text-center transition hover:-translate-y-1 hover:border-fuchsia-400 hover:shadow-[0_18px_38px_rgba(192,38,211,0.16)] focus:outline-none focus:ring-4 focus:ring-fuchsia-200"
+                    disabled={osnDeviceSaving}
+                    className="group min-h-[220px] rounded-3xl border-2 border-fuchsia-100 bg-gradient-to-b from-white to-fuchsia-50 p-5 text-center transition hover:-translate-y-1 hover:border-fuchsia-400 hover:shadow-[0_18px_38px_rgba(192,38,211,0.16)] focus:outline-none focus:ring-4 focus:ring-fuchsia-200 disabled:cursor-wait disabled:opacity-60"
                   >
                     <span className="mx-auto flex items-center justify-center gap-2 text-fuchsia-700">
                       <Smartphone className="h-8 w-8" />
@@ -8740,7 +8813,8 @@ function CustomerView({
                   <button
                     type="button"
                     onClick={() => chooseOsnDevice("screen")}
-                    className="group min-h-[220px] rounded-3xl border-2 border-fuchsia-100 bg-gradient-to-b from-white to-fuchsia-50 p-5 text-center transition hover:-translate-y-1 hover:border-fuchsia-400 hover:shadow-[0_18px_38px_rgba(192,38,211,0.16)] focus:outline-none focus:ring-4 focus:ring-fuchsia-200"
+                    disabled={osnDeviceSaving}
+                    className="group min-h-[220px] rounded-3xl border-2 border-fuchsia-100 bg-gradient-to-b from-white to-fuchsia-50 p-5 text-center transition hover:-translate-y-1 hover:border-fuchsia-400 hover:shadow-[0_18px_38px_rgba(192,38,211,0.16)] focus:outline-none focus:ring-4 focus:ring-fuchsia-200 disabled:cursor-wait disabled:opacity-60"
                   >
                     <span className="mx-auto flex items-center justify-center gap-3 text-fuchsia-700">
                       <Tv className="h-10 w-10" />
@@ -8784,22 +8858,23 @@ function CustomerView({
                 <div className="mt-5 grid gap-3 sm:grid-cols-2">
                   <button
                     type="button"
+                    disabled={osnDeviceSaving}
                     onClick={() => {
                       setShowOsnMobileAcknowledgement(false);
                       setShowOsnDeviceOnboarding(true);
                       setOsnMobileAcknowledgement("");
                     }}
-                    className="min-h-12 rounded-2xl border border-zinc-200 bg-white px-4 text-sm font-black text-zinc-600 transition hover:bg-zinc-50"
+                    className="min-h-12 rounded-2xl border border-zinc-200 bg-white px-4 text-sm font-black text-zinc-600 transition hover:bg-zinc-50 disabled:cursor-wait disabled:opacity-50"
                   >
                     العودة لاختيار الجهاز
                   </button>
                   <button
                     type="button"
-                    disabled={!osnMobileAcknowledgement.trim()}
+                    disabled={!osnMobileAcknowledgement.trim() || osnDeviceSaving}
                     onClick={confirmOsnMobileDevice}
                     className="min-h-12 rounded-2xl bg-fuchsia-600 px-4 text-sm font-black text-white shadow-[0_12px_28px_rgba(192,38,211,0.24)] transition hover:bg-fuchsia-700 disabled:cursor-not-allowed disabled:bg-zinc-300 disabled:shadow-none"
                   >
-                    متابعة وفتح الاشتراك
+                    {osnDeviceSaving ? "جاري حفظ الاختيار..." : "متابعة وفتح الاشتراك"}
                   </button>
                 </div>
               </div>
