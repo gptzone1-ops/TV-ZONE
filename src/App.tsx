@@ -519,9 +519,36 @@ const strictEmailTokenRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/
 // Clean hidden WhatsApp formatting and BiDi control characters.
 function cleanRawText(text: string): string {
   return text
-    .replace(/[\u200B-\u200D\uFEFF\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, "")
+    .normalize("NFKC")
+    .replace(/\p{Cf}/gu, "")
+    .replace(/[\u00A0\u202F]/g, " ")
+    .replace(/[\u2028\u2029]/g, "\n")
     .replace(/\r\n/g, "\n")
     .replace(/\r/g, "\n");
+}
+
+function clipboardHtmlToText(html: string) {
+  if (!html.trim()) return "";
+
+  const parsedDocument = new DOMParser().parseFromString(html, "text/html");
+  parsedDocument.querySelectorAll("br").forEach((element) => element.replaceWith("\n"));
+  parsedDocument.querySelectorAll("p, div, li, section").forEach((element) => element.append("\n"));
+  return cleanRawText(parsedDocument.body.textContent || "");
+}
+
+function strictEmailCount(text: string) {
+  return Array.from(cleanRawText(text).matchAll(new RegExp(strictEmailRegex.source, "g"))).length;
+}
+
+function bestWhatsappClipboardText(clipboardData: DataTransfer) {
+  const plainText = cleanRawText(clipboardData.getData("text/plain") || clipboardData.getData("text"));
+  const htmlText = clipboardHtmlToText(clipboardData.getData("text/html"));
+  const plainEmailCount = strictEmailCount(plainText);
+  const htmlEmailCount = strictEmailCount(htmlText);
+
+  // WhatsApp may place the complete multi-message selection only in the HTML clipboard payload.
+  if (htmlEmailCount > plainEmailCount) return htmlText;
+  return plainText || htmlText;
 }
 
 function stripWhatsappLinePrefix(line: string) {
@@ -5684,7 +5711,7 @@ function AccountForm({
                   onPaste={(event) => {
                     event.preventDefault();
                     const target = event.currentTarget;
-                    const pastedText = cleanRawText(event.clipboardData.getData("text"));
+                    const pastedText = bestWhatsappClipboardText(event.clipboardData);
                     const selectionStart = target.selectionStart ?? smartPasteText.length;
                     const selectionEnd = target.selectionEnd ?? selectionStart;
                     const nextValue = cleanRawText(
@@ -5716,10 +5743,10 @@ function AccountForm({
 
             {parsedAccounts.length > 0 && (
               <div className="space-y-3">
-                <div className="flex items-center justify-between gap-3">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <h3 className="text-sm font-black text-zinc-800">معاينة الحسابات المكتشفة</h3>
                   <span className={cn(
-                    "rounded-lg px-3 py-1.5 text-xs font-black",
+                    "w-full rounded-lg px-3 py-1.5 text-center text-xs font-black sm:w-auto",
                     parsedAccounts.length === detectedEmailCount
                       ? "bg-emerald-50 text-emerald-700"
                       : "bg-amber-50 text-amber-700",
