@@ -84,6 +84,10 @@ type ParsedAccount = {
   password: string;
   code_url: string;
 };
+type ParsedWhatsappAccountsResult = {
+  accounts: ParsedAccount[];
+  detectedEmailCount: number;
+};
 type AdminAccountsCacheEntry = {
   accounts: NetflixAccount[];
   links: CustomerLink[];
@@ -509,31 +513,58 @@ function accountFormError(result: AccountFormResult) {
   return typeof result === "boolean" ? undefined : result.error;
 }
 
-function parseWhatsappAccounts(rawText: string): ParsedAccount[] {
-  const normalizedText = rawText
-    .replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "")
+const strictEmailRegex = /\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b/g;
+const strictEmailTokenRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+
+// Clean hidden WhatsApp formatting and BiDi control characters.
+function cleanRawText(text: string): string {
+  return text
+    .replace(/[\u200B-\u200D\uFEFF\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n");
+}
+
+function stripWhatsappLinePrefix(line: string) {
+  return line.replace(/^\s*\[[^\]]*\]\s*[^:\n]*:\s*/u, "").trim();
+}
+
+function passwordFromAccountBlock(block: string, email: string) {
+  const lines = block.split("\n");
+  const candidateLines = lines.map((line, index) => {
+    let cleanedLine = stripWhatsappLinePrefix(line);
+    if (index === 0) cleanedLine = cleanedLine.replace(email, "");
+    return cleanedLine
+      .replace(/https?:\/\/[^\s\])]+/gi, " ")
+      .replace(new RegExp(strictEmailRegex.source, "g"), " ")
+      .trim();
+  });
+
+  for (const line of candidateLines) {
+    const token = line
+      .split(/\s+/)
+      .map((value) => value.trim())
+      .find((value) => value && !strictEmailTokenRegex.test(value) && !/^https?:\/\//i.test(value));
+    if (token) return token;
+  }
+  return "";
+}
+
+function parseWhatsappAccounts(rawText: string): ParsedWhatsappAccountsResult {
+  const normalizedText = cleanRawText(rawText)
     .replace(/\\@/g, "@")
     .replace(/\[(https?:\/\/[^\]\s]+)\]\((https?:\/\/[^)\s]+)\)/gi, "$2")
-    .split(/\r?\n/)
-    .map((line) => line.replace(/^\s*\[[^\]]+\]\s*[^:]+:\s*/, "").trim())
-    .filter(Boolean)
+    .split("\n")
+    .map((line) => line.trimEnd())
     .join("\n");
-
-  const emailPattern = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
-  const emailMatches = Array.from(normalizedText.matchAll(emailPattern));
-
-  return emailMatches.map((match, index) => {
+  const emailMatches = Array.from(normalizedText.matchAll(new RegExp(strictEmailRegex.source, "g")));
+  const accounts = emailMatches.map((match, index) => {
     const email = String(match[0] || "").trim().toLowerCase();
-    const segmentStart = (match.index || 0) + match[0].length;
+    const segmentStart = match.index || 0;
     const segmentEnd = emailMatches[index + 1]?.index ?? normalizedText.length;
-    const segment = normalizedText.slice(segmentStart, segmentEnd).trim();
-    const urlMatch = segment.match(/https?:\/\/[^\s\])]+/i);
+    const block = normalizedText.slice(segmentStart, segmentEnd).trim();
+    const urlMatch = block.match(/https?:\/\/[^\s\])]+/i);
     const codeUrl = String(urlMatch?.[0] || "").replace(/[.,،;]+$/, "");
-    const passwordArea = codeUrl ? segment.slice(0, segment.indexOf(urlMatch?.[0] || "")) : segment;
-    const password = passwordArea
-      .split(/\s+/)
-      .map((token) => token.replace(/^[\[\]():،,;]+|[\[\]():،,;]+$/g, ""))
-      .find((token) => token && !token.includes("@") && !/^https?:\/\//i.test(token)) || "";
+    const password = passwordFromAccountBlock(block, email);
 
     return {
       id: crypto.randomUUID(),
@@ -542,6 +573,8 @@ function parseWhatsappAccounts(rawText: string): ParsedAccount[] {
       code_url: codeUrl,
     };
   });
+
+  return { accounts, detectedEmailCount: emailMatches.length };
 }
 
 function remainingLabel(expiresAt: string) {
@@ -5158,6 +5191,7 @@ function AccountForm({
   const [entryMode, setEntryMode] = useState<"manual" | "smart">("manual");
   const [smartPasteText, setSmartPasteText] = useState("");
   const [parsedAccounts, setParsedAccounts] = useState<ParsedAccount[]>([]);
+  const [detectedEmailCount, setDetectedEmailCount] = useState(0);
   const [duplicateBatchEmails, setDuplicateBatchEmails] = useState<string[]>([]);
   const [batchSaving, setBatchSaving] = useState(false);
   const calculatedExpiry = service === "osn" && osnSubscriptionMode === "monthly_rotation"
@@ -5267,10 +5301,23 @@ function AccountForm({
   }
 
   function extractSmartPasteAccounts() {
-    const parsed = parseWhatsappAccounts(smartPasteText);
-    setParsedAccounts(parsed);
+    const result = parseWhatsappAccounts(smartPasteText);
+    setParsedAccounts(result.accounts);
+    setDetectedEmailCount(result.detectedEmailCount);
     setDuplicateBatchEmails([]);
-    setFormError(parsed.length ? "" : "لم يتم العثور على أي بريد إلكتروني صالح في النص الملصق.");
+    setFormError(result.accounts.length ? "" : "لم يتم العثور على أي بريد إلكتروني صالح في النص الملصق.");
+  }
+
+  function resetSmartPastePreview() {
+    setParsedAccounts([]);
+    setDetectedEmailCount(0);
+    setDuplicateBatchEmails([]);
+    setFormError("");
+  }
+
+  function updateSmartPasteText(value: string) {
+    setSmartPasteText(cleanRawText(value));
+    resetSmartPastePreview();
   }
 
   function updateParsedAccount(id: string, field: keyof Omit<ParsedAccount, "id">, value: string) {
@@ -5633,11 +5680,23 @@ function AccountForm({
                 <textarea
                   rows={8}
                   value={smartPasteText}
-                  onChange={(event) => {
-                    setSmartPasteText(event.target.value);
-                    setParsedAccounts([]);
-                    setDuplicateBatchEmails([]);
-                    setFormError("");
+                  onChange={(event) => updateSmartPasteText(event.target.value)}
+                  onPaste={(event) => {
+                    event.preventDefault();
+                    const target = event.currentTarget;
+                    const pastedText = cleanRawText(event.clipboardData.getData("text"));
+                    const selectionStart = target.selectionStart ?? smartPasteText.length;
+                    const selectionEnd = target.selectionEnd ?? selectionStart;
+                    const nextValue = cleanRawText(
+                      `${smartPasteText.slice(0, selectionStart)}${pastedText}${smartPasteText.slice(selectionEnd)}`,
+                    );
+                    updateSmartPasteText(nextValue);
+
+                    // Restore the caret after React applies the sanitized value.
+                    requestAnimationFrame(() => {
+                      const caretPosition = selectionStart + pastedText.length;
+                      target.setSelectionRange(caretPosition, caretPosition);
+                    });
                   }}
                   placeholder={'email@example.com password\nhttps://code.example.com/link\nemail2@example.com password2 https://code.example.com/link2'}
                   className="admin-modal-input min-h-44 resize-y py-3 text-left leading-7"
@@ -5659,18 +5718,30 @@ function AccountForm({
               <div className="space-y-3">
                 <div className="flex items-center justify-between gap-3">
                   <h3 className="text-sm font-black text-zinc-800">معاينة الحسابات المكتشفة</h3>
-                  <span className="rounded-lg bg-[#F1E8FF] px-3 py-1.5 text-xs font-black text-[#6F22D6]">
-                    {parsedAccounts.length} حساب
+                  <span className={cn(
+                    "rounded-lg px-3 py-1.5 text-xs font-black",
+                    parsedAccounts.length === detectedEmailCount
+                      ? "bg-emerald-50 text-emerald-700"
+                      : "bg-amber-50 text-amber-700",
+                  )}>
+                    تم اكتشاف ({parsedAccounts.length} من أصل {detectedEmailCount}) حسابات بنجاح ✅
                   </span>
                 </div>
-                {parsedAccounts.map((account, index) => (
+                {parsedAccounts.map((account, index) => {
+                  const missingPassword = service !== "osn" && !account.password.trim();
+                  const missingCodeUrl = !account.code_url.trim();
+                  const needsReview = missingPassword || missingCodeUrl;
+
+                  return (
                   <article
                     key={account.id}
                     className={cn(
                       "rounded-2xl border bg-white p-4",
                       duplicateBatchEmails.includes(normalizeEmail(account.email))
                         ? "border-rose-400 bg-rose-50/40"
-                        : "border-[#E7DDF5]",
+                        : needsReview
+                          ? "border-amber-300 bg-amber-50/30"
+                          : "border-[#E7DDF5]",
                     )}
                   >
                     <div className="mb-3 flex items-center justify-between gap-3">
@@ -5696,23 +5767,35 @@ function AccountForm({
                       <input
                         value={account.password}
                         onChange={(event) => updateParsedAccount(account.id, "password", event.target.value)}
-                        className="admin-modal-input"
+                        className={cn(
+                          "admin-modal-input",
+                          missingPassword && "!border-amber-400 !bg-amber-50",
+                        )}
                         placeholder="كلمة المرور"
                         dir="ltr"
                       />
                       <input
                         value={account.code_url}
                         onChange={(event) => updateParsedAccount(account.id, "code_url", event.target.value)}
-                        className="admin-modal-input sm:col-span-2"
+                        className={cn(
+                          "admin-modal-input sm:col-span-2",
+                          missingCodeUrl && "!border-amber-400 !bg-amber-50",
+                        )}
                         placeholder="رابط جلب الكود (اختياري)"
                         dir="ltr"
                       />
                     </div>
+                    {needsReview && (
+                      <p className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-black leading-6 text-amber-800">
+                        يحتاج هذا الحساب إلى مراجعة: {[missingPassword ? "كلمة المرور" : "", missingCodeUrl ? "رابط جلب الكود" : ""].filter(Boolean).join(" و ")}.
+                      </p>
+                    )}
                     {duplicateBatchEmails.includes(normalizeEmail(account.email)) && (
                       <p className="mt-2 text-xs font-black text-rose-600">هذا البريد مسجل مسبقاً في قائمة الحسابات.</p>
                     )}
                   </article>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
