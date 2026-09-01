@@ -515,6 +515,7 @@ function accountFormError(result: AccountFormResult) {
 
 const strictEmailRegex = /\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b/g;
 const strictEmailTokenRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+const osnAccessKeyTokenRegex = /\b[A-Z0-9]{6,12}\b/gi;
 
 // Clean hidden WhatsApp formatting and BiDi control characters.
 function cleanRawText(text: string): string {
@@ -525,6 +526,21 @@ function cleanRawText(text: string): string {
     .replace(/[\u2028\u2029]/g, "\n")
     .replace(/\r\n/g, "\n")
     .replace(/\r/g, "\n");
+}
+
+function extractOsnAccessKeys(rawText: string) {
+  const uniqueKeys = new Set<string>();
+
+  cleanRawText(rawText).split("\n").forEach((line) => {
+    const sanitizedLine = line
+      .replace(new RegExp(strictEmailRegex.source, "gi"), " ")
+      .replace(/https?:\/\/[^\s]+/gi, " ");
+    const matches = sanitizedLine.match(osnAccessKeyTokenRegex) || [];
+
+    matches.forEach((match) => uniqueKeys.add(match.toUpperCase()));
+  });
+
+  return Array.from(uniqueKeys);
 }
 
 function clipboardHtmlToPlainText(html: string) {
@@ -5266,6 +5282,8 @@ function AccountForm({
   const [email, setEmail] = useState(initialAccount?.email || "");
   const [password, setPassword] = useState(initialAccount?.password || "");
   const [accessKeysInput, setAccessKeysInput] = useState("");
+  const [accessKeysPasteInput, setAccessKeysPasteInput] = useState("");
+  const [accessKeysPasteNotice, setAccessKeysPasteNotice] = useState("");
   const [osnSubscriptionMode, setOsnSubscriptionMode] = useState<OsnSubscriptionMode>(
     initialAccount?.osn_subscription_mode || "telegram_keys",
   );
@@ -5386,6 +5404,32 @@ function AccountForm({
       compensation_distribution: accountType === "compensation" ? compensationDistribution : undefined,
       osn_subscription_mode: service === "osn" ? osnSubscriptionMode : undefined,
     });
+  }
+
+  function extractAndFillOsnAccessKeys() {
+    const requiredKeys = accountType === "private" ? 5 : 10;
+    const extractedKeys = extractOsnAccessKeys(accessKeysPasteInput);
+    const selectedKeys = extractedKeys.slice(0, requiredKeys);
+
+    setAccessKeysInput(selectedKeys.join("\n"));
+    setFormError("");
+
+    if (!selectedKeys.length) {
+      setAccessKeysPasteNotice("لم يتم العثور على مفاتيح صالحة. تأكد أن كل مفتاح يتكون من 6 إلى 12 حرفاً ورقماً.");
+      return;
+    }
+
+    if (selectedKeys.length < requiredKeys) {
+      setAccessKeysPasteNotice(`تم استخراج وتعبئة ${selectedKeys.length} مفتاح. أضف ${requiredKeys - selectedKeys.length} مفتاح لإكمال الحساب.`);
+      return;
+    }
+
+    const ignoredCount = Math.max(extractedKeys.length - requiredKeys, 0);
+    setAccessKeysPasteNotice(
+      ignoredCount > 0
+        ? `تم استخراج ${extractedKeys.length} مفتاح وتعبئة أول ${requiredKeys} مفاتيح بنجاح ✅`
+        : `تم استخراج وتعبئة ${selectedKeys.length} مفتاح بنجاح ✅`,
+    );
   }
 
   function extractSmartPasteAccounts() {
@@ -5613,25 +5657,67 @@ function AccountForm({
         )}
 
         {service === "osn" && !editing && osnSubscriptionMode === "telegram_keys" && (
-          <Field icon={KeyRound} label={`مفاتيح التفعيل / الدخول (${accountType === "private" ? 5 : 10} مفاتيح)`}>
-            <textarea
-              required
-              rows={accountType === "private" ? 6 : 11}
-              value={accessKeysInput}
-              onChange={(event) => {
-                setAccessKeysInput(event.target.value);
-                setFormError("");
-              }}
-              placeholder={accountType === "private"
-                ? "KEY-1\nKEY-2\nKEY-3\nKEY-4\nKEY-5"
-                : "KEY-1\nKEY-2\nKEY-3\nKEY-4\nKEY-5\nKEY-6\nKEY-7\nKEY-8\nKEY-9\nKEY-10"}
-              className="admin-modal-input min-h-40 resize-y py-3 leading-7"
-              dir="ltr"
-            />
-            <p className="mt-2 text-[11px] font-bold leading-6 text-zinc-500">
-              أدخل مفتاحاً مختلفاً في كل سطر. سيتم توزيعه على روابط العملاء بالترتيب تلقائياً.
-            </p>
-          </Field>
+          <div className="mb-5 space-y-4">
+            <div className="rounded-2xl border border-fuchsia-200 bg-fuchsia-50/60 p-4" dir="rtl">
+              <label className="block">
+                <span className="mb-2 flex items-center gap-2 text-sm font-black text-zinc-700">
+                  <Clipboard className="h-4 w-4 text-fuchsia-700" />
+                  الصق رسالة الأكواد هنا
+                </span>
+                <textarea
+                  rows={6}
+                  value={accessKeysPasteInput}
+                  onChange={(event) => {
+                    setAccessKeysPasteInput(event.target.value);
+                    setAccessKeysPasteNotice("");
+                  }}
+                  placeholder={'📋 أكوادك المتاحة للحساب:\n\n🔑 Q2K64ULE\n🔑 HLB8OOQH\n🔑 S8DFRSVC'}
+                  className="admin-modal-input min-h-36 resize-y py-3 leading-7"
+                  dir="auto"
+                />
+              </label>
+              <button
+                type="button"
+                onClick={extractAndFillOsnAccessKeys}
+                disabled={!accessKeysPasteInput.trim()}
+                className="mt-3 flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-fuchsia-700 px-4 text-sm font-black text-white transition hover:bg-fuchsia-800 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Zap className="h-4 w-4" />
+                استخراج وتعبئة المفاتيح
+              </button>
+              {accessKeysPasteNotice && (
+                <p className={cn(
+                  "mt-3 rounded-xl px-3 py-2 text-center text-xs font-black leading-6",
+                  accessKeysPasteNotice.includes("بنجاح")
+                    ? "bg-emerald-50 text-emerald-700"
+                    : "bg-amber-50 text-amber-700",
+                )}>
+                  {accessKeysPasteNotice}
+                </p>
+              )}
+            </div>
+
+            <Field icon={KeyRound} label={`المفاتيح الجاهزة للتوزيع (${accountType === "private" ? 5 : 10} مفاتيح)`}>
+              <textarea
+                required
+                rows={accountType === "private" ? 6 : 11}
+                value={accessKeysInput}
+                onChange={(event) => {
+                  setAccessKeysInput(event.target.value);
+                  setAccessKeysPasteNotice("");
+                  setFormError("");
+                }}
+                placeholder={accountType === "private"
+                  ? "KEY-1\nKEY-2\nKEY-3\nKEY-4\nKEY-5"
+                  : "KEY-1\nKEY-2\nKEY-3\nKEY-4\nKEY-5\nKEY-6\nKEY-7\nKEY-8\nKEY-9\nKEY-10"}
+                className="admin-modal-input min-h-40 resize-y py-3 leading-7"
+                dir="ltr"
+              />
+              <p className="mt-2 text-[11px] font-bold leading-6 text-zinc-500">
+                يمكنك مراجعة المفاتيح أو تعديلها قبل الحفظ. سيتم توزيعها على روابط العملاء بالترتيب تلقائياً.
+              </p>
+            </Field>
+          </div>
         )}
 
         {canConfigureCodeFetch && (
