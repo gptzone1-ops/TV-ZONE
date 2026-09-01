@@ -527,32 +527,11 @@ function cleanRawText(text: string): string {
     .replace(/\r/g, "\n");
 }
 
-function clipboardHtmlToText(html: string) {
-  if (!html.trim()) return "";
-
-  const parsedDocument = new DOMParser().parseFromString(html, "text/html");
-  parsedDocument.querySelectorAll("br").forEach((element) => element.replaceWith("\n"));
-  parsedDocument.querySelectorAll("p, div, li, section").forEach((element) => element.append("\n"));
-  return cleanRawText(parsedDocument.body.textContent || "");
-}
-
-function strictEmailCount(text: string) {
-  return Array.from(cleanRawText(text).matchAll(new RegExp(strictEmailRegex.source, "g"))).length;
-}
-
-function bestWhatsappClipboardText(clipboardData: DataTransfer) {
-  const plainText = cleanRawText(clipboardData.getData("text/plain") || clipboardData.getData("text"));
-  const htmlText = clipboardHtmlToText(clipboardData.getData("text/html"));
-  const plainEmailCount = strictEmailCount(plainText);
-  const htmlEmailCount = strictEmailCount(htmlText);
-
-  // WhatsApp may place the complete multi-message selection only in the HTML clipboard payload.
-  if (htmlEmailCount > plainEmailCount) return htmlText;
-  return plainText || htmlText;
-}
-
 function stripWhatsappLinePrefix(line: string) {
-  return line.replace(/^\s*\[[^\]]*\]\s*[^:\n]*:\s*/u, "").trim();
+  return line
+    .replace(/^\s*\[[^\]]*\]\s*[^:\n]*:\s*/u, "")
+    .replace(/^\s*[^:\n]*\[[^\]]*\]\s*:\s*/u, "")
+    .trim();
 }
 
 function passwordFromAccountBlock(block: string, email: string) {
@@ -5343,7 +5322,7 @@ function AccountForm({
   }
 
   function updateSmartPasteText(value: string) {
-    setSmartPasteText(cleanRawText(value));
+    setSmartPasteText(value);
     resetSmartPastePreview();
   }
 
@@ -5708,23 +5687,6 @@ function AccountForm({
                   rows={8}
                   value={smartPasteText}
                   onChange={(event) => updateSmartPasteText(event.target.value)}
-                  onPaste={(event) => {
-                    event.preventDefault();
-                    const target = event.currentTarget;
-                    const pastedText = bestWhatsappClipboardText(event.clipboardData);
-                    const selectionStart = target.selectionStart ?? smartPasteText.length;
-                    const selectionEnd = target.selectionEnd ?? selectionStart;
-                    const nextValue = cleanRawText(
-                      `${smartPasteText.slice(0, selectionStart)}${pastedText}${smartPasteText.slice(selectionEnd)}`,
-                    );
-                    updateSmartPasteText(nextValue);
-
-                    // Restore the caret after React applies the sanitized value.
-                    requestAnimationFrame(() => {
-                      const caretPosition = selectionStart + pastedText.length;
-                      target.setSelectionRange(caretPosition, caretPosition);
-                    });
-                  }}
                   placeholder={'email@example.com password\nhttps://code.example.com/link\nemail2@example.com password2 https://code.example.com/link2'}
                   className="admin-modal-input min-h-44 resize-y py-3 text-left leading-7"
                   dir="ltr"
@@ -5751,7 +5713,7 @@ function AccountForm({
                       ? "bg-emerald-50 text-emerald-700"
                       : "bg-amber-50 text-amber-700",
                   )}>
-                    تم اكتشاف ({parsedAccounts.length} من أصل {detectedEmailCount}) حسابات بنجاح ✅
+                    تم استخراج {parsedAccounts.length} من أصل {detectedEmailCount} حسابات بنجاح ✅
                   </span>
                 </div>
                 {parsedAccounts.map((account, index) => {
@@ -5842,7 +5804,13 @@ function AccountForm({
             className="flex h-12 flex-1 items-center justify-center gap-2 rounded-xl bg-[#8B35F5] text-sm font-black text-white shadow-[0_14px_30px_rgba(139,53,245,0.26)] transition duration-300 hover:-translate-y-0.5 hover:bg-[#7626DD] disabled:cursor-not-allowed disabled:opacity-60"
           >
             {batchSaving ? <RefreshCw className="h-5 w-5 animate-spin" /> : editing ? <Check className="h-5 w-5" /> : entryMode === "smart" ? <Save className="h-5 w-5" /> : <Plus className="h-5 w-5" />}
-            {loading || batchSaving ? "جاري الحفظ..." : editing ? "حفظ التعديلات" : entryMode === "smart" ? "حفظ الحسابات المضافة" : "إضافة حساب جديد"}
+            {loading || batchSaving
+              ? "جاري الحفظ..."
+              : editing
+                ? "حفظ التعديلات"
+                : entryMode === "smart"
+                  ? `حفظ وإضافة جميع الحسابات (${parsedAccounts.length})`
+                  : "إضافة حساب جديد"}
           </button>
         </div>
       </form>
