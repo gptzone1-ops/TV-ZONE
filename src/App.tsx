@@ -527,6 +527,33 @@ function cleanRawText(text: string): string {
     .replace(/\r/g, "\n");
 }
 
+function clipboardHtmlToPlainText(html: string) {
+  if (!html.trim()) return "";
+
+  const container = document.createElement("div");
+  container.innerHTML = html;
+  container.querySelectorAll("br").forEach((element) => element.replaceWith("\n"));
+  container.querySelectorAll("p, div, li, section").forEach((element) => element.append("\n"));
+  return container.textContent || "";
+}
+
+function whatsappPasteScore(text: string) {
+  const cleanedText = cleanRawText(text);
+  const emailCount = Array.from(cleanedText.matchAll(new RegExp(strictEmailRegex.source, "g"))).length;
+  const urlCount = Array.from(cleanedText.matchAll(/https?:\/\/[^\s]+/gi)).length;
+  return (emailCount * 10_000_000) + (urlCount * 100_000) + Math.min(cleanedText.length, 99_999);
+}
+
+function bestWhatsappPasteCandidate(clipboardData: DataTransfer) {
+  const candidates = [
+    clipboardData.getData("text/plain"),
+    clipboardData.getData("text"),
+    clipboardHtmlToPlainText(clipboardData.getData("text/html")),
+  ].filter((value) => value.trim());
+
+  return candidates.sort((first, second) => whatsappPasteScore(second) - whatsappPasteScore(first))[0] || "";
+}
+
 function stripWhatsappLinePrefix(line: string) {
   return line
     .replace(/^\s*\[[^\]]*\]\s*[^:\n]*:\s*/u, "")
@@ -5687,6 +5714,24 @@ function AccountForm({
                   rows={8}
                   value={smartPasteText}
                   onChange={(event) => updateSmartPasteText(event.target.value)}
+                  onPaste={(event) => {
+                    const originalValue = smartPasteText;
+                    const selectionStart = event.currentTarget.selectionStart ?? originalValue.length;
+                    const selectionEnd = event.currentTarget.selectionEnd ?? selectionStart;
+                    const completeCandidate = bestWhatsappPasteCandidate(event.clipboardData);
+                    resetSmartPastePreview();
+
+                    // Keep Safari's native paste, then upgrade it only when WhatsApp provides a more complete format.
+                    window.setTimeout(() => {
+                      if (!completeCandidate) return;
+                      const completeValue = `${originalValue.slice(0, selectionStart)}${completeCandidate}${originalValue.slice(selectionEnd)}`;
+                      setSmartPasteText((currentValue) => (
+                        whatsappPasteScore(completeValue) > whatsappPasteScore(currentValue)
+                          ? completeValue
+                          : currentValue
+                      ));
+                    }, 0);
+                  }}
                   placeholder={'email@example.com password\nhttps://code.example.com/link\nemail2@example.com password2 https://code.example.com/link2'}
                   className="admin-modal-input min-h-44 resize-y py-3 text-left leading-7"
                   dir="ltr"
