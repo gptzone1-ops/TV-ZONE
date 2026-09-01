@@ -537,6 +537,30 @@ function clipboardHtmlToPlainText(html: string) {
   return container.textContent || "";
 }
 
+function clipboardRtfToPlainText(rtf: string) {
+  if (!rtf.trim()) return "";
+
+  return rtf
+    .replace(/\\par[d]?\b ?/gi, "\n")
+    .replace(/\\line\b ?/gi, "\n")
+    .replace(/\\tab\b ?/gi, "\t")
+    .replace(/\\u(-?\d+)\??/g, (_match, rawCode: string) => {
+      const code = Number(rawCode);
+      return String.fromCharCode(code < 0 ? code + 65_536 : code);
+    })
+    .replace(/\\'([0-9a-f]{2})/gi, (_match, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
+    .replace(/\\[a-z]+-?\d* ?/gi, "")
+    .replace(/[{}]/g, "")
+    .replace(/\\\\/g, "\\");
+}
+
+function normalizeWhatsappClipboardItem(type: string, value: string) {
+  const normalizedType = type.toLowerCase();
+  if (normalizedType.includes("html")) return clipboardHtmlToPlainText(value);
+  if (normalizedType.includes("rtf")) return clipboardRtfToPlainText(value);
+  return value;
+}
+
 function whatsappPasteScore(text: string) {
   const cleanedText = cleanRawText(text);
   const emailCount = Array.from(cleanedText.matchAll(new RegExp(strictEmailRegex.source, "g"))).length;
@@ -544,14 +568,45 @@ function whatsappPasteScore(text: string) {
   return (emailCount * 10_000_000) + (urlCount * 100_000) + Math.min(cleanedText.length, 99_999);
 }
 
-function bestWhatsappPasteCandidate(clipboardData: DataTransfer) {
-  const candidates = [
+function bestWhatsappPasteCandidate(candidates: string[]) {
+  return candidates
+    .filter((value) => value.trim())
+    .sort((first, second) => whatsappPasteScore(second) - whatsappPasteScore(first))[0] || "";
+}
+
+function synchronousWhatsappPasteCandidates(clipboardData: DataTransfer) {
+  return [
     clipboardData.getData("text/plain"),
     clipboardData.getData("text"),
     clipboardHtmlToPlainText(clipboardData.getData("text/html")),
-  ].filter((value) => value.trim());
+    clipboardRtfToPlainText(clipboardData.getData("text/rtf")),
+  ];
+}
 
-  return candidates.sort((first, second) => whatsappPasteScore(second) - whatsappPasteScore(first))[0] || "";
+function readWhatsappClipboardItems(clipboardData: DataTransfer) {
+  const stringItems = Array.from(clipboardData.items).filter((item) => item.kind === "string");
+  if (!stringItems.length) return Promise.resolve<string[]>([]);
+
+  return Promise.all(stringItems.map((item) => new Promise<{ type: string; value: string }>((resolve) => {
+    item.getAsString((value) => {
+      resolve({ type: item.type || "text/plain", value: normalizeWhatsappClipboardItem(item.type, value) });
+    });
+  }))).then((items) => {
+    const groupedByType = new Map<string, string[]>();
+
+    items.forEach(({ type, value }) => {
+      if (!value.trim()) return;
+      const normalizedType = type.toLowerCase() || "text/plain";
+      const values = groupedByType.get(normalizedType) || [];
+      values.push(value);
+      groupedByType.set(normalizedType, values);
+    });
+
+    return [
+      ...items.map(({ value }) => value),
+      ...Array.from(groupedByType.values()).map((values) => values.join("\n")),
+    ];
+  });
 }
 
 function stripWhatsappLinePrefix(line: string) {
@@ -5718,19 +5773,32 @@ function AccountForm({
                     const originalValue = smartPasteText;
                     const selectionStart = event.currentTarget.selectionStart ?? originalValue.length;
                     const selectionEnd = event.currentTarget.selectionEnd ?? selectionStart;
-                    const completeCandidate = bestWhatsappPasteCandidate(event.clipboardData);
+                    const synchronousCandidates = synchronousWhatsappPasteCandidates(event.clipboardData);
+                    const clipboardItemsPromise = readWhatsappClipboardItems(event.clipboardData);
                     resetSmartPastePreview();
 
-                    // Keep Safari's native paste, then upgrade it only when WhatsApp provides a more complete format.
-                    window.setTimeout(() => {
+                    const applyMoreCompleteCandidate = (candidates: string[]) => {
+                      const completeCandidate = bestWhatsappPasteCandidate(candidates);
                       if (!completeCandidate) return;
+
                       const completeValue = `${originalValue.slice(0, selectionStart)}${completeCandidate}${originalValue.slice(selectionEnd)}`;
                       setSmartPasteText((currentValue) => (
                         whatsappPasteScore(completeValue) > whatsappPasteScore(currentValue)
                           ? completeValue
                           : currentValue
                       ));
+                    };
+
+                    // Keep Safari's native paste and then restore the most complete clipboard representation.
+                    window.setTimeout(() => {
+                      applyMoreCompleteCandidate(synchronousCandidates);
                     }, 0);
+
+                    void clipboardItemsPromise.then((itemCandidates) => {
+                      window.setTimeout(() => {
+                        applyMoreCompleteCandidate([...synchronousCandidates, ...itemCandidates]);
+                      }, 0);
+                    });
                   }}
                   placeholder={'email@example.com password\nhttps://code.example.com/link\nemail2@example.com password2 https://code.example.com/link2'}
                   className="admin-modal-input min-h-44 resize-y py-3 text-left leading-7"
