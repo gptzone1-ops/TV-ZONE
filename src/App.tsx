@@ -141,8 +141,7 @@ const adminPassword = import.meta.env.VITE_ADMIN_PASSWORD || "Net123213Net@";
 const adminEmail = import.meta.env.VITE_ADMIN_EMAIL || "admin@zonestore.sa";
 const adminAuthKey = "zone-admin-auth";
 const adminAuthValue = `remembered:${adminPassword}`;
-const netflixWhatsAppNumber = import.meta.env.VITE_NETFLIX_WHATSAPP_NUMBER || "966581688656";
-const otherServicesWhatsAppNumber = "966581688656";
+const supportWhatsAppNumber = import.meta.env.VITE_WHATSAPP_NUMBER || "966571976515";
 const extraCreditStorageBucket = "extra_credit_requests";
 const disclaimerStorageKey = "disclaimer_accepted";
 const dayMs = 1000 * 60 * 60 * 24;
@@ -447,7 +446,7 @@ function buildSupportWhatsAppUrl({
   email,
   customerCode,
   deviceType,
-  phoneNumber = netflixWhatsAppNumber,
+  phoneNumber = supportWhatsAppNumber,
 }: {
   issue: SupportIssue;
   email: string;
@@ -7163,7 +7162,6 @@ function CustomerView({
   const service = serviceOf(account);
   const showsNetflixProfilePin = service === "netflix" && account?.account_type === "private";
   const showsOsnProfilePin = service === "osn" && Boolean(String(link?.profile_code || "").trim());
-  const supportWhatsAppNumber = service === "netflix" ? netflixWhatsAppNumber : otherServicesWhatsAppNumber;
   const normalClientLayout = account?.normal_client_layout === true && account?.account_type !== "temporary";
   const serviceOutageActive = service === "netflix" && netflixServiceOutage && !normalClientLayout;
   const theme = serviceThemes[service];
@@ -7172,7 +7170,7 @@ function CustomerView({
   const osnCodeSupportMessage = `مرحباً، أرغب بالحصول على كود التفعيل لحساب OSN التالي:
 - البريد الإلكتروني: ${supportEmail}
 - رمز الطلب/العميل: ${customerCode}`;
-  const osnCodeSupportWhatsAppUrl = `https://wa.me/${otherServicesWhatsAppNumber}?text=${encodeURIComponent(osnCodeSupportMessage)}`;
+  const osnCodeSupportWhatsAppUrl = `https://wa.me/${supportWhatsAppNumber}?text=${encodeURIComponent(osnCodeSupportMessage)}`;
   const unavailableResultWhatsAppUrl = buildSupportWhatsAppUrl({
     issue: "unavailable",
     email: supportEmail,
