@@ -43,7 +43,7 @@ export default async function handler(req, res) {
   try {
     const { data: customer, error: customerError } = await supabase
       .from("customer_links")
-      .select("id, client_code")
+      .select("id, client_code, is_active")
       .ilike("client_code", clientCode)
       .maybeSingle();
 
@@ -58,6 +58,13 @@ export default async function handler(req, res) {
     }
     if (!customer) {
       return send(res, 404, { success: false, error: "invalid_client_code" });
+    }
+    if (customer.is_active === false) {
+      return send(res, 410, {
+        success: false,
+        error: "customer_link_expired",
+        message: "انتهت صلاحية هذا الاشتراك.",
+      });
     }
 
     const canonicalCode = String(customer.client_code).toUpperCase();

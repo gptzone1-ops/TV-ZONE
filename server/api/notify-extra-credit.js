@@ -628,12 +628,15 @@ async function createInstantApprovedRequest(req, res, supabase) {
 
   const { data: customer, error: customerError } = await supabase
     .from("customer_links")
-    .select("id,email,link_number,short_id,uuid,selected_device,profile_name,profile_label,code_request_limit,code_requested_count,external_code_used,external_code_first_opened_at,accounts(email,service_type,code_fetch_method)")
+    .select("id,email,link_number,short_id,uuid,is_active,selected_device,profile_name,profile_label,code_request_limit,code_requested_count,external_code_used,external_code_first_opened_at,accounts(email,service_type,code_fetch_method)")
     .eq("id", customerId)
     .maybeSingle();
   if (customerError || !customer) {
     console.error("Instant credit customer lookup failed:", customerError);
     return res.status(404).json({ success: false, error: "customer_not_found" });
+  }
+  if (customer.is_active === false) {
+    return res.status(410).json({ success: false, error: "customer_link_expired" });
   }
 
   const currentLimit = Math.max(0, Number(customer.code_request_limit ?? 1));

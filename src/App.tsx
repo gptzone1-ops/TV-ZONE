@@ -96,6 +96,12 @@ type ParsedWhatsappAccountsResult = {
   accounts: ParsedAccount[];
   detectedEmailCount: number;
 };
+type ParsedAccountValidation = {
+  email: string;
+  status: "new" | "renewable" | "active" | "service_mismatch" | "payload_duplicate";
+  remainingDays: number | null;
+  daysPassed: number | null;
+};
 type AdminAccountsCacheEntry = {
   accounts: NetflixAccount[];
   links: CustomerLink[];
@@ -190,7 +196,7 @@ const emptyEmailMessage = "أدخل البريد الإلكتروني أولاً
 const customerAccountPublicSelect = "*,accounts(id,email,use_automated_code,code_fetch_method,compensation_tutorial_url,verification_code,verification_code_received_at,service_type,account_type,compensation_distribution,osn_subscription_mode,osn_cycle_number,osn_cycle_started_at,osn_cycle_ends_at,expires_at,created_at,email_provider,imap_enabled,normal_client_layout,hide_password_from_client,is_reported_closed,reported_closed_at)";
 const legacyCustomerAccountSelect = "*,accounts(id,email,password,use_automated_code,supplier_code_url,compensation_tutorial_url,verification_code,verification_code_received_at,service_type,account_type,compensation_distribution,expires_at,created_at,email_provider,imap_enabled,normal_client_layout)";
 const adminAccountSelect = "id,email,password,use_automated_code,supplier_code_url,code_fetch_method,temporary_short_id,email_provider,imap_enabled,normal_client_layout,hide_password_from_client,is_reported_closed,reported_closed_at,compensation_distribution,compensation_tutorial_url,verification_code,verification_code_received_at,service_type,osn_subscription_mode,osn_cycle_number,osn_cycle_started_at,osn_cycle_ends_at,account_type,expires_at,created_at";
-const adminCustomerLinkSelect = "id,account_id,client_code,email,link_number,code_request_limit,code_requested_count,code_used_at,verification_code,verification_code_received_at,selected_device,tv_approval_url,has_used_tv_link,tv_link_used_at,external_code_used,external_code_used_at,external_code_first_opened_at,updated_at,uuid,short_id,profile_name,profile_label,profile_code,activation_key,service_type,created_at";
+const adminCustomerLinkSelect = "id,account_id,client_code,email,link_number,code_request_limit,code_requested_count,code_used_at,verification_code,verification_code_received_at,selected_device,tv_approval_url,has_used_tv_link,tv_link_used_at,external_code_used,external_code_used_at,external_code_first_opened_at,is_active,invalidated_at,invalidation_reason,updated_at,uuid,short_id,profile_name,profile_label,profile_code,activation_key,service_type,created_at";
 
 const serviceThemes: Record<ServiceType, ServiceTheme> = {
   netflix: {
@@ -1573,6 +1579,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
         supabase
           .from("customer_links")
           .select("account_id")
+          .eq("is_active", true)
           .ilike("short_id", `%${searchTerm}%`),
       ];
 
@@ -1581,6 +1588,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
           supabase
             .from("customer_links")
             .select("account_id")
+            .eq("is_active", true)
             .eq("link_number", Number(searchTerm)),
         );
       }
@@ -1675,6 +1683,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       .from("customer_links")
       .select(adminCustomerLinkSelect)
       .in("account_id", pageAccountIds)
+      .eq("is_active", true)
       .order("account_id", { ascending: true })
       .order("profile_name", { ascending: true });
 
@@ -2322,7 +2331,12 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       const blockedSummary = blockedAccounts.length
         ? ` واستبعاد ${blockedAccounts.length} نشط: ${blockedAccounts.map((account) => `${account.email} (${account.remainingDays} يوم)`).join("، ")}`
         : "";
-      setToast({ label: `${successParts.join(" و ")}${blockedSummary}`, at: Date.now() });
+      setToast({
+        label: blockedAccounts.length
+          ? `${successParts.join(" و ")}${blockedSummary}`
+          : `تم حفظ جميع الحسابات بنجاح (عدد الحسابات الجديدة: ${createdCount} | عدد الحسابات المجددة: ${renewedCount})`,
+        at: Date.now(),
+      });
       return {
         ok: true,
         count: result.accounts.length,
@@ -5720,6 +5734,8 @@ function AccountForm({
   const [parsedAccounts, setParsedAccounts] = useState<ParsedAccount[]>([]);
   const [detectedEmailCount, setDetectedEmailCount] = useState(0);
   const [duplicateBatchEmails, setDuplicateBatchEmails] = useState<string[]>([]);
+  const [parsedAccountValidations, setParsedAccountValidations] = useState<Record<string, ParsedAccountValidation>>({});
+  const [batchValidating, setBatchValidating] = useState(false);
   const [batchResultNotice, setBatchResultNotice] = useState("");
   const [batchSaving, setBatchSaving] = useState(false);
   const calculatedExpiry = service === "osn" && osnSubscriptionMode === "monthly_rotation"
@@ -5854,19 +5870,93 @@ function AccountForm({
     );
   }
 
-  function extractSmartPasteAccounts() {
+  async function validateSmartPasteAccounts(accountsToValidate: ParsedAccount[]) {
+    const emails = accountsToValidate.map((account) => normalizeEmail(account.email)).filter(Boolean);
+    if (!emails.length) return null;
+
+    setBatchValidating(true);
+    try {
+      const response = await fetch("/api/create-customer-links", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-admin-password": adminPassword,
+        },
+        body: JSON.stringify({
+          action: "validate_account_emails",
+          service_type: service,
+          account_type: accountType,
+          emails,
+        }),
+      });
+      const payload = await response.json().catch(() => null) as {
+        success?: boolean;
+        accounts?: Array<{
+          email: string;
+          status: ParsedAccountValidation["status"];
+          remaining_days: number | null;
+          days_passed: number | null;
+        }>;
+      } | null;
+      if (!response.ok || !payload?.success || !Array.isArray(payload.accounts)) {
+        throw new Error("account_validation_failed");
+      }
+
+      const validations = Object.fromEntries(payload.accounts.map((item) => [
+        normalizeEmail(item.email),
+        {
+          email: normalizeEmail(item.email),
+          status: item.status,
+          remainingDays: item.remaining_days == null ? null : Number(item.remaining_days),
+          daysPassed: item.days_passed == null ? null : Number(item.days_passed),
+        },
+      ])) as Record<string, ParsedAccountValidation>;
+      const repeatedEmails = new Set(
+        emails.filter((email, index) => emails.indexOf(email) !== index),
+      );
+      repeatedEmails.forEach((email) => {
+        validations[email] = {
+          email,
+          status: "payload_duplicate",
+          remainingDays: validations[email]?.remainingDays ?? null,
+          daysPassed: validations[email]?.daysPassed ?? null,
+        };
+      });
+      setParsedAccountValidations(validations);
+      const blockedEmails = Object.values(validations)
+        .filter((item) => item.status === "active" || item.status === "service_mismatch" || item.status === "payload_duplicate")
+        .map((item) => item.email);
+      setDuplicateBatchEmails(blockedEmails);
+      setFormError(blockedEmails.length
+        ? "⚠️ توجد حسابات مكررة ونشطة، يرجى حذفها من القائمة للمتابعة."
+        : "");
+      return validations;
+    } catch (error) {
+      console.error("Bulk account pre-validation failed:", error);
+      setParsedAccountValidations({});
+      setFormError("تعذر فحص حالة الحسابات. لم يتم تفعيل الحفظ لحماية البيانات.");
+      return null;
+    } finally {
+      setBatchValidating(false);
+    }
+  }
+
+  async function extractSmartPasteAccounts() {
     const result = parseWhatsappAccounts(smartPasteText);
     setParsedAccounts(result.accounts);
     setDetectedEmailCount(result.detectedEmailCount);
     setDuplicateBatchEmails([]);
+    setParsedAccountValidations({});
     setBatchResultNotice("");
     setFormError(result.accounts.length ? "" : "لم يتم العثور على أي بريد إلكتروني صالح في النص الملصق.");
+    if (result.accounts.length) await validateSmartPasteAccounts(result.accounts);
   }
 
   function resetSmartPastePreview() {
     setParsedAccounts([]);
     setDetectedEmailCount(0);
     setDuplicateBatchEmails([]);
+    setParsedAccountValidations({});
     setBatchResultNotice("");
     setFormError("");
   }
@@ -5879,9 +5969,33 @@ function AccountForm({
   function updateParsedAccount(id: string, field: keyof Omit<ParsedAccount, "id">, value: string) {
     setDuplicateBatchEmails([]);
     setBatchResultNotice("");
+    if (field === "email") {
+      setParsedAccountValidations({});
+      setFormError("أعد الضغط على استخراج الحسابات لفحص البريد بعد تعديله.");
+    }
     setParsedAccounts((current) => current.map((account) => (
       account.id === id ? { ...account, [field]: value } : account
     )));
+  }
+
+  function removeParsedAccount(id: string) {
+    const next = parsedAccounts.filter((item) => item.id !== id);
+    const removedAccount = parsedAccounts.find((item) => item.id === id);
+    const remainingEmails = new Set(next.map((item) => normalizeEmail(item.email)));
+    const remainingBlocked = Object.values(parsedAccountValidations).some((item) => (
+      remainingEmails.has(item.email)
+      && (item.status === "active" || item.status === "service_mismatch" || item.status === "payload_duplicate")
+    ));
+    setParsedAccounts(next);
+    setDuplicateBatchEmails((currentEmails) => currentEmails.filter((email) => remainingEmails.has(email)));
+    if (!remainingBlocked) setFormError("");
+    if (
+      next.length
+      && removedAccount
+      && parsedAccountValidations[normalizeEmail(removedAccount.email)]?.status === "payload_duplicate"
+    ) {
+      void validateSmartPasteAccounts(next);
+    }
   }
 
   async function saveParsedAccounts() {
@@ -5909,6 +6023,20 @@ function AccountForm({
       return;
     }
 
+    const everyAccountValidated = normalizedEmails.every((accountEmail) => parsedAccountValidations[accountEmail]);
+    const validations = everyAccountValidated
+      ? parsedAccountValidations
+      : await validateSmartPasteAccounts(parsedAccounts);
+    if (!validations) return;
+    const blockedAccounts = normalizedEmails
+      .map((accountEmail) => validations[accountEmail])
+      .filter((item) => item?.status === "active" || item?.status === "service_mismatch" || item?.status === "payload_duplicate");
+    if (blockedAccounts.length) {
+      setDuplicateBatchEmails(blockedAccounts.map((item) => item.email));
+      setFormError("⚠️ توجد حسابات مكررة ونشطة، يرجى حذفها من القائمة للمتابعة.");
+      return;
+    }
+
     setBatchSaving(true);
     const result = await onAddBatch(parsedAccounts.map((account) => ({
       email: normalizeEmail(account.email),
@@ -5919,21 +6047,20 @@ function AccountForm({
     })));
     setBatchSaving(false);
 
-    if (result.ok && result.blockedAccounts?.length) {
-      const blockedEmails = result.blockedAccounts.map((account) => account.email);
-      setParsedAccounts((current) => current.filter((account) => blockedEmails.includes(normalizeEmail(account.email))));
-      setDuplicateBatchEmails(blockedEmails);
-      setBatchResultNotice(
-        `تم حفظ الحسابات المؤهلة، واستُبعدت الحسابات النشطة التالية: ${result.blockedAccounts
-          .map((account) => `${account.email} (متبقي ${account.remainingDays} يوم)`)
-          .join("، ")}`,
-      );
-    } else if (result.ok) onClose();
+    if (result.ok) onClose();
     else {
       setDuplicateBatchEmails(result.duplicateEmails || []);
       setFormError(result.error || "تعذر حفظ الحسابات، حاول مرة أخرى.");
     }
   }
+
+  const parsedEmails = parsedAccounts.map((account) => normalizeEmail(account.email));
+  const allParsedAccountsValidated = parsedAccounts.length > 0
+    && parsedEmails.every((accountEmail) => Boolean(parsedAccountValidations[accountEmail]));
+  const hasBlockedParsedAccount = parsedEmails.some((accountEmail) => {
+    const status = parsedAccountValidations[accountEmail]?.status;
+    return status === "active" || status === "service_mismatch" || status === "payload_duplicate";
+  });
 
   return (
     <div
@@ -6333,12 +6460,12 @@ function AccountForm({
               </label>
               <button
                 type="button"
-                onClick={extractSmartPasteAccounts}
-                disabled={!smartPasteText.trim() || batchSaving}
+                onClick={() => void extractSmartPasteAccounts()}
+                disabled={!smartPasteText.trim() || batchSaving || batchValidating}
                 className="mt-3 flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#8B35F5] px-4 text-sm font-black text-white transition hover:bg-[#7626DD] disabled:cursor-not-allowed disabled:opacity-50"
               >
-                <Zap className="h-4 w-4" />
-                استخراج الحسابات
+                {batchValidating ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />}
+                {batchValidating ? "جاري فحص الحسابات..." : "استخراج الحسابات"}
               </button>
             </div>
 
@@ -6359,24 +6486,30 @@ function AccountForm({
                   const missingPassword = service !== "osn" && !account.password.trim();
                   const missingCodeUrl = !account.code_url.trim();
                   const needsReview = missingPassword || missingCodeUrl;
+                  const validation = parsedAccountValidations[normalizeEmail(account.email)];
+                  const validationTone = validation?.status === "new"
+                    ? "border-emerald-300 bg-emerald-50/40"
+                    : validation?.status === "renewable"
+                      ? "border-amber-300 bg-amber-50/40"
+                      : validation?.status === "active" || validation?.status === "service_mismatch" || validation?.status === "payload_duplicate"
+                        ? "border-rose-400 bg-rose-50/50"
+                        : needsReview
+                          ? "border-amber-300 bg-amber-50/30"
+                          : "border-[#E7DDF5]";
 
                   return (
                   <article
                     key={account.id}
                     className={cn(
                       "rounded-2xl border bg-white p-4",
-                      duplicateBatchEmails.includes(normalizeEmail(account.email))
-                        ? "border-rose-400 bg-rose-50/40"
-                        : needsReview
-                          ? "border-amber-300 bg-amber-50/30"
-                          : "border-[#E7DDF5]",
+                      validationTone,
                     )}
                   >
                     <div className="mb-3 flex items-center justify-between gap-3">
                       <p className="text-xs font-black text-[#8B35F5]">حساب {index + 1}</p>
                       <button
                         type="button"
-                        onClick={() => setParsedAccounts((current) => current.filter((item) => item.id !== account.id))}
+                        onClick={() => removeParsedAccount(account.id)}
                         className="flex h-8 w-8 items-center justify-center rounded-lg text-rose-500 transition hover:bg-rose-50"
                         title="إزالة من المعاينة"
                       >
@@ -6413,6 +6546,26 @@ function AccountForm({
                         dir="ltr"
                       />
                     </div>
+                    {validation && (
+                      <p className={cn(
+                        "mb-3 rounded-xl px-3 py-2 text-xs font-black leading-6",
+                        validation.status === "new"
+                          ? "bg-emerald-100 text-emerald-800"
+                          : validation.status === "renewable"
+                            ? "bg-amber-100 text-amber-800"
+                            : "bg-rose-100 text-rose-700",
+                      )}>
+                        {validation.status === "new"
+                          ? "حساب جديد بالكامل"
+                          : validation.status === "renewable"
+                            ? `تجديد حساب متاح${validation.remainingDays == null ? "" : ` (متبقي ${validation.remainingDays} يوم)`}`
+                            : validation.status === "payload_duplicate"
+                              ? "الإيميل مكرر داخل النص الملصق"
+                            : validation.status === "service_mismatch"
+                              ? "البريد مسجل في خدمة أخرى ولا يمكن تجديده من هذا القسم"
+                              : `إيميل مكرر ونشط${validation.remainingDays == null ? "" : ` (متبقي ${validation.remainingDays} يوم)`}`}
+                      </p>
+                    )}
                     {needsReview && (
                       <p className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-black leading-6 text-amber-800">
                         يحتاج هذا الحساب إلى مراجعة: {[missingPassword ? "كلمة المرور" : "", missingCodeUrl ? "رابط جلب الكود" : ""].filter(Boolean).join(" و ")}.
@@ -6439,7 +6592,16 @@ function AccountForm({
             إلغاء
           </button>
           <button
-            disabled={loading || batchSaving || (entryMode === "smart" && parsedAccounts.length === 0)}
+            disabled={
+              loading
+              || batchSaving
+              || batchValidating
+              || (entryMode === "smart" && (
+                parsedAccounts.length === 0
+                || !allParsedAccountsValidated
+                || hasBlockedParsedAccount
+              ))
+            }
             className="flex h-12 flex-1 items-center justify-center gap-2 rounded-xl bg-[#8B35F5] text-sm font-black text-white shadow-[0_14px_30px_rgba(139,53,245,0.26)] transition duration-300 hover:-translate-y-0.5 hover:bg-[#7626DD] disabled:cursor-not-allowed disabled:opacity-60"
           >
             {batchSaving ? <RefreshCw className="h-5 w-5 animate-spin" /> : editing ? <Check className="h-5 w-5" /> : entryMode === "smart" ? <Save className="h-5 w-5" /> : <Plus className="h-5 w-5" />}
@@ -7406,7 +7568,9 @@ function CustomerView({
       const customerLink = await loadCustomerLinkRecord(queryColumn, identifier);
       if (customerLink) {
         setLink(customerLink);
-        if (lookup === "short") localStorage.setItem(lastActiveSubscriptionStorageKey, identifier);
+        if (lookup === "short" && customerLink.is_active !== false) {
+          localStorage.setItem(lastActiveSubscriptionStorageKey, identifier);
+        }
       }
       setLoading(false);
     }
@@ -7488,6 +7652,12 @@ function CustomerView({
 
   useEffect(() => {
     if (!link?.id) return;
+    if (link.is_active === false) {
+      setOsnDeviceMode(null);
+      setShowOsnDeviceOnboarding(false);
+      setShowOsnMobileAcknowledgement(false);
+      return;
+    }
     if (serviceOf(link.accounts) !== "osn") {
       setOsnDeviceMode(null);
       setShowOsnDeviceOnboarding(false);
@@ -7532,7 +7702,7 @@ function CustomerView({
 
     setOsnDeviceMode(null);
     setShowOsnDeviceOnboarding(true);
-  }, [link?.id, link?.created_at, link?.selected_device, link?.accounts?.service_type]);
+  }, [link?.id, link?.is_active, link?.created_at, link?.selected_device, link?.accounts?.service_type]);
 
   useEffect(() => {
     setIsExternalCodeUsed(link?.external_code_used === true);
@@ -7545,6 +7715,7 @@ function CustomerView({
 
   useEffect(() => {
     const shouldLock =
+      link?.is_active !== false &&
       link?.accounts?.account_type !== "compensation" &&
       link?.accounts?.is_reported_closed !== true &&
       (showDisclaimer ||
@@ -7562,7 +7733,7 @@ function CustomerView({
     return () => {
       document.body.style.overflow = previous;
     };
-  }, [link?.accounts?.account_type, link?.accounts?.is_reported_closed, showDisclaimer, showReminder, pendingDeviceView, showTvRequestModal, showProfilePinWarning, showExternalCodeWarning, showOsnDeviceOnboarding, showOsnMobileAcknowledgement, activeTutorial, showExtraCreditModal]);
+  }, [link?.is_active, link?.accounts?.account_type, link?.accounts?.is_reported_closed, showDisclaimer, showReminder, pendingDeviceView, showTvRequestModal, showProfilePinWarning, showExternalCodeWarning, showOsnDeviceOnboarding, showOsnMobileAcknowledgement, activeTutorial, showExtraCreditModal]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNowTick(Date.now()), 1000);
@@ -7587,6 +7758,7 @@ function CustomerView({
   }, [activeTutorial]);
 
   const account = link?.accounts;
+  const linkIsInactive = link?.is_active === false;
   const accountReportedClosed = account?.is_reported_closed === true;
   const osnActivationKey = String(link?.activation_key || "").trim();
   const usesOsnMonthlyRotation = isOsnMonthlyRotation(account);
@@ -8708,7 +8880,7 @@ function CustomerView({
                 <UserRound className="h-6 w-6" />
               </button>
             </div>
-            {!accountReportedClosed && !normalClientLayout && link?.client_code && (
+            {!linkIsInactive && !accountReportedClosed && !normalClientLayout && link?.client_code && (
               <div className="mt-4 border-t border-[#EEE7F8] pt-4">
                 <CompensationCodeCard code={link.client_code} compact showPageLink />
               </div>
@@ -8727,7 +8899,17 @@ function CustomerView({
             </div>
           )}
 
-          {link && account && (accountReportedClosed ? (
+          {link && account && (linkIsInactive ? (
+            <section className="rounded-[2rem] border border-rose-200 bg-white p-7 text-center shadow-premium-lg md:p-10">
+              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-rose-100 text-rose-600">
+                <CircleX className="h-8 w-8" />
+              </div>
+              <h2 className="mt-5 text-2xl font-black text-zinc-950">انتهت صلاحية هذا الاشتراك</h2>
+              <p className="mx-auto mt-3 max-w-md text-sm font-bold leading-7 text-zinc-600">
+                تم تجديد الحساب وإصدار روابط جديدة. هذا الرابط القديم لم يعد صالحاً للاستخدام.
+              </p>
+            </section>
+          ) : accountReportedClosed ? (
             <ClosedAccountCompensationView link={link} navigate={navigate} />
           ) : (
             <div className="space-y-6">
@@ -9581,7 +9763,7 @@ function CustomerView({
             </div>
           ))}
 
-          {showOsnDeviceOnboarding && service === "osn" && link && account && !accountReportedClosed && (
+          {showOsnDeviceOnboarding && service === "osn" && link && account && !linkIsInactive && !accountReportedClosed && (
             <div
               className="fixed inset-0 z-[150] flex items-center justify-center overflow-y-auto bg-zinc-950/70 p-4 backdrop-blur-md"
               dir="rtl"
@@ -9633,7 +9815,7 @@ function CustomerView({
             </div>
           )}
 
-          {showOsnMobileAcknowledgement && service === "osn" && link && account && !accountReportedClosed && (
+          {showOsnMobileAcknowledgement && service === "osn" && link && account && !linkIsInactive && !accountReportedClosed && (
             <div
               className="fixed inset-0 z-[155] flex items-center justify-center overflow-y-auto bg-zinc-950/75 p-4 backdrop-blur-md"
               dir="rtl"
@@ -9728,7 +9910,7 @@ function CustomerView({
             </div>
           )}
 
-          {showDisclaimer && !accountReportedClosed && (
+          {showDisclaimer && !linkIsInactive && !accountReportedClosed && (
             <DisclaimerModal
               onToggle={(checked) => setAgreeDisclaimer(checked)}
               onContinue={() => {

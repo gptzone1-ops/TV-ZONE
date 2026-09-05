@@ -43,7 +43,7 @@ export default async function handler(req, res) {
   });
   let lookupQuery = supabase
     .from("customer_links")
-    .select("id,account_id,external_code_used,external_code_first_opened_at");
+    .select("id,account_id,is_active,external_code_used,external_code_first_opened_at");
   lookupQuery = uuidPattern.test(identifier)
     ? lookupQuery.eq("id", identifier)
     : lookupQuery.ilike("short_id", identifier);
@@ -54,6 +54,9 @@ export default async function handler(req, res) {
     return send(res, 500, { success: false, error: "lookup_failed" });
   }
   if (!customerLink) return send(res, 404, { success: false, error: "customer_link_not_found" });
+  if (customerLink.is_active === false) {
+    return send(res, 410, { success: false, error: "customer_link_expired" });
+  }
   if (customerLink.external_code_used === true) {
     return send(res, 410, { success: false, error: "external_code_expired" });
   }

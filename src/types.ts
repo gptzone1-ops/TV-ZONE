@@ -61,6 +61,9 @@ export type CustomerLink = {
   external_code_used?: boolean | null;
   external_code_used_at?: string | null;
   external_code_first_opened_at?: string | null;
+  is_active?: boolean | null;
+  invalidated_at?: string | null;
+  invalidation_reason?: string | null;
   updated_at?: string | null;
   uuid: string;
   short_id?: string | null;

@@ -84,7 +84,7 @@ function renewalStatus(account, nowMs = Date.now()) {
   };
 }
 
-function findRenewalCandidate(existingAccounts, serviceType, accountType) {
+function findRenewalCandidate(existingAccounts, serviceType) {
   const sorted = [...existingAccounts].sort(
     (first, second) => new Date(second.created_at).getTime() - new Date(first.created_at).getTime(),
   );
@@ -95,81 +95,74 @@ function findRenewalCandidate(existingAccounts, serviceType, accountType) {
 
   const account = sorted.find((item) => (
     String(item.service_type || "netflix") === serviceType
-    && item.account_type === accountType
     && renewalStatus(item).renewable
   ));
   return { blocked: null, status: account ? renewalStatus(account) : null, account: account || null };
 }
 
-async function renewExistingAccount(supabase, existingAccount, account, serviceType) {
-  const now = new Date();
-  const createdAt = now.toISOString();
-  const expiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+async function renewExistingAccount(supabase, existingAccount, account, serviceType, accountType) {
   const supplierCodeUrl = account.supplierCodeUrl || null;
-  const codeFetchMethod = serviceType === "netflix"
-    ? supplierCodeUrl ? "external_link" : "auto_fetch"
-    : null;
-  const accountUpdate = {
-    password: account.password,
-    supplier_code_url: supplierCodeUrl,
-    code_fetch_method: codeFetchMethod,
-    use_automated_code: serviceType === "netflix" && !supplierCodeUrl,
-    created_at: createdAt,
-    expires_at: expiresAt,
-    normal_client_layout: true,
-    hide_password_from_client: serviceType === "netflix",
-    is_reported_closed: false,
-    reported_closed_at: null,
-  };
+  const links = buildBatchProfileSlots(accountType, serviceType);
+  const { data, error } = await supabase.rpc("renew_account_and_replace_customer_links", {
+    p_account_id: existingAccount.id,
+    p_email: account.email,
+    p_password: account.password,
+    p_supplier_code_url: supplierCodeUrl,
+    p_service_type: serviceType,
+    p_account_type: accountType,
+    p_links: links,
+  });
 
-  const { data: updatedAccount, error: accountError } = await supabase
-    .from("accounts")
-    .update(accountUpdate)
-    .eq("id", existingAccount.id)
-    .select("*")
-    .maybeSingle();
-  if (accountError || !updatedAccount) throw accountError || new Error("renewal_account_update_failed");
+  if (error) throw error;
+  if (!data?.account || !Array.isArray(data?.links)) throw new Error("invalid_renewal_result");
+  return { account: data.account, links: data.links };
+}
 
-  const { data: updatedLinks, error: linksError } = await supabase
-    .from("customer_links")
-    .update({
-      code_request_limit: 1,
-      code_requested_count: 0,
-      code_used_at: null,
-      verification_code: null,
-      verification_code_received_at: null,
-      selected_device: null,
-      tv_approval_url: null,
-      has_used_tv_link: false,
-      tv_link_used_at: null,
-      external_code_used: false,
-      external_code_used_at: null,
-      external_code_first_opened_at: null,
-      updated_at: createdAt,
-    })
-    .eq("account_id", existingAccount.id)
-    .select("*");
-
-  if (linksError) {
-    await supabase
-      .from("accounts")
-      .update({
-        password: existingAccount.password,
-        supplier_code_url: existingAccount.supplier_code_url,
-        code_fetch_method: existingAccount.code_fetch_method,
-        use_automated_code: existingAccount.use_automated_code,
-        created_at: existingAccount.created_at,
-        expires_at: existingAccount.expires_at,
-        normal_client_layout: existingAccount.normal_client_layout,
-        hide_password_from_client: existingAccount.hide_password_from_client,
-        is_reported_closed: existingAccount.is_reported_closed,
-        reported_closed_at: existingAccount.reported_closed_at,
-      })
-      .eq("id", existingAccount.id);
-    throw linksError;
+function classifyAccounts(accounts, existingAccounts, serviceType) {
+  const existingByEmail = new Map();
+  for (const existingAccount of existingAccounts || []) {
+    const email = String(existingAccount.email || "").trim().toLowerCase();
+    const matches = existingByEmail.get(email) || [];
+    matches.push(existingAccount);
+    existingByEmail.set(email, matches);
   }
 
-  return { account: updatedAccount, links: updatedLinks || [] };
+  return accounts.map((account) => {
+    const matches = existingByEmail.get(account.email) || [];
+    if (!matches.length) return { email: account.email, status: "new", account: null, renewal: null };
+
+    const candidate = findRenewalCandidate(matches, serviceType);
+    if (candidate.blocked) {
+      return {
+        email: account.email,
+        status: "active",
+        account: candidate.blocked,
+        renewal: candidate.status,
+      };
+    }
+    if (!candidate.account) {
+      return {
+        email: account.email,
+        status: "service_mismatch",
+        account: matches[0],
+        renewal: renewalStatus(matches[0]),
+      };
+    }
+    return {
+      email: account.email,
+      status: "renewable",
+      account: candidate.account,
+      renewal: candidate.status,
+    };
+  });
+}
+
+async function loadExistingAccounts(supabase) {
+  const { data, error } = await supabase
+    .from("accounts")
+    .select("*");
+  if (error) throw error;
+  return data || [];
 }
 
 function hasValidStructure(links, accountType, serviceType, osnSubscriptionMode) {
@@ -243,49 +236,53 @@ async function createAccountsBatch(req, res, supabase) {
     });
   }
 
-  const { data: existingAccounts, error: existingLookupError } = await supabase
-    .from("accounts")
-    .select("*");
-  if (existingLookupError) {
+  let existingAccounts;
+  try {
+    existingAccounts = await loadExistingAccounts(supabase);
+  } catch (existingLookupError) {
     console.error("Batch duplicate email lookup failed:", existingLookupError);
     return send(res, 500, { success: false, error: "duplicate_lookup_failed" });
-  }
-  const existingByEmail = new Map();
-  for (const existingAccount of existingAccounts || []) {
-    const email = String(existingAccount.email || "").trim().toLowerCase();
-    const matches = existingByEmail.get(email) || [];
-    matches.push(existingAccount);
-    existingByEmail.set(email, matches);
   }
 
   const newAccounts = [];
   const renewalPlans = [];
   const blockedAccounts = [];
-  for (const account of accounts) {
-    const matches = existingByEmail.get(account.email) || [];
-    if (!matches.length) {
+  const classifications = classifyAccounts(accounts, existingAccounts, serviceType);
+  for (let index = 0; index < accounts.length; index += 1) {
+    const account = accounts[index];
+    const classification = classifications[index];
+    if (classification.status === "new") {
       newAccounts.push(account);
       continue;
     }
-
-    const candidate = findRenewalCandidate(matches, serviceType, accountType);
-    if (candidate.blocked) {
+    if (classification.status === "active") {
       blockedAccounts.push({
         email: account.email,
-        remaining_days: candidate.status.remainingDays,
+        remaining_days: classification.renewal.remainingDays,
         reason: "active_account",
       });
       continue;
     }
-    if (!candidate.account) {
+    if (classification.status === "service_mismatch") {
       blockedAccounts.push({
         email: account.email,
-        remaining_days: Math.min(...matches.map((item) => renewalStatus(item).remainingDays)),
+        remaining_days: classification.renewal.remainingDays,
         reason: "service_or_type_mismatch",
       });
       continue;
     }
-    renewalPlans.push({ existingAccount: candidate.account, account });
+    renewalPlans.push({ existingAccount: classification.account, account });
+  }
+
+  if (blockedAccounts.length) {
+    return send(res, 409, {
+      success: false,
+      error: blockedAccounts.some((item) => item.reason === "active_account")
+        ? "active_duplicate"
+        : "renewal_type_mismatch",
+      blocked_accounts: blockedAccounts,
+      duplicate_emails: blockedAccounts.map((account) => account.email),
+    });
   }
 
   const accountRows = newAccounts.map((account) => ({
@@ -361,6 +358,7 @@ async function createAccountsBatch(req, res, supabase) {
         plan.existingAccount,
         plan.account,
         serviceType,
+        accountType,
       );
       renewedAccounts.push(renewed.account);
       renewedLinks.push(...renewed.links);
@@ -375,14 +373,9 @@ async function createAccountsBatch(req, res, supabase) {
   }
 
   if (!created.length && !renewedAccounts.length) {
-    const failureReason = blockedAccounts.some((account) => account.reason === "active_account")
-      ? "active_duplicate"
-      : blockedAccounts.some((account) => account.reason === "service_or_type_mismatch")
-        ? "renewal_type_mismatch"
-        : "account_renewal_failed";
     return send(res, 409, {
       success: false,
-      error: failureReason,
+      error: "account_renewal_failed",
       blocked_accounts: blockedAccounts,
       duplicate_emails: blockedAccounts.map((account) => account.email),
     });
@@ -415,6 +408,43 @@ export default async function handler(req, res) {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
+  if (req.body?.action === "validate_account_emails") {
+    const serviceType = String(req.body?.service_type || "").trim();
+    const accountType = String(req.body?.account_type || "").trim();
+    const emails = Array.isArray(req.body?.emails)
+      ? req.body.emails.map((email) => String(email || "").trim().toLowerCase())
+      : [];
+    if (
+      !["netflix", "shahid"].includes(serviceType)
+      || !["private", "shared"].includes(accountType)
+      || !emails.length
+      || emails.length > 50
+    ) {
+      return send(res, 400, { success: false, error: "invalid_validation_request" });
+    }
+
+    try {
+      const existingAccounts = await loadExistingAccounts(supabase);
+      const classifications = classifyAccounts(
+        emails.map((email) => ({ email })),
+        existingAccounts,
+        serviceType,
+      );
+      return send(res, 200, {
+        success: true,
+        accounts: classifications.map((item) => ({
+          email: item.email,
+          status: item.status,
+          remaining_days: item.renewal?.remainingDays ?? null,
+          days_passed: item.renewal?.daysPassed ?? null,
+        })),
+      });
+    } catch (validationError) {
+      console.error("Account validation failed:", validationError);
+      return send(res, 500, { success: false, error: "account_validation_failed" });
+    }
+  }
+
   if (req.body?.action === "renew_existing_account") {
     const serviceType = String(req.body?.service_type || "").trim();
     const accountType = String(req.body?.account_type || "").trim();
@@ -441,7 +471,7 @@ export default async function handler(req, res) {
       return send(res, 200, { success: true, renewed: false });
     }
 
-    const candidate = findRenewalCandidate(existingAccounts, serviceType, accountType);
+    const candidate = findRenewalCandidate(existingAccounts, serviceType);
     if (candidate.blocked) {
       return send(res, 409, {
         success: false,
@@ -457,7 +487,7 @@ export default async function handler(req, res) {
     }
 
     try {
-      const renewed = await renewExistingAccount(supabase, candidate.account, account, serviceType);
+      const renewed = await renewExistingAccount(supabase, candidate.account, account, serviceType, accountType);
       return send(res, 200, { success: true, renewed: true, ...renewed });
     } catch (renewalError) {
       console.error("Account renewal failed:", renewalError);

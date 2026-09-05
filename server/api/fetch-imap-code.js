@@ -248,13 +248,13 @@ export default async function handler(req, res) {
   try {
     const { data: link, error: linkError } = await supabase
       .from("customer_links")
-      .select("id,account_id,code_request_limit,code_requested_count,accounts!inner(id,email,account_type,email_provider,imap_enabled)")
+      .select("id,account_id,is_active,code_request_limit,code_requested_count,accounts!inner(id,email,account_type,email_provider,imap_enabled)")
       .eq("id", customerLinkId)
       .maybeSingle();
     if (linkError) throw linkError;
 
     const account = link?.accounts;
-    if (!link || !account || account.account_type === "temporary" || account.account_type === "compensation" || !account.imap_enabled || account.email_provider !== "outlook") {
+    if (!link || link.is_active === false || !account || account.account_type === "temporary" || account.account_type === "compensation" || !account.imap_enabled || account.email_provider !== "outlook") {
       logImap(requestId, "account_validation_failed", { reason: "imap_not_enabled" });
       return failure(res, 400, "imap_not_enabled", { request_id: requestId });
     }
