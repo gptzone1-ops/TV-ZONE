@@ -131,6 +131,12 @@ type HouseholdSwapResult = {
     };
   };
 };
+type HouseholdEmailSuggestion = {
+  id: string;
+  email: string;
+  account_type: "private" | "shared";
+  days_remaining: number;
+};
 type ServiceTheme = {
   type: ServiceType;
   name: string;
@@ -4504,6 +4510,51 @@ function HouseholdSwapPage({
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<HouseholdSwapResult | null>(null);
   const [queuedDays, setQueuedDays] = useState<number | null>(null);
+  const [suggestions, setSuggestions] = useState<HouseholdEmailSuggestion[]>([]);
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false);
+  const [selectedSuggestionEmail, setSelectedSuggestionEmail] = useState<string | null>(null);
+
+  useEffect(() => {
+    const query = normalizeEmail(email);
+    if (query.length < 2 || query === selectedSuggestionEmail) {
+      setSuggestions([]);
+      setSuggestionsLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(async () => {
+      setSuggestionsLoading(true);
+      try {
+        const response = await fetch("/api/household-swap", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-admin-password": adminPassword,
+          },
+          body: JSON.stringify({ action: "suggest", query }),
+          signal: controller.signal,
+        });
+        const payload = await response.json().catch(() => null) as {
+          success?: boolean;
+          suggestions?: HouseholdEmailSuggestion[];
+        } | null;
+        if (!response.ok || !payload?.success) throw new Error("suggestions_failed");
+        setSuggestions(Array.isArray(payload.suggestions) ? payload.suggestions : []);
+        setSuggestionsOpen(true);
+      } catch (error) {
+        if ((error as Error)?.name !== "AbortError") setSuggestions([]);
+      } finally {
+        if (!controller.signal.aborted) setSuggestionsLoading(false);
+      }
+    }, 250);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+      controller.abort();
+    };
+  }, [email, selectedSuggestionEmail]);
 
   async function searchReplacement(event: FormEvent) {
     event.preventDefault();
@@ -4514,6 +4565,7 @@ function HouseholdSwapPage({
     }
 
     setLoading(true);
+    setSuggestionsOpen(false);
     setResult(null);
     setQueuedDays(null);
     try {
@@ -4594,14 +4646,52 @@ function HouseholdSwapPage({
               <span className="mb-2 block text-sm font-black text-zinc-700">ضع إيميل الحساب الذي واجه العميل فيه المشكلة</span>
               <div className="relative">
                 <Mail className="pointer-events-none absolute right-4 top-1/2 h-5 w-5 -translate-y-1/2 text-[#8B35F5]" />
+                {suggestionsLoading && <RefreshCw className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-[#8B35F5]" />}
                 <input
                   type="email"
                   value={email}
-                  onChange={(event) => setEmail(event.target.value)}
+                  onChange={(event) => {
+                    setEmail(event.target.value);
+                    setSelectedSuggestionEmail(null);
+                    setSuggestionsOpen(true);
+                  }}
+                  onFocus={() => {
+                    if (suggestions.length) setSuggestionsOpen(true);
+                  }}
+                  onBlur={() => window.setTimeout(() => setSuggestionsOpen(false), 150)}
                   placeholder="account@example.com"
                   dir="ltr"
-                  className="h-14 w-full rounded-2xl border-2 border-[#DCCBFA] bg-white px-4 pl-4 pr-12 text-left text-sm font-bold outline-none transition focus:border-[#8B35F5] focus:shadow-[0_0_0_4px_rgba(139,53,245,0.10)]"
+                  autoComplete="off"
+                  role="combobox"
+                  aria-autocomplete="list"
+                  aria-expanded={suggestionsOpen && suggestions.length > 0}
+                  className="h-14 w-full rounded-2xl border-2 border-[#DCCBFA] bg-white px-12 text-left text-sm font-bold outline-none transition focus:border-[#8B35F5] focus:shadow-[0_0_0_4px_rgba(139,53,245,0.10)]"
                 />
+                {suggestionsOpen && suggestions.length > 0 && (
+                  <div role="listbox" className="absolute inset-x-0 top-[calc(100%+8px)] z-30 overflow-hidden rounded-2xl border border-[#DCCBFA] bg-white p-2 shadow-[0_18px_45px_rgba(70,40,120,0.16)]">
+                    {suggestions.map((suggestion) => (
+                      <button
+                        key={suggestion.id}
+                        type="button"
+                        role="option"
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => {
+                          setEmail(suggestion.email);
+                          setSelectedSuggestionEmail(normalizeEmail(suggestion.email));
+                          setSuggestions([]);
+                          setSuggestionsOpen(false);
+                        }}
+                        className="flex w-full items-center justify-between gap-3 rounded-xl px-3 py-3 text-right transition hover:bg-[#F7F2FF]"
+                      >
+                        <span className="min-w-0 truncate text-sm font-black text-zinc-900" dir="ltr">{suggestion.email}</span>
+                        <span className="flex shrink-0 items-center gap-2 text-xs font-black">
+                          <span className="rounded-full bg-[#F1E8FF] px-2.5 py-1 text-[#7626DD]">{suggestion.account_type === "private" ? "خاص" : "مشترك"}</span>
+                          <span className="text-zinc-500">{suggestion.days_remaining} يوم</span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             </label>
             <button

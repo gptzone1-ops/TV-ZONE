@@ -32,6 +32,29 @@ function shuffle(items) {
   return [...items].sort(() => Math.random() - 0.5);
 }
 
+async function ensureCodeCredit(supabase, linkId) {
+  const { data: rows, error: readError } = await supabase
+    .from("customer_links")
+    .select("code_request_limit,code_requested_count")
+    .eq("id", linkId)
+    .limit(1);
+  if (readError) throw readError;
+
+  const link = rows?.[0];
+  if (!link) throw new Error("replacement_link_not_found");
+
+  const currentLimit = Math.max(0, Number(link.code_request_limit ?? 1));
+  const currentUsage = Math.max(0, Number(link.code_requested_count ?? 0));
+  const requiredLimit = Math.max(currentLimit, currentUsage + 1);
+  if (requiredLimit === currentLimit) return;
+
+  const { error: updateError } = await supabase
+    .from("customer_links")
+    .update({ code_request_limit: requiredLimit })
+    .eq("id", linkId);
+  if (updateError) throw updateError;
+}
+
 function resultPayload(targetDays, replacement, link, existing = false) {
   const replacementDays = remainingDays(replacement.expires_at);
   return {
@@ -63,19 +86,45 @@ export default async function handler(req, res) {
     return send(res, 500, { success: false, error: "supabase_not_configured" });
   }
 
-  const email = normalizeEmail(req.body?.email);
-  if (!email || !email.includes("@")) {
-    return send(res, 400, { success: false, error: "invalid_email" });
-  }
-
   const supabase = createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
   try {
+    const action = String(req.body?.action || "match");
+    if (action === "suggest") {
+      const search = normalizeEmail(req.body?.query).replace(/[^a-z0-9@._+\-]/g, "");
+      if (search.length < 2) return send(res, 200, { success: true, suggestions: [] });
+
+      const { data: accounts, error } = await supabase
+        .from("accounts")
+        .select("id,email,account_type,expires_at,created_at")
+        .ilike("email", `%${search}%`)
+        .or("service_type.eq.netflix,service_type.is.null")
+        .in("account_type", ["private", "shared"])
+        .order("created_at", { ascending: false })
+        .limit(8);
+      if (error) throw error;
+
+      return send(res, 200, {
+        success: true,
+        suggestions: (accounts || []).map((account) => ({
+          id: account.id,
+          email: account.email,
+          account_type: account.account_type,
+          days_remaining: remainingDays(account.expires_at),
+        })),
+      });
+    }
+
+    const email = normalizeEmail(req.body?.email);
+    if (!email || !email.includes("@")) {
+      return send(res, 400, { success: false, error: "invalid_email" });
+    }
+
     const { data: targetAccounts, error: targetError } = await supabase
       .from("accounts")
-      .select("id,email,expires_at,created_at")
+      .select("id,email,account_type,expires_at,created_at")
       .ilike("email", email)
       .or("service_type.eq.netflix,service_type.is.null")
       .in("account_type", ["private", "shared"])
@@ -111,12 +160,13 @@ export default async function handler(req, res) {
     const existingAssignment = existingAssignments?.[0];
     if (existingAssignment) {
       const [{ data: replacementAccounts, error: accountError }, { data: links, error: linkError }] = await Promise.all([
-        supabase.from("accounts").select("id,email,expires_at").eq("id", existingAssignment.replacement_account_id).limit(1),
+        supabase.from("accounts").select("id,email,account_type,expires_at").eq("id", existingAssignment.replacement_account_id).limit(1),
         supabase.from("customer_links").select("id,uuid,short_id,profile_name,profile_label").eq("id", existingAssignment.customer_link_id).limit(1),
       ]);
       if (accountError) throw accountError;
       if (linkError) throw linkError;
       if (replacementAccounts?.[0] && links?.[0]) {
+        await ensureCodeCredit(supabase, links[0].id);
         return send(res, 200, resultPayload(targetDays, replacementAccounts[0], links[0], true));
       }
     }
@@ -124,9 +174,9 @@ export default async function handler(req, res) {
     const today = new Date().toISOString().slice(0, 10);
     const { data: activeAccounts, error: accountsError } = await supabase
       .from("accounts")
-      .select("id,email,expires_at,created_at")
+      .select("id,email,account_type,expires_at,created_at")
       .or("service_type.eq.netflix,service_type.is.null")
-      .in("account_type", ["private", "shared"])
+      .eq("account_type", target.account_type)
       .gte("expires_at", today)
       .neq("id", target.id);
     if (accountsError) throw accountsError;
@@ -185,6 +235,17 @@ export default async function handler(req, res) {
 
         if (reserveError?.code === "23505") continue;
         if (reserveError) throw reserveError;
+
+        try {
+          await ensureCodeCredit(supabase, link.id);
+        } catch (creditError) {
+          await supabase
+            .from("household_assignments")
+            .delete()
+            .eq("source_account_id", target.id)
+            .eq("customer_link_id", link.id);
+          throw creditError;
+        }
 
         const matchedAt = new Date().toISOString();
         await supabase
