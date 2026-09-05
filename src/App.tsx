@@ -13,6 +13,7 @@ import {
   Edit3,
   Eye,
   ExternalLink,
+  House,
   Inbox,
   LayoutDashboard,
   Link2,
@@ -69,7 +70,7 @@ import type {
   ServiceType,
 } from "./types";
 
-type Screen = "selector" | "netflix" | "account" | "credit-requests" | "compensations";
+type Screen = "selector" | "netflix" | "account" | "credit-requests" | "compensations" | "household";
 type DeviceView = "mobile" | "screen";
 type Toast = { label: string; at: number; tone?: "success" | "error" } | null;
 type StatTone = "neutral" | "green" | "red";
@@ -114,6 +115,21 @@ type CompensationPoolLink = {
   assigned_request_id: string | null;
   assigned_at: string | null;
   created_at: string;
+};
+type HouseholdSwapResult = {
+  target_days: number;
+  replacement: {
+    account_email: string;
+    days_remaining: number;
+    difference: number;
+    profile_name: string;
+    profile_label: string;
+    link: {
+      id: string;
+      uuid: string;
+      short_id: string | null;
+    };
+  };
 };
 type ServiceTheme = {
   type: ServiceType;
@@ -3082,6 +3098,18 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
     );
   }
 
+  if (screen === "household") {
+    return (
+      <Shell toast={toast}>
+        <HouseholdSwapPage
+          onBack={() => setScreen("netflix")}
+          onLogout={logout}
+          setToast={setToast}
+        />
+      </Shell>
+    );
+  }
+
   if (screen === "account" && selectedAccount) {
     return (
       <Shell toast={toast}>
@@ -3159,6 +3187,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
         pendingCreditRequests={pendingCreditRequests}
         onOpenCreditRequests={() => setScreen("credit-requests")}
         onOpenCompensations={() => setScreen("compensations")}
+        onOpenHousehold={() => setScreen("household")}
         onLogout={logout}
       />
     </Shell>
@@ -3347,6 +3376,7 @@ function Dashboard({
   pendingCreditRequests,
   onOpenCreditRequests,
   onOpenCompensations,
+  onOpenHousehold,
   onBackToServices,
   onLogout,
 }: {
@@ -3385,6 +3415,7 @@ function Dashboard({
   pendingCreditRequests: number;
   onOpenCreditRequests: () => void;
   onOpenCompensations: () => void;
+  onOpenHousehold: () => void;
   onBackToServices: () => void;
   onLogout: () => void;
 }) {
@@ -3518,6 +3549,17 @@ function Dashboard({
                   طلبات التعويض
                 </button>
               </>
+            )}
+
+            {service === "netflix" && (
+              <button
+                type="button"
+                onClick={onOpenHousehold}
+                className="flex h-13 shrink-0 items-center justify-center gap-2 rounded-xl border border-[#D8C1FF] bg-white px-5 text-sm font-black text-[#7C2CE8] transition hover:border-[#8B35F5] hover:bg-[#8B35F5] hover:text-white"
+              >
+                <House className="h-4 w-4" />
+                خارج السكن
+              </button>
             )}
 
             <div className="relative shrink-0 md:w-36" data-filter-popover>
@@ -4448,6 +4490,180 @@ const AccountRow = memo(function AccountRow({
   && previous.index === next.index
   && previous.selected === next.selected
 ));
+
+function HouseholdSwapPage({
+  onBack,
+  onLogout,
+  setToast,
+}: {
+  onBack: () => void;
+  onLogout: () => void;
+  setToast: (toast: Toast) => void;
+}) {
+  const [email, setEmail] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<HouseholdSwapResult | null>(null);
+  const [queuedDays, setQueuedDays] = useState<number | null>(null);
+
+  async function searchReplacement(event: FormEvent) {
+    event.preventDefault();
+    const normalizedEmail = normalizeEmail(email);
+    if (!normalizedEmail || !normalizedEmail.includes("@")) {
+      setToast({ label: "أدخل بريداً إلكترونياً صحيحاً", tone: "error", at: Date.now() });
+      return;
+    }
+
+    setLoading(true);
+    setResult(null);
+    setQueuedDays(null);
+    try {
+      const response = await fetch("/api/household-swap", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-admin-password": adminPassword,
+        },
+        body: JSON.stringify({ email: normalizedEmail }),
+      });
+      const payload = await response.json().catch(() => null) as {
+        success?: boolean;
+        matched?: boolean;
+        target_days?: number;
+        replacement?: HouseholdSwapResult["replacement"];
+        error?: string;
+        message?: string;
+      } | null;
+
+      if (!response.ok || !payload?.success) {
+        const errorLabels: Record<string, string> = {
+          account_not_found: "لم يتم العثور على حساب نتفليكس بهذا البريد",
+          account_expired: "الحساب المدخل منتهي ولا يمكن مطابقته",
+          unauthorized: "انتهت صلاحية جلسة المسؤول",
+        };
+        throw new Error(errorLabels[payload?.error || ""] || payload?.message || "تعذر البحث عن حساب بديل");
+      }
+
+      if (payload.matched && payload.replacement) {
+        setResult({ target_days: Number(payload.target_days || 0), replacement: payload.replacement });
+        setToast({ label: "تم العثور على حساب بديل وحجز رابطه", at: Date.now() });
+      } else {
+        setQueuedDays(Number(payload.target_days || 0));
+      }
+    } catch (error) {
+      setToast({
+        label: error instanceof Error ? error.message : "تعذر البحث عن حساب بديل",
+        tone: "error",
+        at: Date.now(),
+      });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const customerUrl = result
+    ? result.replacement.link.short_id
+      ? `${getBaseUrl()}/v/${result.replacement.link.short_id}`
+      : `${getBaseUrl()}/view/${result.replacement.link.uuid}`
+    : "";
+  const differenceLabel = !result
+    ? ""
+    : result.replacement.difference === 0
+      ? `مطابق تماماً، ${result.replacement.days_remaining} يوماً`
+      : `فارق ${result.replacement.difference > 0 ? "+" : ""}${result.replacement.difference} يوم`;
+
+  return (
+    <div className="min-h-screen bg-[#FAF8FD] text-[#17141F]" dir="rtl">
+      <Header service="netflix" onBack={onBack} onLogout={onLogout} />
+      <div className="mx-auto w-full max-w-4xl px-4 py-8 md:px-8 md:py-12">
+        <section className="overflow-hidden rounded-[2rem] border border-[#E4D6FA] bg-white shadow-[0_20px_60px_rgba(70,40,120,0.10)]">
+          <div className="border-b border-[#EEE7F8] bg-[#FBF9FF] px-5 py-6 md:px-8">
+            <div className="flex items-center gap-4">
+              <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-[#8B35F5] text-white shadow-[0_12px_28px_rgba(139,53,245,0.25)]">
+                <House className="h-7 w-7" />
+              </span>
+              <div>
+                <p className="text-xs font-black text-[#8B35F5]">NETFLIX</p>
+                <h1 className="mt-1 text-2xl font-black md:text-3xl">حل مشكلة خارج السكن</h1>
+                <p className="mt-2 text-sm font-bold leading-7 text-zinc-500">ابحث عن أقرب حساب بديل بفارق لا يتجاوز يومين، ثم انسخ رابط العميل مباشرة.</p>
+              </div>
+            </div>
+          </div>
+
+          <form onSubmit={searchReplacement} className="p-5 md:p-8">
+            <label className="block">
+              <span className="mb-2 block text-sm font-black text-zinc-700">ضع إيميل الحساب الذي واجه العميل فيه المشكلة</span>
+              <div className="relative">
+                <Mail className="pointer-events-none absolute right-4 top-1/2 h-5 w-5 -translate-y-1/2 text-[#8B35F5]" />
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  placeholder="account@example.com"
+                  dir="ltr"
+                  className="h-14 w-full rounded-2xl border-2 border-[#DCCBFA] bg-white px-4 pl-4 pr-12 text-left text-sm font-bold outline-none transition focus:border-[#8B35F5] focus:shadow-[0_0_0_4px_rgba(139,53,245,0.10)]"
+                />
+              </div>
+            </label>
+            <button
+              type="submit"
+              disabled={loading}
+              className="mt-4 flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-[#8B35F5] px-6 text-sm font-black text-white shadow-[0_14px_32px_rgba(139,53,245,0.24)] transition hover:bg-[#7626DD] disabled:cursor-wait disabled:opacity-60"
+            >
+              {loading ? <RefreshCw className="h-5 w-5 animate-spin" /> : <Search className="h-5 w-5" />}
+              {loading ? "جاري البحث والمطابقة..." : "بحث عن حساب بديل بالأيام"}
+            </button>
+          </form>
+        </section>
+
+        {result && (
+          <section className="mt-6 rounded-[2rem] border border-emerald-200 bg-white p-5 shadow-[0_18px_50px_rgba(5,150,105,0.10)] md:p-8">
+            <div className="mb-5 flex items-center gap-3 text-emerald-700">
+              <CircleCheck className="h-7 w-7" />
+              <div>
+                <h2 className="text-xl font-black">تم العثور على حساب بديل</h2>
+                <p className="mt-1 text-xs font-bold">تم حجز هذا الرابط للطلب ولن يُستخدم في مطابقة أخرى.</p>
+              </div>
+            </div>
+            <div className="grid gap-3 md:grid-cols-3">
+              <div className="rounded-2xl border border-[#E8DDF8] bg-[#FCFAFF] p-4">
+                <p className="text-xs font-black text-zinc-500">إيميل الحساب البديل</p>
+                <p className="mt-2 break-all text-sm font-black" dir="ltr">{result.replacement.account_email}</p>
+              </div>
+              <div className="rounded-2xl border border-[#E8DDF8] bg-[#FCFAFF] p-4">
+                <p className="text-xs font-black text-zinc-500">مطابقة الأيام</p>
+                <p className={cn("mt-2 text-sm font-black", result.replacement.difference === 0 ? "text-emerald-700" : "text-amber-700")}>{differenceLabel}</p>
+              </div>
+              <div className="rounded-2xl border border-[#E8DDF8] bg-[#FCFAFF] p-4">
+                <p className="text-xs font-black text-zinc-500">الملف المخصص</p>
+                <p className="mt-2 text-sm font-black">{result.replacement.profile_label || result.replacement.profile_name}</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => void copyText(customerUrl, setToast)}
+              className="mt-5 flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-6 text-sm font-black text-white shadow-[0_14px_30px_rgba(5,150,105,0.22)] transition hover:bg-emerald-700"
+            >
+              <Copy className="h-5 w-5" />
+              نسخ رابط العميل المباشر
+            </button>
+          </section>
+        )}
+
+        {queuedDays !== null && (
+          <section className="mt-6 rounded-[2rem] border border-amber-200 bg-amber-50 p-6 text-amber-900 shadow-[0_16px_40px_rgba(217,119,6,0.08)]">
+            <div className="flex items-start gap-3">
+              <Clock3 className="mt-0.5 h-6 w-6 shrink-0" />
+              <div>
+                <h2 className="text-lg font-black">لا يوجد حساب متطابق حالياً بفارق يومين</h2>
+                <p className="mt-2 text-sm font-bold leading-7">تم إدراج الحساب في قائمة الانتظار للمطابقة القادمة، وعدد أيامه المتبقية حالياً {queuedDays} يوماً.</p>
+              </div>
+            </div>
+          </section>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function CompensationAdminPage({
   service,
