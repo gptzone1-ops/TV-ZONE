@@ -78,7 +78,14 @@ type AccountTypeFilter = "all" | "duplicates" | AccountType;
 type SupportIssue = "general" | "unavailable" | "expired";
 type CustomerSearchResult = { link: CustomerLink; account: NetflixAccount };
 type AccountFormResult = boolean | { ok: boolean; error?: string };
-type AccountBatchFormResult = { ok: boolean; error?: string; count?: number; duplicateEmails?: string[] };
+type AccountBatchFormResult = {
+  ok: boolean;
+  error?: string;
+  count?: number;
+  duplicateEmails?: string[];
+  renewedCount?: number;
+  blockedAccounts?: Array<{ email: string; remainingDays: number; reason: string }>;
+};
 type ParsedAccount = {
   id: string;
   email: string;
@@ -1894,6 +1901,75 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       }
     }
 
+    if (supabase && (selectedService === "netflix" || selectedService === "shahid")) {
+      try {
+        const renewalResponse = await fetch("/api/create-customer-links", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-admin-password": adminPassword,
+          },
+          body: JSON.stringify({
+            action: "renew_existing_account",
+            service_type: selectedService,
+            account_type: form.account_type,
+            account: {
+              email: normalizedEmail,
+              password: accountPassword,
+              supplier_code_url: form.supplier_code_url || null,
+            },
+          }),
+        });
+        const renewalResult = await renewalResponse.json().catch(() => null) as {
+          success?: boolean;
+          renewed?: boolean;
+          error?: string;
+          remaining_days?: number;
+          account?: NetflixAccount;
+          links?: CustomerLink[];
+        } | null;
+
+        if (renewalResponse.status === 409) {
+          const remainingDays = Number(renewalResult?.remaining_days);
+          const error = renewalResult?.error === "renewal_type_mismatch"
+            ? "هذا البريد مسجل بنوع حساب أو خدمة مختلفة، ولا يمكن تجديده بهذه الإعدادات."
+            : Number.isFinite(remainingDays)
+              ? `عذراً، هذا الحساب مضاف مسبقاً وما زال نشطاً! متبقي ${remainingDays} يوم على انتهائه، ولا يمكن إعادة إضافته إلا عند بقاء 5 أيام أو أقل.`
+              : duplicateEmailSaveMessage;
+          setToast({ label: error, at: Date.now(), tone: "error" });
+          return { ok: false, error };
+        }
+        if (!renewalResponse.ok || !renewalResult?.success) {
+          throw new Error(renewalResult?.error || `renewal_http_${renewalResponse.status}`);
+        }
+
+        if (renewalResult.renewed && renewalResult.account && Array.isArray(renewalResult.links)) {
+          const renewedAccount = renewalResult.account;
+          const renewedLinks = renewalResult.links;
+          adminAccountsCacheRef.current.clear();
+          setAccounts((current) => [
+            renewedAccount,
+            ...current.filter((item) => item.id !== renewedAccount.id),
+          ].slice(0, adminAccountsPageSize));
+          setLinks((current) => [
+            ...current.filter((item) => item.account_id !== renewedAccount.id),
+            ...renewedLinks,
+          ]);
+          setQuery("");
+          setDebouncedQuery("");
+          setAccountTypeFilter("all");
+          setCurrentPage(1);
+          setToast({ label: "تم تجديد وتحديث الحساب بنجاح (حساب مجدد)", at: Date.now() });
+          return true;
+        }
+      } catch (renewalError) {
+        console.error("Account renewal preflight failed:", renewalError);
+        const error = "تعذر التحقق من أهلية تجديد الحساب، حاول مرة أخرى.";
+        setToast({ label: error, at: Date.now(), tone: "error" });
+        return { ok: false, error };
+      }
+    }
+
     const optimisticId = `optimistic-${crypto.randomUUID()}`;
     const optimisticAccount: NetflixAccount = {
       id: optimisticId,
@@ -2183,19 +2259,39 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
         duplicate_emails?: string[];
         accounts?: NetflixAccount[];
         links?: CustomerLink[];
+        created_count?: number;
+        renewed_count?: number;
+        blocked_accounts?: Array<{ email: string; remaining_days: number; reason: string }>;
       } | null;
 
       if (!response.ok || !result?.success || !result.accounts || !result.links) {
         const duplicateEmails = Array.isArray(result?.duplicate_emails)
           ? result.duplicate_emails.map(normalizeEmail).filter(Boolean)
           : [];
-        const error = result?.error === "duplicate_email"
+        const blockedAccounts = Array.isArray(result?.blocked_accounts) ? result.blocked_accounts : [];
+        const activeAccount = blockedAccounts.find((account) => account.reason === "active_account");
+        const error = result?.error === "active_duplicate" && activeAccount
+          ? `عذراً، هذا الحساب مضاف مسبقاً وما زال نشطاً! متبقي ${activeAccount.remaining_days} يوم على انتهائه، ولا يمكن إعادة إضافته إلا عند بقاء 5 أيام أو أقل.`
+          : result?.error === "renewal_type_mismatch"
+            ? "يوجد حساب سابق بهذا البريد لكن نوعه أو خدمته مختلفة، راجع إعدادات الحساب قبل التجديد."
+          : result?.error === "account_renewal_failed"
+            ? "تعذر تجديد الحسابات المؤهلة. لم يتم حذف روابطها أو إعادة إنشائها."
+          : result?.error === "duplicate_email"
           ? duplicateEmails.length
             ? `البريد التالي مسجل مسبقاً: ${duplicateEmails.join("، ")}`
             : duplicateEmailSaveMessage
           : result?.error || "تعذر حفظ الحسابات المضافة.";
         setToast({ label: error, at: Date.now(), tone: "error" });
-        return { ok: false, error, duplicateEmails };
+        return {
+          ok: false,
+          error,
+          duplicateEmails,
+          blockedAccounts: blockedAccounts.map((account) => ({
+            email: normalizeEmail(account.email),
+            remainingDays: Number(account.remaining_days),
+            reason: account.reason,
+          })),
+        };
       }
 
       adminAccountsCacheRef.current.clear();
@@ -2211,9 +2307,29 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
         ...current.filter((link) => !result.links!.some((created) => created.id === link.id)),
         ...result.links!,
       ]);
-      setTotalAccounts((current) => current + result.accounts!.length);
-      setToast({ label: `تم حفظ ${result.accounts.length} حساب بنجاح`, at: Date.now() });
-      return { ok: true, count: result.accounts.length };
+      const createdCount = Math.max(0, Number(result.created_count ?? result.accounts.length));
+      const renewedCount = Math.max(0, Number(result.renewed_count || 0));
+      const blockedAccounts = (result.blocked_accounts || []).map((account) => ({
+        email: normalizeEmail(account.email),
+        remainingDays: Number(account.remaining_days),
+        reason: account.reason,
+      }));
+      setTotalAccounts((current) => current + createdCount);
+      const successParts = [
+        createdCount ? `تمت إضافة ${createdCount} جديد` : "",
+        renewedCount ? `تجديد ${renewedCount}` : "",
+      ].filter(Boolean);
+      const blockedSummary = blockedAccounts.length
+        ? ` واستبعاد ${blockedAccounts.length} نشط: ${blockedAccounts.map((account) => `${account.email} (${account.remainingDays} يوم)`).join("، ")}`
+        : "";
+      setToast({ label: `${successParts.join(" و ")}${blockedSummary}`, at: Date.now() });
+      return {
+        ok: true,
+        count: result.accounts.length,
+        renewedCount,
+        blockedAccounts,
+        duplicateEmails: blockedAccounts.map((account) => account.email),
+      };
     } catch (error) {
       console.error("Batch account creation failed:", error);
       const message = "تعذر حفظ الحسابات بسبب مشكلة اتصال. لم يتم اعتماد عملية ناقصة.";
@@ -5604,6 +5720,7 @@ function AccountForm({
   const [parsedAccounts, setParsedAccounts] = useState<ParsedAccount[]>([]);
   const [detectedEmailCount, setDetectedEmailCount] = useState(0);
   const [duplicateBatchEmails, setDuplicateBatchEmails] = useState<string[]>([]);
+  const [batchResultNotice, setBatchResultNotice] = useState("");
   const [batchSaving, setBatchSaving] = useState(false);
   const calculatedExpiry = service === "osn" && osnSubscriptionMode === "monthly_rotation"
     ? osnMonthlyAccountDates().expiresAt
@@ -5742,6 +5859,7 @@ function AccountForm({
     setParsedAccounts(result.accounts);
     setDetectedEmailCount(result.detectedEmailCount);
     setDuplicateBatchEmails([]);
+    setBatchResultNotice("");
     setFormError(result.accounts.length ? "" : "لم يتم العثور على أي بريد إلكتروني صالح في النص الملصق.");
   }
 
@@ -5749,6 +5867,7 @@ function AccountForm({
     setParsedAccounts([]);
     setDetectedEmailCount(0);
     setDuplicateBatchEmails([]);
+    setBatchResultNotice("");
     setFormError("");
   }
 
@@ -5759,6 +5878,7 @@ function AccountForm({
 
   function updateParsedAccount(id: string, field: keyof Omit<ParsedAccount, "id">, value: string) {
     setDuplicateBatchEmails([]);
+    setBatchResultNotice("");
     setParsedAccounts((current) => current.map((account) => (
       account.id === id ? { ...account, [field]: value } : account
     )));
@@ -5799,7 +5919,16 @@ function AccountForm({
     })));
     setBatchSaving(false);
 
-    if (result.ok) onClose();
+    if (result.ok && result.blockedAccounts?.length) {
+      const blockedEmails = result.blockedAccounts.map((account) => account.email);
+      setParsedAccounts((current) => current.filter((account) => blockedEmails.includes(normalizeEmail(account.email))));
+      setDuplicateBatchEmails(blockedEmails);
+      setBatchResultNotice(
+        `تم حفظ الحسابات المؤهلة، واستُبعدت الحسابات النشطة التالية: ${result.blockedAccounts
+          .map((account) => `${account.email} (متبقي ${account.remainingDays} يوم)`)
+          .join("، ")}`,
+      );
+    } else if (result.ok) onClose();
     else {
       setDuplicateBatchEmails(result.duplicateEmails || []);
       setFormError(result.error || "تعذر حفظ الحسابات، حاول مرة أخرى.");
@@ -6060,6 +6189,12 @@ function AccountForm({
           </div>
         )}
 
+        {batchResultNotice && (
+          <p className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-black leading-7 text-amber-800">
+            {batchResultNotice}
+          </p>
+        )}
+
         {formError && (
           <p className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-black text-rose-700">
             {formError}
@@ -6284,7 +6419,7 @@ function AccountForm({
                       </p>
                     )}
                     {duplicateBatchEmails.includes(normalizeEmail(account.email)) && (
-                      <p className="mt-2 text-xs font-black text-rose-600">هذا البريد مسجل مسبقاً في قائمة الحسابات.</p>
+                      <p className="mt-2 text-xs font-black text-rose-600">هذا الحساب ما زال نشطاً أو لا يطابق نوع التجديد المحدد.</p>
                     )}
                   </article>
                   );
