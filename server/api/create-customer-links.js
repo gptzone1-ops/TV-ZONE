@@ -67,7 +67,7 @@ function isDuplicateAccountEmailError(error) {
   return /duplicate_account_email|accounts[^\n]*email|email[^\n]*(duplicate|unique)/i.test(details);
 }
 
-function renewalStatus(account, nowMs = Date.now()) {
+function replacementStatus(account, nowMs = Date.now()) {
   const expiresAtMs = new Date(account.expires_at).getTime();
   const createdAtMs = new Date(account.created_at).getTime();
   const remainingDays = Number.isFinite(expiresAtMs)
@@ -80,45 +80,144 @@ function renewalStatus(account, nowMs = Date.now()) {
   return {
     remainingDays,
     daysPassed,
-    renewable: remainingDays <= 5 || daysPassed >= 25,
+    replaceable: remainingDays <= 5 || daysPassed >= 25,
   };
 }
 
-function findRenewalCandidate(existingAccounts, serviceType) {
+function findReplacementCandidate(existingAccounts) {
   const sorted = [...existingAccounts].sort(
     (first, second) => new Date(second.created_at).getTime() - new Date(first.created_at).getTime(),
   );
-  const blockingAccount = sorted.find((account) => !renewalStatus(account).renewable);
+  const blockingAccount = sorted.find((account) => !replacementStatus(account).replaceable);
   if (blockingAccount) {
-    return { blocked: blockingAccount, status: renewalStatus(blockingAccount), account: null };
+    return { blocked: blockingAccount, status: replacementStatus(blockingAccount), account: null };
   }
 
-  const account = sorted.find((item) => (
-    String(item.service_type || "netflix") === serviceType
-    && renewalStatus(item).renewable
-  ));
-  return { blocked: null, status: account ? renewalStatus(account) : null, account: account || null };
+  const account = sorted.find((item) => replacementStatus(item).replaceable);
+  return { blocked: null, status: account ? replacementStatus(account) : null, account: account || null };
 }
 
-async function renewExistingAccount(supabase, existingAccount, account, serviceType, accountType) {
+async function replaceExistingAccount(supabase, existingAccount, account, serviceType, accountType) {
   const supplierCodeUrl = account.supplierCodeUrl || null;
   const links = buildBatchProfileSlots(accountType, serviceType);
-  const { data, error } = await supabase.rpc("renew_account_and_replace_customer_links", {
-    p_account_id: existingAccount.id,
-    p_email: account.email,
-    p_password: account.password,
-    p_supplier_code_url: supplierCodeUrl,
-    p_service_type: serviceType,
-    p_account_type: accountType,
-    p_links: links,
+  const { data: currentAccounts, error: lookupError } = await supabase
+    .from("accounts")
+    .select("*")
+    .ilike("email", account.email);
+  if (lookupError) throw lookupError;
+
+  const candidate = findReplacementCandidate(currentAccounts || []);
+  if (candidate.blocked) {
+    throw new Error(`active_duplicate:${candidate.status.remainingDays}`);
+  }
+  if (!candidate.account || candidate.account.id !== existingAccount.id) {
+    throw new Error("replacement_candidate_changed");
+  }
+
+  const oldAccountIds = (currentAccounts || []).map((item) => item.id);
+  const { data: oldLinks, error: oldLinksError } = await supabase
+    .from("customer_links")
+    .select("id")
+    .in("account_id", oldAccountIds);
+  if (oldLinksError) throw oldLinksError;
+
+  const stagedEmail = `replacement-${randomUUID()}@pending.invalid`;
+  const createdAt = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const { data: freshAccount, error: accountInsertError } = await supabase
+    .from("accounts")
+    .insert({
+      email: stagedEmail,
+      password: account.password,
+      account_type: accountType,
+      service_type: serviceType,
+      expires_at: expiresAt,
+      created_at: createdAt,
+      supplier_code_url: supplierCodeUrl,
+      code_fetch_method: serviceType === "netflix" ? (supplierCodeUrl ? "external_link" : "auto_fetch") : null,
+      use_automated_code: serviceType === "netflix" && !supplierCodeUrl,
+      email_provider: "none",
+      imap_enabled: false,
+      normal_client_layout: true,
+      hide_password_from_client: serviceType === "netflix",
+      is_reported_closed: false,
+      reported_closed_at: null,
+    })
+    .select("*")
+    .single();
+  if (accountInsertError || !freshAccount) throw accountInsertError || new Error("fresh_account_insert_failed");
+
+  const cleanupFreshAccount = async () => {
+    const { error } = await supabase.from("accounts").delete().eq("id", freshAccount.id);
+    if (error) console.error("Fresh replacement cleanup failed:", error);
+  };
+
+  const freshLinkRows = sanitizeLinkRows(links, freshAccount.id, stagedEmail, serviceType);
+  const { data: freshLinks, error: linkInsertError } = await supabase
+    .from("customer_links")
+    .insert(freshLinkRows)
+    .select("*");
+  if (linkInsertError || !Array.isArray(freshLinks) || freshLinks.length !== links.length) {
+    await cleanupFreshAccount();
+    throw linkInsertError || new Error("incomplete_fresh_link_batch");
+  }
+
+  const linkEmailUpdate = await supabase
+    .from("customer_links")
+    .update({ email: account.email })
+    .eq("account_id", freshAccount.id)
+    .select("*");
+  if (linkEmailUpdate.error || linkEmailUpdate.data?.length !== links.length) {
+    await cleanupFreshAccount();
+    throw linkEmailUpdate.error || new Error("fresh_link_email_finalization_failed");
+  }
+
+  const { error: oldAccountDeleteError } = await supabase
+    .from("accounts")
+    .delete()
+    .in("id", oldAccountIds);
+  if (oldAccountDeleteError) {
+    await cleanupFreshAccount();
+    throw oldAccountDeleteError;
+  }
+
+  const accountEmailUpdate = await supabase
+    .from("accounts")
+    .update({ email: account.email })
+    .eq("id", freshAccount.id)
+    .select("*")
+    .single();
+  if (accountEmailUpdate.error || !accountEmailUpdate.data) {
+    console.error("Fresh account email finalization failed after old account removal:", {
+      stagedAccountId: freshAccount.id,
+      error: accountEmailUpdate.error,
+    });
+    throw accountEmailUpdate.error || new Error("fresh_account_email_finalization_failed");
+  }
+
+  const oldLinkIds = (oldLinks || []).map((item) => item.id);
+  const staleCleanupTasks = [
+    supabase.from("household_pool").delete().in("account_id", oldAccountIds),
+    supabase.from("household_assignments").delete().in("source_account_id", oldAccountIds),
+    supabase.from("household_assignments").delete().in("replacement_account_id", oldAccountIds),
+  ];
+  if (oldLinkIds.length) {
+    staleCleanupTasks.push(
+      supabase.from("household_assignments").delete().in("customer_link_id", oldLinkIds),
+    );
+  }
+  const staleCleanupResults = await Promise.all(staleCleanupTasks);
+  staleCleanupResults.forEach(({ error }) => {
+    if (error) console.error("Expired account auxiliary cleanup failed:", error);
   });
 
-  if (error) throw error;
-  if (!data?.account || !Array.isArray(data?.links)) throw new Error("invalid_renewal_result");
-  return { account: data.account, links: data.links };
+  return {
+    account: accountEmailUpdate.data,
+    links: linkEmailUpdate.data,
+  };
 }
 
-function classifyAccounts(accounts, existingAccounts, serviceType) {
+function classifyAccounts(accounts, existingAccounts) {
   const existingByEmail = new Map();
   for (const existingAccount of existingAccounts || []) {
     const email = String(existingAccount.email || "").trim().toLowerCase();
@@ -129,30 +228,22 @@ function classifyAccounts(accounts, existingAccounts, serviceType) {
 
   return accounts.map((account) => {
     const matches = existingByEmail.get(account.email) || [];
-    if (!matches.length) return { email: account.email, status: "new", account: null, renewal: null };
+    if (!matches.length) return { email: account.email, status: "new", account: null, replacement: null };
 
-    const candidate = findRenewalCandidate(matches, serviceType);
+    const candidate = findReplacementCandidate(matches);
     if (candidate.blocked) {
       return {
         email: account.email,
         status: "active",
         account: candidate.blocked,
-        renewal: candidate.status,
-      };
-    }
-    if (!candidate.account) {
-      return {
-        email: account.email,
-        status: "service_mismatch",
-        account: matches[0],
-        renewal: renewalStatus(matches[0]),
+        replacement: candidate.status,
       };
     }
     return {
       email: account.email,
-      status: "renewable",
+      status: "replaceable",
       account: candidate.account,
-      renewal: candidate.status,
+      replacement: candidate.status,
     };
   });
 }
@@ -245,9 +336,9 @@ async function createAccountsBatch(req, res, supabase) {
   }
 
   const newAccounts = [];
-  const renewalPlans = [];
+  const replacementPlans = [];
   const blockedAccounts = [];
-  const classifications = classifyAccounts(accounts, existingAccounts, serviceType);
+  const classifications = classifyAccounts(accounts, existingAccounts);
   for (let index = 0; index < accounts.length; index += 1) {
     const account = accounts[index];
     const classification = classifications[index];
@@ -258,28 +349,18 @@ async function createAccountsBatch(req, res, supabase) {
     if (classification.status === "active") {
       blockedAccounts.push({
         email: account.email,
-        remaining_days: classification.renewal.remainingDays,
+        remaining_days: classification.replacement.remainingDays,
         reason: "active_account",
       });
       continue;
     }
-    if (classification.status === "service_mismatch") {
-      blockedAccounts.push({
-        email: account.email,
-        remaining_days: classification.renewal.remainingDays,
-        reason: "service_or_type_mismatch",
-      });
-      continue;
-    }
-    renewalPlans.push({ existingAccount: classification.account, account });
+    replacementPlans.push({ existingAccount: classification.account, account });
   }
 
   if (blockedAccounts.length) {
     return send(res, 409, {
       success: false,
-      error: blockedAccounts.some((item) => item.reason === "active_account")
-        ? "active_duplicate"
-        : "renewal_type_mismatch",
+      error: "active_duplicate",
       blocked_accounts: blockedAccounts,
       duplicate_emails: blockedAccounts.map((account) => account.email),
     });
@@ -349,33 +430,33 @@ async function createAccountsBatch(req, res, supabase) {
     createdLinks = data;
   }
 
-  const renewedAccounts = [];
-  const renewedLinks = [];
-  for (const plan of renewalPlans) {
+  const replacedAccounts = [];
+  const replacedLinks = [];
+  for (const plan of replacementPlans) {
     try {
-      const renewed = await renewExistingAccount(
+      const replacement = await replaceExistingAccount(
         supabase,
         plan.existingAccount,
         plan.account,
         serviceType,
         accountType,
       );
-      renewedAccounts.push(renewed.account);
-      renewedLinks.push(...renewed.links);
-    } catch (renewalError) {
-      console.error("Batch account renewal failed:", renewalError);
-      blockedAccounts.push({
-        email: plan.account.email,
-        remaining_days: renewalStatus(plan.existingAccount).remainingDays,
-        reason: "renewal_failed",
+      replacedAccounts.push(replacement.account);
+      replacedLinks.push(...replacement.links);
+    } catch (replacementError) {
+      console.error("Batch expired account replacement failed:", replacementError);
+      return send(res, 500, {
+        success: false,
+        error: "account_replacement_failed",
+        failed_email: plan.account.email,
       });
     }
   }
 
-  if (!created.length && !renewedAccounts.length) {
+  if (!created.length && !replacedAccounts.length) {
     return send(res, 409, {
       success: false,
-      error: "account_renewal_failed",
+      error: "account_replacement_failed",
       blocked_accounts: blockedAccounts,
       duplicate_emails: blockedAccounts.map((account) => account.email),
     });
@@ -383,10 +464,10 @@ async function createAccountsBatch(req, res, supabase) {
 
   return send(res, 200, {
     success: true,
-    accounts: [...created, ...renewedAccounts],
-    links: [...createdLinks, ...renewedLinks],
-    created_count: created.length,
-    renewed_count: renewedAccounts.length,
+    accounts: [...created, ...replacedAccounts],
+    links: [...createdLinks, ...replacedLinks],
+    created_count: created.length + replacedAccounts.length,
+    replaced_count: replacedAccounts.length,
     blocked_accounts: blockedAccounts,
   });
 }
@@ -428,15 +509,14 @@ export default async function handler(req, res) {
       const classifications = classifyAccounts(
         emails.map((email) => ({ email })),
         existingAccounts,
-        serviceType,
       );
       return send(res, 200, {
         success: true,
         accounts: classifications.map((item) => ({
           email: item.email,
           status: item.status,
-          remaining_days: item.renewal?.remainingDays ?? null,
-          days_passed: item.renewal?.daysPassed ?? null,
+          remaining_days: item.replacement?.remainingDays ?? null,
+          days_passed: item.replacement?.daysPassed ?? null,
         })),
       });
     } catch (validationError) {
@@ -445,7 +525,7 @@ export default async function handler(req, res) {
     }
   }
 
-  if (req.body?.action === "renew_existing_account") {
+  if (req.body?.action === "replace_expired_account") {
     const serviceType = String(req.body?.service_type || "").trim();
     const accountType = String(req.body?.account_type || "").trim();
     const account = normalizeBatchAccount(req.body?.account);
@@ -456,7 +536,7 @@ export default async function handler(req, res) {
       || !account.password
       || (account.supplierCodeUrl && !/^https?:\/\//i.test(account.supplierCodeUrl))
     ) {
-      return send(res, 400, { success: false, error: "invalid_renewal_account" });
+      return send(res, 400, { success: false, error: "invalid_replacement_account" });
     }
 
     const { data: existingAccounts, error: lookupError } = await supabase
@@ -464,14 +544,14 @@ export default async function handler(req, res) {
       .select("*")
       .ilike("email", account.email);
     if (lookupError) {
-      console.error("Account renewal lookup failed:", lookupError);
-      return send(res, 500, { success: false, error: "renewal_lookup_failed" });
+      console.error("Expired account replacement lookup failed:", lookupError);
+      return send(res, 500, { success: false, error: "replacement_lookup_failed" });
     }
     if (!existingAccounts?.length) {
-      return send(res, 200, { success: true, renewed: false });
+      return send(res, 200, { success: true, replaced: false });
     }
 
-    const candidate = findRenewalCandidate(existingAccounts, serviceType);
+    const candidate = findReplacementCandidate(existingAccounts);
     if (candidate.blocked) {
       return send(res, 409, {
         success: false,
@@ -479,19 +559,12 @@ export default async function handler(req, res) {
         remaining_days: candidate.status.remainingDays,
       });
     }
-    if (!candidate.account) {
-      return send(res, 409, {
-        success: false,
-        error: "renewal_type_mismatch",
-      });
-    }
-
     try {
-      const renewed = await renewExistingAccount(supabase, candidate.account, account, serviceType, accountType);
-      return send(res, 200, { success: true, renewed: true, ...renewed });
-    } catch (renewalError) {
-      console.error("Account renewal failed:", renewalError);
-      return send(res, 500, { success: false, error: "account_renewal_failed" });
+      const replacement = await replaceExistingAccount(supabase, candidate.account, account, serviceType, accountType);
+      return send(res, 200, { success: true, replaced: true, ...replacement });
+    } catch (replacementError) {
+      console.error("Expired account replacement failed:", replacementError);
+      return send(res, 500, { success: false, error: "account_replacement_failed" });
     }
   }
 
