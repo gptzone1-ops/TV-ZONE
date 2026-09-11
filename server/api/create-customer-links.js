@@ -123,7 +123,10 @@ async function replaceExistingAccount(supabase, existingAccount, account, servic
 
   const stagedEmail = `replacement-${randomUUID()}@pending.invalid`;
   const createdAt = new Date().toISOString();
-  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const requestedExpiry = new Date(account.expiresAt);
+  const expiresAt = Number.isFinite(requestedExpiry.getTime())
+    ? account.expiresAt
+    : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const { data: freshAccount, error: accountInsertError } = await supabase
     .from("accounts")
     .insert({

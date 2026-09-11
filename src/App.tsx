@@ -118,6 +118,7 @@ type AccountCreateForm = {
   compensation_tutorial_url?: string;
   compensation_distribution?: CompensationDistribution;
   osn_subscription_mode?: OsnSubscriptionMode;
+  subscription_days?: 30 | 90;
 };
 type PublicCompensationRequest = Omit<CompensationRequest, "id">;
 type CompensationPoolLink = {
@@ -250,8 +251,8 @@ function addDays(date: Date, days: number) {
   return next;
 }
 
-function defaultExpiryDate() {
-  return addDays(new Date(), 30).toISOString().slice(0, 10);
+function defaultExpiryDate(days = 30) {
+  return addDays(new Date(), days).toISOString().slice(0, 10);
 }
 
 function osnMonthlyAccountDates() {
@@ -1853,7 +1854,8 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       ? form.osn_subscription_mode || "telegram_keys"
       : null;
     const monthlyDates = osnSubscriptionMode === "monthly_rotation" ? osnMonthlyAccountDates() : null;
-    const expires_at = monthlyDates?.expiresAt || defaultExpiryDate();
+    const subscriptionDays = selectedService === "netflix" && form.subscription_days === 90 ? 90 : 30;
+    const expires_at = monthlyDates?.expiresAt || defaultExpiryDate(subscriptionDays);
     let slots = buildProfileSlots(form.account_type, selectedService, form.compensation_distribution);
     const normalizedEmail = normalizeEmail(form.email);
     const accountPassword = selectedService === "osn" ? "" : form.password;
@@ -1926,6 +1928,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
               email: normalizedEmail,
               password: accountPassword,
               supplier_code_url: form.supplier_code_url || null,
+              expires_at,
             },
           }),
         });
@@ -2033,6 +2036,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
       const {
         access_keys: _accessKeys,
         osn_subscription_mode: _osnSubscriptionMode,
+        subscription_days: _subscriptionDays,
         ...accountFormData
       } = form;
       const { data, error: accountError } = await supabase
@@ -2256,7 +2260,7 @@ function AdminApp({ navigate }: { navigate: (path: string) => void }) {
             password: form.password,
             supplier_code_url: form.supplier_code_url || null,
             code_fetch_method: form.supplier_code_url ? "external_link" : "auto_fetch",
-            expires_at: defaultExpiryDate(),
+            expires_at: defaultExpiryDate(selectedService === "netflix" && form.subscription_days === 90 ? 90 : 30),
           })),
         }),
       });
@@ -5715,6 +5719,7 @@ function AccountForm({
   const [osnSubscriptionMode, setOsnSubscriptionMode] = useState<OsnSubscriptionMode>(
     initialAccount?.osn_subscription_mode || "telegram_keys",
   );
+  const [netflixSubscriptionDays, setNetflixSubscriptionDays] = useState<30 | 90>(30);
   const [supplierCodeUrl, setSupplierCodeUrl] = useState(initialAccount?.supplier_code_url || "");
   const [externalCodeLinkEnabled, setExternalCodeLinkEnabled] = useState(
     initialAccount?.code_fetch_method === "external_link",
@@ -5733,7 +5738,7 @@ function AccountForm({
   const [batchSaving, setBatchSaving] = useState(false);
   const calculatedExpiry = service === "osn" && osnSubscriptionMode === "monthly_rotation"
     ? osnMonthlyAccountDates().expiresAt
-    : defaultExpiryDate();
+    : defaultExpiryDate(service === "netflix" ? netflixSubscriptionDays : 30);
   const theme = serviceThemes[service];
   const canConfigureCodeFetch = service === "netflix" && (accountType === "private" || accountType === "shared");
 
@@ -5834,6 +5839,7 @@ function AccountForm({
       compensation_tutorial_url: accountType === "compensation" ? compensationTutorialUrl.trim() || undefined : undefined,
       compensation_distribution: accountType === "compensation" ? compensationDistribution : undefined,
       osn_subscription_mode: service === "osn" ? osnSubscriptionMode : undefined,
+      subscription_days: service === "netflix" ? netflixSubscriptionDays : undefined,
     });
   }
 
@@ -6037,6 +6043,7 @@ function AccountForm({
       account_type: accountType,
       supplier_code_url: account.code_url.trim() || undefined,
       code_fetch_method: account.code_url.trim() ? "external_link" : "auto_fetch",
+      subscription_days: service === "netflix" ? netflixSubscriptionDays : undefined,
     })));
     setBatchSaving(false);
 
@@ -6151,6 +6158,38 @@ function AccountForm({
           </div>
           {editing && <p className="mt-2 text-[11px] font-bold text-zinc-400">نوع الحساب ثابت لحماية روابط العملاء المنشأة.</p>}
         </div>
+
+        {service === "netflix" && !editing && (
+          <div className="mb-5">
+            <p className="mb-2 text-sm font-black text-zinc-700">مدة الاشتراك</p>
+            <div className="grid grid-cols-2 gap-2 rounded-2xl border-2 border-[#E0D0FB] bg-[#F8F4FF] p-1.5">
+              {([
+                { days: 30 as const, label: "شهر واحد", detail: "30 يوماً" },
+                { days: 90 as const, label: "3 أشهر", detail: "90 يوماً" },
+              ]).map((option) => (
+                <button
+                  key={option.days}
+                  type="button"
+                  onClick={() => setNetflixSubscriptionDays(option.days)}
+                  className={cn(
+                    "min-h-14 rounded-xl px-3 py-2 text-sm font-black transition",
+                    netflixSubscriptionDays === option.days
+                      ? "bg-[#8B35F5] text-white shadow-[0_10px_24px_rgba(139,53,245,0.22)]"
+                      : "bg-white text-zinc-600 hover:bg-[#F1E8FF]",
+                  )}
+                >
+                  <span className="block">{option.label}</span>
+                  <span className={cn(
+                    "mt-0.5 block text-[11px]",
+                    netflixSubscriptionDays === option.days ? "text-white/80" : "text-zinc-400",
+                  )}>
+                    {option.detail}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {entryMode === "manual" || editing ? (
         <>
@@ -6371,6 +6410,8 @@ function AccountForm({
                 ? "يبقى تاريخ الانتهاء الحالي دون تغيير."
                 : service === "osn" && osnSubscriptionMode === "monthly_rotation"
                   ? "مدة الاشتراك 90 يوماً، وتبدأ الدورة الأولى لمدة 30 يوماً."
+                  : service === "netflix" && netflixSubscriptionDays === 90
+                    ? "يتم احتسابه بعد 90 يوماً من تاريخ الإضافة."
                   : "يتم احتسابه بعد 30 يوماً من تاريخ الإضافة."}
             </p>
           </div>
