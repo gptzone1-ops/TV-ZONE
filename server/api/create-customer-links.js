@@ -259,18 +259,9 @@ async function loadExistingAccounts(supabase) {
   return data || [];
 }
 
-function hasValidStructure(links, accountType, serviceType, osnSubscriptionMode) {
+function hasValidStructure(links, accountType, serviceType) {
   const structure = PROFILE_STRUCTURES[accountType];
   if (!structure || links.length !== structure.names.length) return false;
-
-  const requiresActivationKeys = serviceType === "osn" && osnSubscriptionMode === "telegram_keys";
-  const activationKeys = requiresActivationKeys
-    ? links.map((link) => String(link?.activation_key || "").trim())
-    : [];
-  if (requiresActivationKeys && (
-    activationKeys.some((key) => !key)
-    || new Set(activationKeys.map((key) => key.toLowerCase())).size !== activationKeys.length
-  )) return false;
 
   return links.every((link, index) => (
     link
@@ -610,7 +601,7 @@ export default async function handler(req, res) {
   if (String(account.email || "").trim().toLowerCase() !== email) {
     return send(res, 409, { success: false, error: "account_email_mismatch" });
   }
-  if (!hasValidStructure(links, account.account_type, serviceType, account.osn_subscription_mode)) {
+  if (!hasValidStructure(links, account.account_type, serviceType)) {
     return send(res, 409, { success: false, error: "invalid_links_structure" });
   }
 
